@@ -182,7 +182,7 @@ internal class JsonRpcWebSocketClient(
                 )
             }
         }.apply {
-            name = "Litter-JsonRpcWebSocketReader"
+            name = "Shitter-JsonRpcWebSocketReader"
             isDaemon = true
             start()
         }

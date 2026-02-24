@@ -6,7 +6,7 @@ import Security
 actor JSONRPCClient {
     private var connection: NWConnection?
     private var receiveTask: Task<Void, Never>?
-    private let queue = DispatchQueue(label: "Litter.JSONRPCClient.Network")
+    private let queue = DispatchQueue(label: "Shitter.JSONRPCClient.Network")
     private var readBuffer = Data()
     private var nextId: Int = 1
     private var pending: [String: CheckedContinuation<Data, Error>] = [:]

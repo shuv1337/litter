@@ -22,7 +22,7 @@
 
 ## Target Repository Layout
 ```text
-litter/
+shitter/
 ├─ apps/
 │  ├─ ios/
 │  │  ├─ project.yml

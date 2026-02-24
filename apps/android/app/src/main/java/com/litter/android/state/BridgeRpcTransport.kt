@@ -215,7 +215,7 @@ internal class BridgeRpcTransport(
                 )
             }
         }.apply {
-            name = "Litter-BridgeRpcTransport-Reader"
+            name = "Shitter-BridgeRpcTransport-Reader"
             isDaemon = true
             start()
         }

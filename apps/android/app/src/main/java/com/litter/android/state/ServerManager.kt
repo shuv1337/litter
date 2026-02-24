@@ -27,7 +27,7 @@ class ServerManager(
     context: Context? = null,
     private val codexRpcClient: CodexRpcClient = CodexRpcClient(),
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "Litter-ServerManager").apply { isDaemon = true }
+        Thread(runnable, "Shitter-ServerManager").apply { isDaemon = true }
     },
 ) : Closeable {
     private val listeners = CopyOnWriteArrayList<(AppState) -> Unit>()

@@ -8,7 +8,7 @@
 
 ## Repository layout
 
-- `apps/ios`: iOS app (`LitterRemote` and `Litter` schemes)
+- `apps/ios`: iOS app (current schemes: `LitterRemote` and `Litter`)
 - `apps/android`: Android app
   - `app`: Compose UI shell, app state, server manager, SSH/auth flows
   - `core/bridge`: native bridge bootstrapping and core RPC client
@@ -19,7 +19,7 @@
 - `patches/codex`: local Codex patch set
 - `tools/scripts`: cross-platform helper scripts
 
-iOS supports:
+iOS supports (current scheme names are still `Litter*` while the full rename is in progress):
 
 - `LitterRemote`: remote-only mode (default scheme; no bundled on-device Rust server)
 - `Litter`: includes the on-device Rust bridge (`codex_bridge.xcframework`)
@@ -121,11 +121,13 @@ Start emulator and install on-device debug build:
 
 ```bash
 ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools \
-  $ANDROID_SDK_ROOT/emulator/emulator -avd litterApi35
+  $ANDROID_SDK_ROOT/emulator/emulator -avd shitterApi35
 
 adb -e install -r apps/android/app/build/outputs/apk/onDevice/debug/app-onDevice-debug.apk
 adb -e shell am start -n com.sigkitten.litter.android/com.litter.android.MainActivity
 ```
+
+> Note: package/application IDs are still `com.sigkitten.litter.android` in this quick branding pass.
 
 Build Android Rust JNI libs (optional bridge runtime step):
 
