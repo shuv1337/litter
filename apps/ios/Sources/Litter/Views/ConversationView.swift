@@ -40,7 +40,7 @@ struct ConversationView: View {
     private func searchComposerFiles(_ query: String) async throws -> [FuzzyFileSearchResult] {
         guard let conn = serverManager.activeConnection, conn.isConnected else {
             throw NSError(
-                domain: "Litter",
+                domain: "Shitter",
                 code: 2001,
                 userInfo: [NSLocalizedDescriptionKey: "No connected server available for file search"]
             )
@@ -275,7 +275,7 @@ private struct ConversationInputBar: View {
                 }
 
                 HStack(spacing: 0) {
-                    TextField("Message litter...", text: $inputText, axis: .vertical)
+                    TextField("Message shitter...", text: $inputText, axis: .vertical)
                         .font(.system(.body))
                         .foregroundColor(.white)
                         .lineLimit(1...5)

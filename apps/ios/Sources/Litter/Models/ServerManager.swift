@@ -409,7 +409,7 @@ final class ServerManager: ObservableObject {
         guard let key = activeThreadKey,
               let thread = threads[key],
               let conn = connections[key.serverId] else {
-            throw NSError(domain: "Litter", code: 1001, userInfo: [NSLocalizedDescriptionKey: "No active thread to review"])
+            throw NSError(domain: "Shitter", code: 1001, userInfo: [NSLocalizedDescriptionKey: "No active thread to review"])
         }
         thread.status = .thinking
         do {
@@ -423,12 +423,12 @@ final class ServerManager: ObservableObject {
     func renameActiveThread(_ newName: String) async throws {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw NSError(domain: "Litter", code: 1002, userInfo: [NSLocalizedDescriptionKey: "Thread name cannot be empty"])
+            throw NSError(domain: "Shitter", code: 1002, userInfo: [NSLocalizedDescriptionKey: "Thread name cannot be empty"])
         }
         guard let key = activeThreadKey,
               let thread = threads[key],
               let conn = connections[key.serverId] else {
-            throw NSError(domain: "Litter", code: 1003, userInfo: [NSLocalizedDescriptionKey: "No active thread to rename"])
+            throw NSError(domain: "Shitter", code: 1003, userInfo: [NSLocalizedDescriptionKey: "No active thread to rename"])
         }
         try await conn.setThreadName(threadId: key.threadId, name: trimmed)
         thread.preview = trimmed

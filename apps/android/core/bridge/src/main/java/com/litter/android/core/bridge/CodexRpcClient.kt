@@ -495,7 +495,7 @@ class CodexRpcClient {
                     JSONObject().put(
                         "clientInfo",
                         JSONObject()
-                            .put("name", "Litter")
+                            .put("name", "Shitter")
                             .put("version", "1.0")
                             .put("title", JSONObject.NULL)
                     )
@@ -518,7 +518,7 @@ class CodexRpcClient {
                     JSONObject().put(
                         "clientInfo",
                         JSONObject()
-                            .put("name", "Litter")
+                            .put("name", "Shitter")
                             .put("version", "1.0")
                             .put("title", JSONObject.NULL)
                     )

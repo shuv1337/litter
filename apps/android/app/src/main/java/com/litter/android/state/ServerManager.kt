@@ -608,7 +608,7 @@ class ServerManager(
             .put(
                 "clientInfo",
                 JSONObject()
-                    .put("name", "Litter Android")
+                    .put("name", "Shitter Android")
                     .put("version", "1.0")
                     .put("title", JSONObject.NULL),
             )
@@ -2930,7 +2930,7 @@ class ServerManager(
     }
 }
 
-private val LOCAL_IMAGE_MARKER_REGEX = Regex("\\[\\[litter_local_image:([^\\]]+)]]")
+private val LOCAL_IMAGE_MARKER_REGEX = Regex("\\[\\[shitter_local_image:([^\\]]+)]]")
 
 private fun Any?.asLongOrNull(): Long? {
     return when (this) {

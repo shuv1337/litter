@@ -468,7 +468,7 @@ final class ServerConnection: ObservableObject, Identifiable {
             group.addTask {
                 try await self.client.sendRequest(
                     method: "initialize",
-                    params: InitializeParams(clientInfo: .init(name: "Litter", version: "1.0", title: nil)),
+                    params: InitializeParams(clientInfo: .init(name: "Shitter", version: "1.0", title: nil)),
                     responseType: InitializeResponse.self
                 )
             }

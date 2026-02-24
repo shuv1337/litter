@@ -17,7 +17,7 @@ struct BrandLogo: View {
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         } else {
-            Text("litter")
+            Text("shitter")
                 .font(.system(size: size * 0.32, weight: .bold, design: .monospaced))
                 .foregroundColor(LitterTheme.accent)
         }

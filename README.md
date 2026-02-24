@@ -1,10 +1,10 @@
-# litter
+# shitter
 
 <p align="center">
-  <img src="docs/logo.png" alt="litter logo" width="180" />
+  <img src="docs/logo.png" alt="shitter logo" width="180" />
 </p>
 
-`litter` is a native iOS + Android client for Codex.
+`shitter` is a native iOS + Android client for Codex.
 
 ## Repository layout
 
@@ -139,7 +139,7 @@ Build Android Rust JNI libs (optional bridge runtime step):
 
 ```bash
 asc auth login \
-  --name "Litter ASC" \
+  --name "Shitter ASC" \
   --key-id "<KEY_ID>" \
   --issuer-id "<ISSUER_ID>" \
   --private-key "$HOME/AppStore.p8" \

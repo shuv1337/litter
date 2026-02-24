@@ -34,7 +34,7 @@ struct HeaderView: View {
                             .minimumScaleFactor(0.75)
                             .allowsTightening(true)
                     } else {
-                        Text("litter")
+                        Text("shitter")
                             .font(.system(.title3, weight: .semibold))
                             .foregroundColor(.white)
                         if !selectedModelName.isEmpty {

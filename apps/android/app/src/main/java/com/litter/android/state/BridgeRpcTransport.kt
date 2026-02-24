@@ -266,7 +266,7 @@ internal class BridgeRpcTransport(
             .put(
                 "clientInfo",
                 JSONObject()
-                    .put("name", "Litter Android")
+                    .put("name", "Shitter Android")
                     .put("version", "1.0")
                     .put("title", JSONObject.NULL),
             )

@@ -52,7 +52,7 @@ class SshSessionManager {
         if (credentials is SshCredentials.Key) {
             val privateKey = credentials.privateKeyPem.toByteArray(Charsets.UTF_8)
             val passphrase = credentials.passphrase?.toByteArray(Charsets.UTF_8)
-            jsch.addIdentity("litter-ssh", privateKey, null, passphrase)
+            jsch.addIdentity("shitter-ssh", privateKey, null, passphrase)
         }
 
         val createdSession =
@@ -88,7 +88,7 @@ class SshSessionManager {
             var lastFailure = "Timed out waiting for remote server to start."
             for (port in candidatePorts()) {
                 val listenAddr = if (wantsIpv6) "[::]:$port" else "0.0.0.0:$port"
-                val logPath = "/tmp/litter-android-app-server-$port.log"
+                val logPath = "/tmp/shitter-android-app-server-$port.log"
 
                 if (isPortListening(port)) {
                     return@withContext port

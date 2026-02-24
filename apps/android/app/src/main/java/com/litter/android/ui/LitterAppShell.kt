@@ -387,7 +387,7 @@ private fun ModelSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedModel = models.firstOrNull { it.id == selectedModelId } ?: models.firstOrNull()
-    val selectedModelName = (selectedModel?.id ?: "").ifBlank { "litter" }
+    val selectedModelName = (selectedModel?.id ?: "").ifBlank { "shitter" }
 
     Box {
         OutlinedButton(
@@ -2017,7 +2017,7 @@ private fun InputBar(
                         refreshComposerPopups(nextValue)
                     },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message litter...") },
+                    placeholder = { Text("Message shitter...") },
                     minLines = 1,
                     maxLines = 5,
                 )
@@ -2051,7 +2051,7 @@ private fun InputBar(
     }
 }
 
-private const val LOCAL_IMAGE_MARKER_PREFIX = "[[litter_local_image:"
+private const val LOCAL_IMAGE_MARKER_PREFIX = "[[shitter_local_image:"
 private const val LOCAL_IMAGE_MARKER_SUFFIX = "]]"
 
 private enum class ComposerSlashCommand(
@@ -2602,7 +2602,7 @@ private fun cacheAttachmentImage(
             mimeType.contains("webp") -> "webp"
             else -> "jpg"
         }
-    val targetDirectory = File(context.cacheDir, "litter-attachments")
+    val targetDirectory = File(context.cacheDir, "shitter-attachments")
     if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
         return null
     }
@@ -2619,7 +2619,7 @@ private fun cacheAttachmentBitmap(
     context: Context,
     bitmap: Bitmap,
 ): String? {
-    val targetDirectory = File(context.cacheDir, "litter-attachments")
+    val targetDirectory = File(context.cacheDir, "shitter-attachments")
     if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
         return null
     }
