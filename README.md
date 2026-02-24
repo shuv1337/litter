@@ -1,7 +1,7 @@
 # litter
 
 <p align="center">
-  <img src="apps/ios/Sources/Litter/Resources/brand_logo.png" alt="litter logo" width="180" />
+  <img src="docs/logo.png" alt="litter logo" width="180" />
 </p>
 
 `litter` is a native iOS + Android client for Codex.
