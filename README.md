@@ -1,7 +1,7 @@
 # shitter
 
 <p align="center">
-  <img src="docs/logo.png" alt="shitter logo" width="180" />
+  <img src="docs/logo.png?v=2" alt="shitter logo" width="180" />
 </p>
 
 `shitter` is a native iOS + Android client for Codex.
