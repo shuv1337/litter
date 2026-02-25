@@ -3,7 +3,7 @@ use jni::sys::jint;
 use jni::JNIEnv;
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_litter_android_core_bridge_NativeCodexBridge_nativeStartServerPort(
+pub extern "system" fn Java_io_latitudes_shitter_android_core_bridge_NativeCodexBridge_nativeStartServerPort(
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
@@ -17,7 +17,7 @@ pub extern "system" fn Java_com_litter_android_core_bridge_NativeCodexBridge_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_litter_android_core_bridge_NativeCodexBridge_nativeStopServer(
+pub extern "system" fn Java_io_latitudes_shitter_android_core_bridge_NativeCodexBridge_nativeStopServer(
     _env: JNIEnv,
     _class: JClass,
 ) {
