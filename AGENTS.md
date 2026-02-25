@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `apps/ios/Sources/Litter/` contains the iOS app code.
-- `apps/ios/Sources/Litter/Views/` holds SwiftUI screens, `Models/` contains app state/session logic, and `Bridge/` contains JSON-RPC + C FFI bridge code.
-- `apps/android/app/src/main/java/com/litter/android/ui/` contains Android Compose shell/screens.
-- `apps/android/app/src/main/java/com/litter/android/state/` contains Android app state, server/session manager, SSH, and websocket transport.
+- `apps/ios/Sources/Shitter/` contains the iOS app code.
+- `apps/ios/Sources/Shitter/Views/` holds SwiftUI screens, `Models/` contains app state/session logic, and `Bridge/` contains JSON-RPC + C FFI bridge code.
+- `apps/android/app/src/main/java/io/latitudes/shitter/android/ui/` contains Android Compose shell/screens.
+- `apps/android/app/src/main/java/io/latitudes/shitter/android/state/` contains Android app state, server/session manager, SSH, and websocket transport.
 - `apps/android/core/bridge/` contains Android core native bridge bootstrap and websocket client.
 - `apps/android/core/network/` contains Android discovery services (Bonjour/Tailscale/LAN probing).
 - `apps/android/app/src/test/java/` contains Android unit tests.
@@ -12,13 +12,13 @@
 - `shared/rust-bridge/codex-bridge/` is the shared Rust library (`libcodex_bridge.a`) exposed through `shared/rust-bridge/codex-bridge/include/codex_bridge.h`.
 - `shared/third_party/codex/` is the upstream Codex submodule.
 - `apps/ios/Frameworks/` contains generated/downloaded iOS XCFrameworks (`codex_bridge.xcframework` and `ios_system/*`); these artifacts are not committed.
-- `apps/ios/project.yml` is the source of truth for project generation; regenerate `apps/ios/Litter.xcodeproj` instead of hand-editing project files.
+- `apps/ios/project.yml` is the source of truth for project generation; regenerate `apps/ios/Shitter.xcodeproj` instead of hand-editing project files.
 
 ## Architecture
 - **iOS root layout:** `ContentView` uses a `ZStack` with a persistent `HeaderView`, main content area, and a `SidebarOverlay` that slides from the left.
 - **iOS state management:** `ConversationStore` (ObservableObject) manages WebSocket connection, JSON-RPC calls, and message state. `AppState` (ObservableObject) manages UI state (sidebar, server, model/reasoning selection).
 - **iOS server flow:** `DiscoveryView` (sheet) discovers and connects to servers; sidebar/session flows use `thread/list`, `thread/resume`, and `thread/start`.
-- **Android root layout:** `LitterAppShell` is the Compose entry; `DefaultLitterAppState` maps backend state into UI state.
+- **Android root layout:** `ShitterAppShell` is the Compose entry; `DefaultShitterAppState` maps backend state into UI state.
 - **Android state/transport:** `ServerManager` handles multi-server threads/models/account state and routes notifications via `BridgeRpcTransport`.
 - **Android server flow:** Discovery sheet + SSH login sheet + settings/account sheets drive connection, auth, and server management.
 - **Message rendering parity:** both platforms support reasoning/system sections, code block rendering, and inline image handling.
@@ -37,9 +37,9 @@
 ## Build, Test, and Development Commands
 - `./apps/ios/scripts/download-ios-system.sh`: download required `ios_system` XCFrameworks.
 - `./apps/ios/scripts/build-rust.sh`: cross-compile Rust bridge from `shared/rust-bridge/codex-bridge` for device/simulator and rebuild `apps/ios/Frameworks/codex_bridge.xcframework`.
-- `xcodegen generate --spec apps/ios/project.yml --project apps/ios/Litter.xcodeproj`: regenerate iOS project after spec/path changes.
-- `open apps/ios/Litter.xcodeproj`: open and run from Xcode.
-- `xcodebuild -project apps/ios/Litter.xcodeproj -scheme Litter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`: CI-friendly local build.
+- `xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj`: regenerate iOS project after spec/path changes.
+- `open apps/ios/Shitter.xcodeproj`: open and run from Xcode.
+- `xcodebuild -project apps/ios/Shitter.xcodeproj -scheme Shitter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`: CI-friendly local build.
 - `./apps/ios/scripts/testflight-setup.sh`: create/check TestFlight internal group and optionally update beta review contact details.
 - `./apps/ios/scripts/testflight-upload.sh`: archive iOS app, export IPA, upload to TestFlight with `asc`, and auto-attach build to internal beta group.
 - `gradle -p apps/android :app:assembleOnDeviceDebug :app:assembleRemoteOnlyDebug`: build Android flavors.

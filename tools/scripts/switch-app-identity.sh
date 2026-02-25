@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DEPRECATED: This script is no longer functional after the Litter → Shitter rebrand.
+# DEPRECATED: This script is no longer functional after the app identity rebrand.
 #
 # The application now uses fixed identifiers:
 #   - iOS:     io.latitudes.shitter (main) / io.latitudes.shitter.remote (remote-only)
@@ -15,7 +15,7 @@ cat >&2 <<'EOF'
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                              SCRIPT DEPRECATED                               ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
-║  switch-app-identity.sh is no longer supported after the Litter → Shitter   ║
+║  switch-app-identity.sh is no longer supported after the app identity        ║
 ║  rebrand. The app now uses fixed identifiers:                                ║
 ║                                                                              ║
 ║    iOS:     io.latitudes.shitter / io.latitudes.shitter.remote               ║

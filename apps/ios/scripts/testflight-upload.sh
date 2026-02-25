@@ -99,10 +99,12 @@ require_cmd() {
     fi
 }
 
-require_cmd asc
-require_cmd jq
-require_cmd xcodebuild
-require_cmd xcodegen
+if [[ "$DRY_RUN" -eq 0 ]]; then
+    require_cmd asc
+    require_cmd jq
+    require_cmd xcodebuild
+    require_cmd xcodegen
+fi
 
 mkdir -p "$BUILD_DIR"
 

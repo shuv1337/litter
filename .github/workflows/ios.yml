@@ -26,13 +26,13 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate project
-        run: xcodegen generate --spec apps/ios/project.yml --project apps/ios/Litter.xcodeproj
+        run: xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj
 
-      - name: Build (LitterRemote)
+      - name: Build (ShitterRemote)
         run: |
           xcodebuild \
-            -project apps/ios/Litter.xcodeproj \
-            -scheme LitterRemote \
+            -project apps/ios/Shitter.xcodeproj \
+            -scheme ShitterRemote \
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             build

@@ -43,7 +43,7 @@ If this succeeds, signing is fixed.
 ### Step 3: Build to device
 1. Plug iPhone into shuvbot via USB
 2. In Xcode, select the iPhone as the run destination (not a simulator)
-3. Select the **Litter** scheme (not LitterRemote)
+3. Select the **Shitter** scheme (not ShitterRemote)
 4. Hit **▶ Run**
 
 ### Step 4 (optional): Recreate CI keychain for SSH/CI builds

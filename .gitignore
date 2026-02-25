@@ -12,7 +12,7 @@ build/
 DerivedData/
 apps/android/.gradle/
 apps/ios/Frameworks/
-apps/ios/Litter.xcodeproj/Litter.xcodeproj/
+apps/ios/Shitter.xcodeproj/Shitter.xcodeproj/
 
 # SwiftPM
 Packages/

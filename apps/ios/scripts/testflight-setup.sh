@@ -71,8 +71,10 @@ require_cmd() {
     fi
 }
 
-require_cmd asc
-require_cmd jq
+if [[ "$DRY_RUN" -eq 0 ]]; then
+    require_cmd asc
+    require_cmd jq
+fi
 
 if [[ -z "$APP_STORE_APP_ID" ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then

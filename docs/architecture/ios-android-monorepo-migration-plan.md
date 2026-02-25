@@ -26,7 +26,7 @@ shitter/
 ├─ apps/
 │  ├─ ios/
 │  │  ├─ project.yml
-│  │  ├─ Litter.xcodeproj
+│  │  ├─ Shitter.xcodeproj
 │  │  ├─ Sources/
 │  │  ├─ Frameworks/
 │  │  └─ scripts/
@@ -53,8 +53,8 @@ shitter/
 
 ## Current-to-Target Path Mapping
 - `project.yml` -> `apps/ios/project.yml`
-- `Litter.xcodeproj/` -> `apps/ios/Litter.xcodeproj/`
-- `Sources/Litter/` -> `apps/ios/Sources/Litter/`
+- `Shitter.xcodeproj/` -> `apps/ios/Shitter.xcodeproj/`
+- `Sources/Shitter/` -> `apps/ios/Sources/Shitter/`
 - `Frameworks/` -> `apps/ios/Frameworks/`
 - `scripts/` -> `apps/ios/scripts/` (then extract shared scripts into `tools/scripts/`)
 - `codex-bridge/` -> `shared/rust-bridge/codex-bridge/`
@@ -67,7 +67,7 @@ shitter/
 - Freeze current iOS baseline on branch.
 - Capture build commands that must remain green:
   - `xcodegen generate`
-  - `xcodebuild -project Litter.xcodeproj -scheme Litter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`
+  - `xcodebuild -project Shitter.xcodeproj -scheme Shitter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`
 - Add a migration tracking checklist in this doc (or project board).
 
 Exit criteria:
@@ -101,9 +101,9 @@ Exit criteria:
 
 ### Phase 3: Move iOS App Into `apps/ios`
 - Move iOS files:
-  - `project.yml`, `Litter.xcodeproj`, `Sources`, `Frameworks`, iOS scripts.
+  - `project.yml`, `Shitter.xcodeproj`, `Sources`, `Frameworks`, iOS scripts.
 - Rewrite paths in `apps/ios/project.yml`:
-  - `Sources/Litter/...` -> `apps/ios/Sources/Litter/...` or make paths relative to `apps/ios`.
+  - `Sources/Shitter/...` -> `apps/ios/Sources/Shitter/...` or make paths relative to `apps/ios`.
 - Update script relative paths after move.
 - Regenerate Xcode project from new location.
 

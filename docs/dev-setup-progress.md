@@ -32,18 +32,18 @@
 - Xcode project generated via xcodegen
 
 ### 5. ✅ iOS App Builds and Runs in Simulator
-- `Litter` scheme builds successfully for iPhone 17 Pro simulator
+- `Shitter` scheme builds successfully for iPhone 17 Pro simulator
 - App launches and discovers shuvdev codex server via Bonjour
 
 ### 6. ✅ Replaced Logo
-- Swapped cats-in-litter-box logo with demon toilet logo
+- Swapped the old cat-box logo with demon toilet logo
 - Source: `~/Downloads/logo.png` (1024x1536, high-res)
 - Generated `brand_logo.png` (1024x1024, transparent bg, tight crop)
 - Generated all AppIcon sizes (20→1024) with black bg
 - Committed and pushed
 
 ### 7. ✅ Changed Bundle ID
-- `com.sigkitten.litter` → `io.latitudes.shitter` (old one was globally taken)
+- Previous temporary bundle ID → `io.latitudes.shitter` (old one was globally taken)
 - Updated `apps/ios/project.yml`
 
 ### 8. ✅ App Store Connect Setup (Partial)
@@ -86,7 +86,7 @@ The `xcodebuild -exportArchive` flow is the correct way — it handles re-signin
 2. **Or use Fastlane** — `fastlane gym` handles the keychain/codesign dance better than raw xcodebuild for CI:
    ```
    brew install fastlane
-   fastlane gym --project Litter.xcodeproj --scheme Litter ...
+   fastlane gym --project Shitter.xcodeproj --scheme Shitter ...
    ```
 
 ### Option B: Use Xcode GUI on shuvbot

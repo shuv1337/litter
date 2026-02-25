@@ -37,9 +37,9 @@ Options:
 - `--dry-run` - Preview without executing
 - `-h, --help` - Show help
 
-### switch-app-identity.sh (DEPRECATED)
+### Legacy app identity automation (DEPRECATED)
 
-**This script is deprecated.** The app now uses fixed identifiers:
+**This helper is deprecated.** The app now uses fixed identifiers:
 
 - iOS: `io.latitudes.shitter` / `io.latitudes.shitter.remote`
 - Android: `io.latitudes.shitter.android`

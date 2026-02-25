@@ -135,8 +135,10 @@ detect_ndk() {
   echo ""
 }
 
-require_cmd adb
-require_cmd gradle
+if [ "$DRY_RUN" -eq 0 ]; then
+  require_cmd adb
+  require_cmd gradle
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] Would resolve ADB device serial"

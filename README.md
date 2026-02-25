@@ -8,7 +8,7 @@
 
 ## Repository layout
 
-- `apps/ios`: iOS app (current schemes: `LitterRemote` and `Litter`)
+- `apps/ios`: iOS app (schemes: `ShitterRemote` and `Shitter`)
 - `apps/android`: Android app
   - `app`: Compose UI shell, app state, server manager, SSH/auth flows
   - `core/bridge`: native bridge bootstrapping and core RPC client
@@ -19,10 +19,10 @@
 - `patches/codex`: local Codex patch set
 - `tools/scripts`: cross-platform helper scripts
 
-iOS supports (current scheme names are still `Litter*` while the full rename is in progress):
+iOS schemes:
 
-- `LitterRemote`: remote-only mode (default scheme; no bundled on-device Rust server)
-- `Litter`: includes the on-device Rust bridge (`codex_bridge.xcframework`)
+- `ShitterRemote`: remote-only mode (default scheme; no bundled on-device Rust server)
+- `Shitter`: includes the on-device Rust bridge (`codex_bridge.xcframework`)
 
 Generated iOS framework artifacts under `apps/ios/Frameworks/` are not stored in git.
 Bootstrap them locally before building:
@@ -39,7 +39,7 @@ Bootstrap them locally before building:
   ```bash
   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
   ```
-- `xcodegen` (for regenerating `Litter.xcodeproj`):
+- `xcodegen` (for regenerating `Shitter.xcodeproj`):
   ```bash
   brew install xcodegen
   ```
@@ -77,24 +77,19 @@ This script:
 Regenerate project if `apps/ios/project.yml` changed:
 
 ```bash
-xcodegen generate --spec apps/ios/project.yml --project apps/ios/Litter.xcodeproj
+xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj
 ```
 
 Open in Xcode:
 
 ```bash
-open apps/ios/Litter.xcodeproj
+open apps/ios/Shitter.xcodeproj
 ```
-
-Schemes:
-
-- `LitterRemote` (default): no on-device Rust bridge
-- `Litter`: uses bundled `codex_bridge.xcframework`
 
 CLI build example:
 
 ```bash
-xcodebuild -project apps/ios/Litter.xcodeproj -scheme LitterRemote -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+xcodebuild -project apps/ios/Shitter.xcodeproj -scheme ShitterRemote -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
 ## Build and run Android app
@@ -124,10 +119,8 @@ ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools \
   $ANDROID_SDK_ROOT/emulator/emulator -avd shitterApi35
 
 adb -e install -r apps/android/app/build/outputs/apk/onDevice/debug/app-onDevice-debug.apk
-adb -e shell am start -n com.sigkitten.litter.android/com.litter.android.MainActivity
+adb -e shell am start -n io.latitudes.shitter.android/io.latitudes.shitter.android.MainActivity
 ```
-
-> Note: package/application IDs are still `com.sigkitten.litter.android` in this quick branding pass.
 
 Build Android Rust JNI libs (optional bridge runtime step):
 
@@ -171,7 +164,7 @@ MARKETING_VERSION=1.0.0 \
 Notes:
 - `testflight-upload.sh` auto-increments build number from the latest App Store Connect build.
 - It archives, exports an IPA, uploads via `asc builds upload`, and assigns the build to `Internal Testers` by default.
-- Override `SCHEME` to `LitterRemote` if you are shipping the remote-only target.
+- Override `SCHEME` to `ShitterRemote` if you are shipping the remote-only target.
 
 ## Important paths
 
@@ -179,20 +172,20 @@ Notes:
 - `shared/rust-bridge/codex-bridge/`: Rust staticlib wrapper exposing `codex_start_server`/`codex_stop_server`
 - `shared/third_party/codex/`: upstream Codex source (submodule)
 - `patches/codex/ios-exec-hook.patch`: iOS-specific hook patch applied to submodule
-- `apps/ios/Sources/Litter/Bridge/`: Swift bridge + JSON-RPC client
-- `apps/android/app/src/main/java/com/litter/android/ui/`: Android Compose UI shell and screens
-- `apps/android/app/src/main/java/com/litter/android/state/`: Android state, transports, session/server orchestration
+- `apps/ios/Sources/Shitter/Bridge/`: Swift bridge + JSON-RPC client
+- `apps/android/app/src/main/java/io/latitudes/shitter/android/ui/`: Android Compose UI shell and screens
+- `apps/android/app/src/main/java/io/latitudes/shitter/android/state/`: Android state, transports, session/server orchestration
 - `apps/android/core/bridge/`: Android bridge bootstrap and core websocket client
 - `apps/android/core/network/`: discovery services
 - `apps/android/app/src/test/java/`: Android unit tests (runtime mode + transport policy scaffolding)
 - `apps/android/docs/qa-matrix.md`: Android parity checklist
 - `tools/scripts/build-android-rust.sh`: builds Android JNI Rust artifacts into `jniLibs`
-- `apps/ios/Sources/Litter/Resources/brand_logo.svg`: source logo (SVG)
-- `apps/ios/Sources/Litter/Resources/brand_logo.png`: in-app logo image used by `BrandLogo`
-- `apps/ios/Sources/Litter/Assets.xcassets/AppIcon.appiconset/`: generated app icon set
+- `apps/ios/Sources/Shitter/Resources/brand_logo.svg`: source logo (SVG)
+- `apps/ios/Sources/Shitter/Resources/brand_logo.png`: in-app logo image used by `BrandLogo`
+- `apps/ios/Sources/Shitter/Assets.xcassets/AppIcon.appiconset/`: generated app icon set
 
 ## Branding assets
 
-- Home/launch branding uses `BrandLogo` (`apps/ios/Sources/Litter/Views/BrandLogo.swift`) backed by `brand_logo.png`.
+- Home/launch branding uses `BrandLogo` (`apps/ios/Sources/Shitter/Views/BrandLogo.swift`) backed by `brand_logo.png`.
 - The app icon is generated from the same logo and stored in `AppIcon.appiconset`.
 - If logo art changes, regenerate icon sizes from `Icon-1024.png` (or re-run your ImageMagick resize pipeline) before building.
