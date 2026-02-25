@@ -156,9 +156,9 @@ fi
 
 echo "==> Regenerating Xcode project"
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run] Would run: xcodegen generate --spec $REPO_DIR/project.yml --project $PROJECT_PATH"
+    echo "[dry-run] Would run: xcodegen generate --spec $REPO_DIR/project.yml --project $PROJECT_DIR"
 else
-    xcodegen generate --spec "$REPO_DIR/project.yml" --project "$PROJECT_PATH"
+    xcodegen generate --spec "$REPO_DIR/project.yml" --project "$PROJECT_DIR"
 fi
 
 echo "==> Archiving $SCHEME ($MARKETING_VERSION/$BUILD_NUMBER)"
