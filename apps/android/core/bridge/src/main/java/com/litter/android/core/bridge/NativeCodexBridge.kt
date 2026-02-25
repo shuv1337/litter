@@ -1,4 +1,4 @@
-package com.litter.android.core.bridge
+package io.latitudes.shitter.android.core.bridge
 
 object NativeCodexBridge {
     private val loaded: Boolean =

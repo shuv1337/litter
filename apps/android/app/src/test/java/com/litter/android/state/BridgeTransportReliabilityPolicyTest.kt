@@ -1,4 +1,4 @@
-package com.litter.android.state
+package io.latitudes.shitter.android.state
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

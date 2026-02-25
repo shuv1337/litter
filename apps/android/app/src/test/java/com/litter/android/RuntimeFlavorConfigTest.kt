@@ -1,6 +1,6 @@
-package com.litter.android
+package io.latitudes.shitter.android
 
-import com.sigkitten.litter.android.BuildConfig
+import io.latitudes.shitter.android.BuildConfig
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

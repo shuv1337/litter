@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.litter.android.core.bridge"
+    namespace = "io.latitudes.shitter.android.core.bridge"
     compileSdk = 35
 
     defaultConfig {

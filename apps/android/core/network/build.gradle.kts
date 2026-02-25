@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.litter.android.core.network"
+    namespace = "io.latitudes.shitter.android.core.network"
     compileSdk = 35
 
     defaultConfig {

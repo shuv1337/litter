@@ -1,4 +1,4 @@
-package com.litter.android.core.bridge
+package io.latitudes.shitter.android.core.bridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

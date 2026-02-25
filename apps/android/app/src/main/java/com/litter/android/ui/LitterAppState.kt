@@ -1,32 +1,32 @@
-package com.litter.android.ui
+package io.latitudes.shitter.android.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
-import com.litter.android.core.bridge.CodexRuntimeStartupPolicy
-import com.litter.android.core.network.DiscoveredServer
-import com.litter.android.core.network.DiscoverySource
-import com.litter.android.core.network.ServerDiscoveryService
-import com.litter.android.state.AccountState
-import com.litter.android.state.AppState
-import com.litter.android.state.AuthStatus
-import com.litter.android.state.ChatMessage
-import com.litter.android.state.ExperimentalFeature
-import com.litter.android.state.FuzzyFileSearchResult
-import com.litter.android.state.ModelOption
-import com.litter.android.state.ModelSelection
-import com.litter.android.state.SavedSshCredential
-import com.litter.android.state.ServerConfig
-import com.litter.android.state.ServerConnectionStatus
-import com.litter.android.state.ServerManager
-import com.litter.android.state.ServerSource
-import com.litter.android.state.SkillMetadata
-import com.litter.android.state.SshAuthMethod
-import com.litter.android.state.SshCredentialStore
-import com.litter.android.state.SshCredentials
-import com.litter.android.state.SshSessionManager
-import com.litter.android.state.ThreadKey
-import com.litter.android.state.ThreadState
-import com.litter.android.state.ThreadStatus
+import io.latitudes.shitter.android.core.bridge.CodexRuntimeStartupPolicy
+import io.latitudes.shitter.android.core.network.DiscoveredServer
+import io.latitudes.shitter.android.core.network.DiscoverySource
+import io.latitudes.shitter.android.core.network.ServerDiscoveryService
+import io.latitudes.shitter.android.state.AccountState
+import io.latitudes.shitter.android.state.AppState
+import io.latitudes.shitter.android.state.AuthStatus
+import io.latitudes.shitter.android.state.ChatMessage
+import io.latitudes.shitter.android.state.ExperimentalFeature
+import io.latitudes.shitter.android.state.FuzzyFileSearchResult
+import io.latitudes.shitter.android.state.ModelOption
+import io.latitudes.shitter.android.state.ModelSelection
+import io.latitudes.shitter.android.state.SavedSshCredential
+import io.latitudes.shitter.android.state.ServerConfig
+import io.latitudes.shitter.android.state.ServerConnectionStatus
+import io.latitudes.shitter.android.state.ServerManager
+import io.latitudes.shitter.android.state.ServerSource
+import io.latitudes.shitter.android.state.SkillMetadata
+import io.latitudes.shitter.android.state.SshAuthMethod
+import io.latitudes.shitter.android.state.SshCredentialStore
+import io.latitudes.shitter.android.state.SshCredentials
+import io.latitudes.shitter.android.state.SshSessionManager
+import io.latitudes.shitter.android.state.ThreadKey
+import io.latitudes.shitter.android.state.ThreadState
+import io.latitudes.shitter.android.state.ThreadStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -119,7 +119,7 @@ data class UiShellState(
     val uiError: String? = null,
 )
 
-interface LitterAppState : Closeable {
+interface ShitterAppState : Closeable {
     val uiState: StateFlow<UiShellState>
 
     fun toggleSidebar()
@@ -250,12 +250,12 @@ interface LitterAppState : Closeable {
     fun clearUiError()
 }
 
-class DefaultLitterAppState(
+class DefaultShitterAppState(
     private val serverManager: ServerManager,
     private val discoveryService: ServerDiscoveryService = ServerDiscoveryService(),
     private val sshSessionManager: SshSessionManager = SshSessionManager(),
     private val sshCredentialStore: SshCredentialStore? = null,
-) : LitterAppState {
+) : ShitterAppState {
     private val _uiState = MutableStateFlow(UiShellState())
     override val uiState: StateFlow<UiShellState> = _uiState.asStateFlow()
 
@@ -1459,16 +1459,16 @@ class DefaultLitterAppState(
 }
 
 @Composable
-fun rememberLitterAppState(
+fun rememberShitterAppState(
     serverManager: ServerManager,
-): LitterAppState {
+): ShitterAppState {
     val appContext = LocalContext.current.applicationContext
     val discoveryService = androidx.compose.runtime.remember(appContext) { ServerDiscoveryService(appContext) }
     val sshSessionManager = androidx.compose.runtime.remember { SshSessionManager() }
     val sshCredentialStore = androidx.compose.runtime.remember(appContext) { SshCredentialStore(appContext) }
     val appState =
         androidx.compose.runtime.remember(serverManager, discoveryService, sshSessionManager, sshCredentialStore) {
-            DefaultLitterAppState(
+            DefaultShitterAppState(
                 serverManager = serverManager,
                 discoveryService = discoveryService,
                 sshSessionManager = sshSessionManager,

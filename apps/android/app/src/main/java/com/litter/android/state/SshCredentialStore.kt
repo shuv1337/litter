@@ -1,4 +1,4 @@
-package com.litter.android.state
+package io.latitudes.shitter.android.state
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -32,14 +32,14 @@ class SshCredentialStore(
                     .build()
             EncryptedSharedPreferences.create(
                 appContext,
-                "litter_ssh_credentials_secure",
+                "shitter_ssh_credentials_secure",
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
         }.getOrElse {
             // Fallback for environments where encrypted prefs initialization fails.
-            appContext.getSharedPreferences("litter_ssh_credentials", Context.MODE_PRIVATE)
+            appContext.getSharedPreferences("shitter_ssh_credentials", Context.MODE_PRIVATE)
         }
 
     fun load(

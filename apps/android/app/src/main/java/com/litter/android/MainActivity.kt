@@ -1,14 +1,14 @@
-package com.litter.android
+package io.latitudes.shitter.android
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
-import com.litter.android.state.ServerManager
-import com.litter.android.ui.LitterAppShell
-import com.litter.android.ui.LitterAppTheme
-import com.litter.android.ui.rememberLitterAppState
+import io.latitudes.shitter.android.state.ServerManager
+import io.latitudes.shitter.android.ui.ShitterAppShell
+import io.latitudes.shitter.android.ui.ShitterAppTheme
+import io.latitudes.shitter.android.ui.rememberShitterAppState
 
 class MainActivity : ComponentActivity() {
     private lateinit var serverManager: ServerManager
@@ -22,9 +22,9 @@ class MainActivity : ComponentActivity() {
         serverManager = ServerManager(context = this)
 
         setContent {
-            LitterAppTheme {
-                val appState = rememberLitterAppState(serverManager = serverManager)
-                LitterAppShell(appState = appState)
+            ShitterAppTheme {
+                val appState = rememberShitterAppState(serverManager = serverManager)
+                ShitterAppShell(appState = appState)
             }
         }
     }

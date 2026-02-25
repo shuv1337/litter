@@ -1,4 +1,4 @@
-package com.litter.android.core.network
+package io.latitudes.shitter.android.core.network
 
 import android.content.Context
 import android.net.nsd.NsdManager

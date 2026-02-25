@@ -1,9 +1,9 @@
-package com.litter.android.state
+package io.latitudes.shitter.android.state
 
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import com.litter.android.core.bridge.CodexRpcClient
+import io.latitudes.shitter.android.core.bridge.CodexRpcClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.Closeable
@@ -42,7 +42,7 @@ class ServerManager(
 
     private val appContext = context?.applicationContext
     private val savedServersPreferences by lazy {
-        appContext?.getSharedPreferences("litter_saved_servers", Context.MODE_PRIVATE)
+        appContext?.getSharedPreferences("shitter_saved_servers", Context.MODE_PRIVATE)
     }
     private val savedServersKey = "servers"
 

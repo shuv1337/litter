@@ -1,4 +1,4 @@
-package com.litter.android.ui
+package io.latitudes.shitter.android.ui
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
@@ -11,7 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-object LitterTheme {
+object ShitterTheme {
     val accent = Color(0xFFB0B0B0)
     val textPrimary = Color.White
     val textSecondary = Color(0xFF888888)
@@ -35,22 +35,22 @@ object LitterTheme {
         )
 }
 
-private val LitterColorScheme =
+private val ShitterColorScheme =
     darkColorScheme(
-        primary = LitterTheme.accent,
+        primary = ShitterTheme.accent,
         onPrimary = Color(0xFF0D0D0D),
-        secondary = LitterTheme.textSecondary,
-        onSecondary = LitterTheme.textPrimary,
+        secondary = ShitterTheme.textSecondary,
+        onSecondary = ShitterTheme.textPrimary,
         background = Color.Black,
-        onBackground = LitterTheme.textBody,
-        surface = LitterTheme.surface,
-        onSurface = LitterTheme.textBody,
-        error = LitterTheme.danger,
+        onBackground = ShitterTheme.textBody,
+        surface = ShitterTheme.surface,
+        onSurface = ShitterTheme.textBody,
+        error = ShitterTheme.danger,
         onError = Color(0xFF0D0D0D),
-        outline = LitterTheme.border,
+        outline = ShitterTheme.border,
     )
 
-private val LitterTypography =
+private val ShitterTypography =
     Typography(
         headlineSmall =
             TextStyle(
@@ -79,10 +79,10 @@ private val LitterTypography =
     )
 
 @Composable
-fun LitterAppTheme(content: @Composable () -> Unit) {
+fun ShitterAppTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = LitterColorScheme,
-        typography = LitterTypography,
+        colorScheme = ShitterColorScheme,
+        typography = ShitterTypography,
         content = content,
     )
 }

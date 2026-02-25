@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.litter.android.feature.conversation"
+    namespace = "io.latitudes.shitter.android.feature.conversation"
     compileSdk = 35
 
     defaultConfig {

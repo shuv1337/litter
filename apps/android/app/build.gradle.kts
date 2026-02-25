@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.sigkitten.litter.android"
+    namespace = "io.latitudes.shitter.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.sigkitten.litter.android"
+        applicationId = "io.latitudes.shitter.android"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

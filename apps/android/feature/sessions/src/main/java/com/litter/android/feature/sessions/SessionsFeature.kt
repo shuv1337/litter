@@ -1,7 +1,7 @@
-package com.litter.android.feature.sessions
+package io.latitudes.shitter.android.feature.sessions
 
-import com.litter.android.core.bridge.CodexRpcClient
-import com.litter.android.core.bridge.SessionSummary
+import io.latitudes.shitter.android.core.bridge.CodexRpcClient
+import io.latitudes.shitter.android.core.bridge.SessionSummary
 
 class SessionsFeature(
     private val rpcClient: CodexRpcClient,

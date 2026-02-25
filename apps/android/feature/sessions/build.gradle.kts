@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.litter.android.feature.sessions"
+    namespace = "io.latitudes.shitter.android.feature.sessions"
     compileSdk = 35
 
     defaultConfig {

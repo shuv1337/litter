@@ -1,6 +1,6 @@
-package com.litter.android.feature.conversation
+package io.latitudes.shitter.android.feature.conversation
 
-import com.litter.android.core.bridge.CodexRpcClient
+import io.latitudes.shitter.android.core.bridge.CodexRpcClient
 
 class ConversationFeature(
     private val rpcClient: CodexRpcClient,

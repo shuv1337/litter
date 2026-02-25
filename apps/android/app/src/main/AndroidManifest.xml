@@ -13,13 +13,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
         <meta-data
-            android:name="com.litter.android.runtime.STARTUP_MODE"
+            android:name="io.latitudes.shitter.android.runtime.STARTUP_MODE"
             android:value="${runtimeStartupMode}" />
         <meta-data
-            android:name="com.litter.android.runtime.ENABLE_ON_DEVICE_BRIDGE"
+            android:name="io.latitudes.shitter.android.runtime.ENABLE_ON_DEVICE_BRIDGE"
             android:value="${enableOnDeviceBridge}" />
         <activity
-            android:name="com.litter.android.MainActivity"
+            android:name="io.latitudes.shitter.android.MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

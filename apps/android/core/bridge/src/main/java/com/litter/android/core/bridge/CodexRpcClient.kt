@@ -1,4 +1,4 @@
-package com.litter.android.core.bridge
+package io.latitudes.shitter.android.core.bridge
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -643,10 +643,10 @@ class CodexRpcClient {
 }
 
 object CodexRuntimeStartupPolicy {
-    private const val APP_BUILD_CONFIG_CLASS = "com.sigkitten.litter.android.BuildConfig"
+    private const val APP_BUILD_CONFIG_CLASS = "io.latitudes.shitter.android.BuildConfig"
     private const val BUILD_CONFIG_FLAG = "ENABLE_ON_DEVICE_BRIDGE"
-    private const val SYSTEM_PROPERTY = "litter.android.on_device_bridge.enabled"
-    private const val ENV_VARIABLE = "LITTER_ANDROID_ON_DEVICE_BRIDGE_ENABLED"
+    private const val SYSTEM_PROPERTY = "shitter.android.on_device_bridge.enabled"
+    private const val ENV_VARIABLE = "SHITTER_ANDROID_ON_DEVICE_BRIDGE_ENABLED"
 
     fun onDeviceBridgeEnabled(
         buildConfigValue: Boolean? = readBuildConfigFlag(),

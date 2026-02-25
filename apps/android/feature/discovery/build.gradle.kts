@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.litter.android.feature.discovery"
+    namespace = "io.latitudes.shitter.android.feature.discovery"
     compileSdk = 35
 
     defaultConfig {

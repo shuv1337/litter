@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LitterAndroid"
+rootProject.name = "ShitterAndroid"
 include(":app")
 include(":core:network")
 include(":core:bridge")

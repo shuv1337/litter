@@ -1,4 +1,4 @@
-package com.litter.android.state
+package io.latitudes.shitter.android.state
 
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch

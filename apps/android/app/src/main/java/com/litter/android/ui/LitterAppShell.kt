@@ -1,4 +1,4 @@
-package com.litter.android.ui
+package io.latitudes.shitter.android.ui
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -124,21 +124,21 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.litter.android.core.network.DiscoverySource
-import com.litter.android.state.AccountState
-import com.litter.android.state.AuthStatus
-import com.litter.android.state.ChatMessage
-import com.litter.android.state.ExperimentalFeature
-import com.litter.android.state.FuzzyFileSearchResult
-import com.litter.android.state.MessageRole
-import com.litter.android.state.ModelOption
-import com.litter.android.state.ServerConfig
-import com.litter.android.state.ServerConnectionStatus
-import com.litter.android.state.ServerSource
-import com.litter.android.state.SkillMetadata
-import com.litter.android.state.ThreadKey
-import com.litter.android.state.ThreadState
-import com.sigkitten.litter.android.R
+import io.latitudes.shitter.android.core.network.DiscoverySource
+import io.latitudes.shitter.android.state.AccountState
+import io.latitudes.shitter.android.state.AuthStatus
+import io.latitudes.shitter.android.state.ChatMessage
+import io.latitudes.shitter.android.state.ExperimentalFeature
+import io.latitudes.shitter.android.state.FuzzyFileSearchResult
+import io.latitudes.shitter.android.state.MessageRole
+import io.latitudes.shitter.android.state.ModelOption
+import io.latitudes.shitter.android.state.ServerConfig
+import io.latitudes.shitter.android.state.ServerConnectionStatus
+import io.latitudes.shitter.android.state.ServerSource
+import io.latitudes.shitter.android.state.SkillMetadata
+import io.latitudes.shitter.android.state.ThreadKey
+import io.latitudes.shitter.android.state.ThreadState
+import io.latitudes.shitter.android.R
 import io.noties.markwon.Markwon
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -148,7 +148,7 @@ import java.io.FileOutputStream
 import java.util.Locale
 
 @Composable
-fun LitterAppShell(appState: LitterAppState) {
+fun ShitterAppShell(appState: ShitterAppState) {
     val uiState by appState.uiState.collectAsStateWithLifecycle()
     val drawerWidth = 304.dp
     val drawerOffset by
@@ -158,7 +158,7 @@ fun LitterAppShell(appState: LitterAppState) {
             label = "sidebar_offset",
         )
 
-    Box(modifier = Modifier.fillMaxSize().background(LitterTheme.backgroundBrush)) {
+    Box(modifier = Modifier.fillMaxSize().background(ShitterTheme.backgroundBrush)) {
         Column(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
         ) {
@@ -171,7 +171,7 @@ fun LitterAppShell(appState: LitterAppState) {
                 onSelectModel = appState::selectModel,
                 onSelectReasoningEffort = appState::selectReasoningEffort,
             )
-            HorizontalDivider(color = LitterTheme.divider)
+            HorizontalDivider(color = ShitterTheme.divider)
 
             if (uiState.activeThreadKey == null) {
                 EmptyState(
@@ -359,7 +359,7 @@ private fun HeaderBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             IconButton(onClick = onToggleSidebar) {
-                Icon(Icons.Default.Menu, contentDescription = "Toggle sidebar", tint = LitterTheme.textSecondary)
+                Icon(Icons.Default.Menu, contentDescription = "Toggle sidebar", tint = ShitterTheme.textSecondary)
             }
 
             ModelSelector(
@@ -392,12 +392,12 @@ private fun ModelSelector(
     Box {
         OutlinedButton(
             onClick = { expanded = true },
-            border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
             shape = RoundedCornerShape(22.dp),
         ) {
             Text(
                 selectedModelName,
-                color = LitterTheme.textPrimary,
+                color = ShitterTheme.textPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -405,7 +405,7 @@ private fun ModelSelector(
                 imageVector = Icons.Default.ArrowDropDown,
                 contentDescription = "Select model",
                 modifier = Modifier.size(16.dp),
-                tint = LitterTheme.textSecondary,
+                tint = ShitterTheme.textSecondary,
             )
         }
 
@@ -432,7 +432,7 @@ private fun ModelSelector(
             val efforts = selectedModel?.supportedReasoningEfforts.orEmpty()
             if (efforts.isNotEmpty()) {
                 DropdownMenuItem(
-                    text = { Text("Reasoning", color = LitterTheme.textSecondary) },
+                    text = { Text("Reasoning", color = ShitterTheme.textSecondary) },
                     onClick = {},
                     enabled = false,
                 )
@@ -463,9 +463,9 @@ private fun StatusDot(connectionStatus: ServerConnectionStatus) {
     val color =
         when (connectionStatus) {
             ServerConnectionStatus.CONNECTING -> Color(0xFFE2A644)
-            ServerConnectionStatus.READY -> LitterTheme.accent
-            ServerConnectionStatus.ERROR -> LitterTheme.danger
-            ServerConnectionStatus.DISCONNECTED -> LitterTheme.textMuted
+            ServerConnectionStatus.READY -> ShitterTheme.accent
+            ServerConnectionStatus.ERROR -> ShitterTheme.danger
+            ServerConnectionStatus.DISCONNECTED -> ShitterTheme.textMuted
         }
     Box(
         modifier =
@@ -509,7 +509,7 @@ private fun EmptyState(
             Text(
                 text = "Open the sidebar to start a session",
                 style = MaterialTheme.typography.bodyMedium,
-                color = LitterTheme.textMuted,
+                color = ShitterTheme.textMuted,
             )
             if (connectedServerNames.isNotEmpty()) {
                 Row(
@@ -521,12 +521,12 @@ private fun EmptyState(
                             Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(LitterTheme.accent),
+                                .background(ShitterTheme.accent),
                     )
                     Text(
                         text = connectionSummary,
                         style = MaterialTheme.typography.labelLarge,
-                        color = LitterTheme.accent,
+                        color = ShitterTheme.accent,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -534,7 +534,7 @@ private fun EmptyState(
             }
             if (canConnect) {
                 OutlinedButton(onClick = onOpenDiscovery) {
-                    Text("Connect to Server", color = LitterTheme.accent)
+                    Text("Connect to Server", color = ShitterTheme.accent)
                 }
             }
         }
@@ -566,8 +566,8 @@ private fun SessionSidebar(
 
     Surface(
         modifier = modifier,
-        color = LitterTheme.surface.copy(alpha = 0.88f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+        color = ShitterTheme.surface.copy(alpha = 0.88f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
     ) {
         Column(
             modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).padding(12.dp),
@@ -593,7 +593,7 @@ private fun SessionSidebar(
                         } else {
                             "Not connected"
                         },
-                    color = LitterTheme.textSecondary,
+                    color = ShitterTheme.textSecondary,
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -610,7 +610,7 @@ private fun SessionSidebar(
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
                     text = "No sessions yet",
-                    color = LitterTheme.textMuted,
+                    color = ShitterTheme.textMuted,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
                 Spacer(modifier = Modifier.weight(1f))
@@ -627,7 +627,7 @@ private fun SessionSidebar(
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
                         text = "No matches for \"$normalizedQuery\"",
-                        color = LitterTheme.textMuted,
+                        color = ShitterTheme.textMuted,
                         modifier = Modifier.align(Alignment.CenterHorizontally),
                     )
                     Spacer(modifier = Modifier.weight(1f))
@@ -642,15 +642,15 @@ private fun SessionSidebar(
                                 modifier = Modifier.fillMaxWidth().clickable { onSessionSelected(thread.key) },
                                 color =
                                     if (isActive) {
-                                        LitterTheme.surfaceLight.copy(alpha = 0.58f)
+                                        ShitterTheme.surfaceLight.copy(alpha = 0.58f)
                                     } else {
-                                        LitterTheme.surface.copy(alpha = 0.58f)
+                                        ShitterTheme.surface.copy(alpha = 0.58f)
                                     },
                                 shape = RoundedCornerShape(8.dp),
                                 border =
                                     androidx.compose.foundation.BorderStroke(
                                         1.dp,
-                                        if (isActive) LitterTheme.accent else LitterTheme.border,
+                                        if (isActive) ShitterTheme.accent else ShitterTheme.border,
                                     ),
                             ) {
                                 Row(
@@ -671,7 +671,7 @@ private fun SessionSidebar(
                                             text = thread.preview.ifBlank { "Untitled session" },
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
-                                            color = LitterTheme.textPrimary,
+                                            color = ShitterTheme.textPrimary,
                                             style = MaterialTheme.typography.bodyMedium,
                                         )
                                         Row(
@@ -682,7 +682,7 @@ private fun SessionSidebar(
                                                 text = relativeDate(thread.updatedAtEpochMillis),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
-                                                color = LitterTheme.textSecondary,
+                                                color = ShitterTheme.textSecondary,
                                                 style = MaterialTheme.typography.labelLarge,
                                             )
                                             ServerSourceBadge(
@@ -693,7 +693,7 @@ private fun SessionSidebar(
                                                 text = cwdLeaf(thread.cwd),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
-                                                color = LitterTheme.textMuted,
+                                                color = ShitterTheme.textMuted,
                                                 style = MaterialTheme.typography.labelLarge,
                                             )
                                         }
@@ -707,9 +707,9 @@ private fun SessionSidebar(
 
             Surface(
                 modifier = Modifier.fillMaxWidth().clickable { onOpenSettings() },
-                color = LitterTheme.surface.copy(alpha = 0.58f),
+                color = ShitterTheme.surface.copy(alpha = 0.58f),
                 shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
@@ -719,12 +719,12 @@ private fun SessionSidebar(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = null,
-                        tint = LitterTheme.textSecondary,
+                        tint = ShitterTheme.textSecondary,
                         modifier = Modifier.size(14.dp),
                     )
-                    Text("Settings", color = LitterTheme.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                    Text("Settings", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.weight(1f))
-                    Text("Open", color = LitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+                    Text("Open", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
@@ -773,7 +773,7 @@ private fun ActiveTurnPulseDot(modifier: Modifier = Modifier) {
             modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(LitterTheme.accent.copy(alpha = pulse.coerceIn(0.45f, 1f))),
+                .background(ShitterTheme.accent.copy(alpha = pulse.coerceIn(0.45f, 1f))),
     )
 }
 
@@ -943,13 +943,13 @@ private fun MessageRow(message: ChatMessage) {
             ) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = LitterTheme.surfaceLight,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    color = ShitterTheme.surfaceLight,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Text(
                         text = message.text,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        color = LitterTheme.textPrimary,
+                        color = ShitterTheme.textPrimary,
                     )
                 }
             }
@@ -975,12 +975,12 @@ private fun MessageRow(message: ChatMessage) {
                 Icon(
                     imageVector = Icons.Default.Psychology,
                     contentDescription = null,
-                    tint = LitterTheme.textSecondary,
+                    tint = ShitterTheme.textSecondary,
                     modifier = Modifier.size(16.dp).padding(top = 2.dp),
                 )
                 Text(
                     text = message.text,
-                    color = LitterTheme.textSecondary,
+                    color = ShitterTheme.textSecondary,
                     fontStyle = FontStyle.Italic,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -993,7 +993,7 @@ private fun MessageRow(message: ChatMessage) {
 private fun MessageMarkdownContent(
     markdown: String,
     modifier: Modifier = Modifier,
-    textColor: Color = LitterTheme.textBody,
+    textColor: Color = ShitterTheme.textBody,
 ) {
     val blocks = remember(markdown) { splitMarkdownCodeBlocks(markdown) }
     Column(
@@ -1094,15 +1094,15 @@ private fun CodeBlockCard(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = LitterTheme.surface.copy(alpha = 0.8f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+        color = ShitterTheme.surface.copy(alpha = 0.8f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
     ) {
         Column {
             Row(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .background(LitterTheme.surface.copy(alpha = 0.96f))
+                        .background(ShitterTheme.surface.copy(alpha = 0.96f))
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1110,12 +1110,12 @@ private fun CodeBlockCard(
                 if (language.isNotBlank()) {
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = LitterTheme.surfaceLight,
+                        color = ShitterTheme.surfaceLight,
                     ) {
                         Text(
                             text = language,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                            color = LitterTheme.textSecondary,
+                            color = ShitterTheme.textSecondary,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -1146,7 +1146,7 @@ private fun CodeBlockCard(
             ) {
                 Text(
                     text = code,
-                    color = LitterTheme.textBody,
+                    color = ShitterTheme.textBody,
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1166,8 +1166,8 @@ private fun SystemMessageCard(message: ChatMessage) {
     Surface(
         modifier = Modifier.fillMaxWidth().animateContentSize(),
         shape = RoundedCornerShape(10.dp),
-        color = LitterTheme.surface.copy(alpha = 0.85f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+        color = ShitterTheme.surface.copy(alpha = 0.85f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -1195,7 +1195,7 @@ private fun SystemMessageCard(message: ChatMessage) {
                 )
                 Text(
                     text = summary,
-                    color = LitterTheme.textSecondary,
+                    color = ShitterTheme.textSecondary,
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1205,7 +1205,7 @@ private fun SystemMessageCard(message: ChatMessage) {
                     Icon(
                         imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = if (expanded) "Collapse" else "Expand",
-                        tint = LitterTheme.textMuted,
+                        tint = ShitterTheme.textMuted,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -1217,7 +1217,7 @@ private fun SystemMessageCard(message: ChatMessage) {
                     MessageMarkdownContent(
                         markdown = markdown,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                        textColor = LitterTheme.textSystem,
+                        textColor = ShitterTheme.textSystem,
                     )
                 }
             }
@@ -1518,7 +1518,7 @@ private fun InputBar(
             ) {
                 Text("Model", style = MaterialTheme.typography.titleMedium)
                 if (models.isEmpty()) {
-                    Text("No models available", color = LitterTheme.textMuted)
+                    Text("No models available", color = ShitterTheme.textMuted)
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().fillMaxHeight(0.4f),
@@ -1527,9 +1527,9 @@ private fun InputBar(
                         items(models, key = { it.id }) { model ->
                             Surface(
                                 modifier = Modifier.fillMaxWidth().clickable { onSelectModel(model.id) },
-                                color = LitterTheme.surface.copy(alpha = 0.6f),
+                                color = ShitterTheme.surface.copy(alpha = 0.6f),
                                 shape = RoundedCornerShape(8.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, if (model.id == selectedModelId) LitterTheme.accent else LitterTheme.border),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, if (model.id == selectedModelId) ShitterTheme.accent else ShitterTheme.border),
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -1537,11 +1537,11 @@ private fun InputBar(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(model.displayName, color = LitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(model.displayName, color = ShitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         if (model.description.isNotBlank()) {
                                             Text(
                                                 model.description,
-                                                color = LitterTheme.textSecondary,
+                                                color = ShitterTheme.textSecondary,
                                                 style = MaterialTheme.typography.labelLarge,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
@@ -1549,7 +1549,7 @@ private fun InputBar(
                                         }
                                     }
                                     if (model.id == selectedModelId) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = LitterTheme.accent, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = ShitterTheme.accent, modifier = Modifier.size(16.dp))
                                     }
                                 }
                             }
@@ -1559,17 +1559,17 @@ private fun InputBar(
 
                 val efforts = selectedModel?.supportedReasoningEfforts.orEmpty()
                 if (efforts.isNotEmpty()) {
-                    Text("Reasoning Effort", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                    Text("Reasoning Effort", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         efforts.forEach { effort ->
                             Surface(
                                 modifier = Modifier.fillMaxWidth().clickable { onSelectReasoningEffort(effort.effort) },
-                                color = LitterTheme.surface.copy(alpha = 0.6f),
+                                color = ShitterTheme.surface.copy(alpha = 0.6f),
                                 shape = RoundedCornerShape(8.dp),
                                 border =
                                     androidx.compose.foundation.BorderStroke(
                                         1.dp,
-                                        if (effort.effort == selectedReasoningEffort) LitterTheme.accent else LitterTheme.border,
+                                        if (effort.effort == selectedReasoningEffort) ShitterTheme.accent else ShitterTheme.border,
                                     ),
                             ) {
                                 Row(
@@ -1577,9 +1577,9 @@ private fun InputBar(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
-                                    Text(effort.effort, color = LitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                    Text(effort.effort, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
                                     if (effort.effort == selectedReasoningEffort) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = LitterTheme.accent, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = ShitterTheme.accent, modifier = Modifier.size(16.dp))
                                     }
                                 }
                             }
@@ -1607,9 +1607,9 @@ private fun InputBar(
                                     onUpdateComposerPermissions(preset.approvalPolicy, preset.sandboxMode)
                                     showPermissionsSheet = false
                                 },
-                        color = LitterTheme.surface.copy(alpha = 0.6f),
+                        color = ShitterTheme.surface.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) LitterTheme.accent else LitterTheme.border),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) ShitterTheme.accent else ShitterTheme.border),
                     ) {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -1620,12 +1620,12 @@ private fun InputBar(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(preset.title, color = LitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                Text(preset.title, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
                                 if (isSelected) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = LitterTheme.accent, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = ShitterTheme.accent, modifier = Modifier.size(16.dp))
                                 }
                             }
-                            Text(preset.description, color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                            Text(preset.description, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
@@ -1650,11 +1650,11 @@ private fun InputBar(
 
                 when {
                     experimentalFeaturesLoading -> {
-                        Text("Loading...", color = LitterTheme.textMuted)
+                        Text("Loading...", color = ShitterTheme.textMuted)
                     }
 
                     experimentalFeatures.isEmpty() -> {
-                        Text("No experimental features available", color = LitterTheme.textMuted)
+                        Text("No experimental features available", color = ShitterTheme.textMuted)
                     }
 
                     else -> {
@@ -1665,9 +1665,9 @@ private fun InputBar(
                             items(experimentalFeatures, key = { it.name }) { feature ->
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
-                                    color = LitterTheme.surface.copy(alpha = 0.6f),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
                                     shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -1680,12 +1680,12 @@ private fun InputBar(
                                         ) {
                                             Text(
                                                 feature.displayName ?: feature.name,
-                                                color = LitterTheme.textPrimary,
+                                                color = ShitterTheme.textPrimary,
                                                 style = MaterialTheme.typography.bodyMedium,
                                             )
                                             Text(
                                                 feature.description ?: feature.stage,
-                                                color = LitterTheme.textSecondary,
+                                                color = ShitterTheme.textSecondary,
                                                 style = MaterialTheme.typography.labelLarge,
                                             )
                                         }
@@ -1736,11 +1736,11 @@ private fun InputBar(
 
                 when {
                     skillsLoading -> {
-                        Text("Loading...", color = LitterTheme.textMuted)
+                        Text("Loading...", color = ShitterTheme.textMuted)
                     }
 
                     skills.isEmpty() -> {
-                        Text("No skills available for this workspace", color = LitterTheme.textMuted)
+                        Text("No skills available for this workspace", color = ShitterTheme.textMuted)
                     }
 
                     else -> {
@@ -1751,9 +1751,9 @@ private fun InputBar(
                             items(skills, key = { "${it.path}#${it.name}" }) { skill ->
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
-                                    color = LitterTheme.surface.copy(alpha = 0.6f),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
                                     shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                 ) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -1764,15 +1764,15 @@ private fun InputBar(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
-                                            Text(skill.name, color = LitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                            Text(skill.name, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
                                             if (skill.enabled) {
-                                                Text("enabled", color = LitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+                                                Text("enabled", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
                                             }
                                         }
                                         if (skill.description.isNotBlank()) {
-                                            Text(skill.description, color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                            Text(skill.description, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                                         }
-                                        Text(skill.path, color = LitterTheme.textMuted, style = MaterialTheme.typography.labelLarge)
+                                        Text(skill.path, color = ShitterTheme.textMuted, style = MaterialTheme.typography.labelLarge)
                                     }
                                 }
                             }
@@ -1838,7 +1838,7 @@ private fun InputBar(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = LitterTheme.surface,
+        color = ShitterTheme.surface,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1847,8 +1847,8 @@ private fun InputBar(
             if (attachedImagePath != null) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = LitterTheme.surface,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    color = ShitterTheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 7.dp),
@@ -1858,14 +1858,14 @@ private fun InputBar(
                         Icon(
                             imageVector = Icons.Default.Image,
                             contentDescription = null,
-                            tint = LitterTheme.textSecondary,
+                            tint = ShitterTheme.textSecondary,
                             modifier = Modifier.size(14.dp),
                         )
                         Text(
                             text = attachedImagePath.substringAfterLast('/'),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            color = LitterTheme.textSecondary,
+                            color = ShitterTheme.textSecondary,
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.weight(1f),
                         )
@@ -1879,7 +1879,7 @@ private fun InputBar(
             if (!attachmentError.isNullOrBlank()) {
                 Text(
                     text = attachmentError,
-                    color = LitterTheme.danger,
+                    color = ShitterTheme.danger,
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
@@ -1888,8 +1888,8 @@ private fun InputBar(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
-                    color = LitterTheme.surface.copy(alpha = 0.95f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    color = ShitterTheme.surface.copy(alpha = 0.95f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Column {
                         slashSuggestions.forEachIndexed { index, command ->
@@ -1909,7 +1909,7 @@ private fun InputBar(
                                 )
                                 Text(
                                     text = command.description,
-                                    color = LitterTheme.textSecondary,
+                                    color = ShitterTheme.textSecondary,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -1917,7 +1917,7 @@ private fun InputBar(
                                 )
                             }
                             if (index < slashSuggestions.lastIndex) {
-                                HorizontalDivider(color = LitterTheme.border)
+                                HorizontalDivider(color = ShitterTheme.border)
                             }
                         }
                     }
@@ -1928,14 +1928,14 @@ private fun InputBar(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
-                    color = LitterTheme.surface.copy(alpha = 0.95f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    color = ShitterTheme.surface.copy(alpha = 0.95f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     when {
                         fileSearchLoading -> {
                             Text(
                                 text = "Searching files...",
-                                color = LitterTheme.textSecondary,
+                                color = ShitterTheme.textSecondary,
                                 style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             )
@@ -1944,7 +1944,7 @@ private fun InputBar(
                         !fileSearchError.isNullOrBlank() -> {
                             Text(
                                 text = fileSearchError.orEmpty(),
-                                color = LitterTheme.danger,
+                                color = ShitterTheme.danger,
                                 style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             )
@@ -1953,7 +1953,7 @@ private fun InputBar(
                         fileSuggestions.isEmpty() -> {
                             Text(
                                 text = "No matches",
-                                color = LitterTheme.textSecondary,
+                                color = ShitterTheme.textSecondary,
                                 style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             )
@@ -1975,12 +1975,12 @@ private fun InputBar(
                                         Icon(
                                             imageVector = Icons.Default.Folder,
                                             contentDescription = null,
-                                            tint = LitterTheme.textSecondary,
+                                            tint = ShitterTheme.textSecondary,
                                             modifier = Modifier.size(14.dp),
                                         )
                                         Text(
                                             text = suggestion.path,
-                                            color = LitterTheme.textPrimary,
+                                            color = ShitterTheme.textPrimary,
                                             style = MaterialTheme.typography.labelLarge,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -1988,7 +1988,7 @@ private fun InputBar(
                                         )
                                     }
                                     if (index < visibleSuggestions.lastIndex) {
-                                        HorizontalDivider(color = LitterTheme.border)
+                                        HorizontalDivider(color = ShitterTheme.border)
                                     }
                                 }
                             }
@@ -2567,7 +2567,7 @@ private fun systemCardTheme(title: String?): SystemCardTheme {
         lower.contains("web") -> SystemCardTheme(accent = Color(0xFF88C6C7))
         lower.contains("collab") -> SystemCardTheme(accent = Color(0xFF9BCF8E))
         lower.contains("image") -> SystemCardTheme(accent = Color(0xFFE3A66F))
-        else -> SystemCardTheme(accent = LitterTheme.accent)
+        else -> SystemCardTheme(accent = ShitterTheme.accent)
     }
 }
 
@@ -2683,7 +2683,7 @@ private fun DirectoryPickerSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Server", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                Text("Server", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                 Box {
                     OutlinedButton(
                         onClick = { serverMenuExpanded = true },
@@ -2720,7 +2720,7 @@ private fun DirectoryPickerSheet(
                     }
                 }
             }
-            Text(path.ifBlank { "/" }, color = LitterTheme.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(path.ifBlank { "/" }, color = ShitterTheme.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
             val canSelect = selectedServer != null && path.isNotBlank() && !isLoading
             val canGoUp = selectedServer != null && path.isNotBlank()
@@ -2759,20 +2759,20 @@ private fun DirectoryPickerSheet(
                         onShowHiddenDirectoriesChange(checked)
                     },
                 )
-                Text("Show hidden folders", color = LitterTheme.textSecondary)
+                Text("Show hidden folders", color = ShitterTheme.textSecondary)
             }
 
             when {
                 isLoading -> {
-                    Text("Loading...", color = LitterTheme.textMuted)
+                    Text("Loading...", color = ShitterTheme.textMuted)
                 }
 
                 error != null -> {
-                    Text(error, color = LitterTheme.danger)
+                    Text(error, color = ShitterTheme.danger)
                 }
 
                 visibleEntries.isEmpty() -> {
-                    Text(emptyMessage, color = LitterTheme.textMuted)
+                    Text(emptyMessage, color = ShitterTheme.textMuted)
                 }
 
                 else -> {
@@ -2783,16 +2783,16 @@ private fun DirectoryPickerSheet(
                         items(visibleEntries, key = { it }) { entry ->
                             Surface(
                                 modifier = Modifier.fillMaxWidth().clickable { onNavigateInto(entry) },
-                                color = LitterTheme.surface.copy(alpha = 0.6f),
+                                color = ShitterTheme.surface.copy(alpha = 0.6f),
                                 shape = RoundedCornerShape(8.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    Icon(Icons.Default.Folder, contentDescription = null, tint = LitterTheme.textSecondary)
+                                    Icon(Icons.Default.Folder, contentDescription = null, tint = ShitterTheme.textSecondary)
                                     Text(entry, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
@@ -2857,9 +2857,9 @@ private fun DiscoverySheet(
             ) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.9f),
-                    color = LitterTheme.surface,
+                    color = ShitterTheme.surface,
                     shape = RoundedCornerShape(14.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Column(
                         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
@@ -2874,7 +2874,7 @@ private fun DiscoverySheet(
                                 Text("Connect Server", style = MaterialTheme.typography.titleLarge)
                                 Text(
                                     "Pick a discovered server or enter one manually",
-                                    color = LitterTheme.textSecondary,
+                                    color = ShitterTheme.textSecondary,
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                             }
@@ -2883,13 +2883,13 @@ private fun DiscoverySheet(
                                     Text("Refresh")
                                 }
                                 TextButton(onClick = onDismiss) {
-                                    Text("Close", color = LitterTheme.danger)
+                                    Text("Close", color = ShitterTheme.danger)
                                 }
                             }
                         }
 
                         if (state.errorMessage != null) {
-                            Text(state.errorMessage, color = LitterTheme.danger)
+                            Text(state.errorMessage, color = ShitterTheme.danger)
                         }
 
                         Row(
@@ -2903,21 +2903,21 @@ private fun DiscoverySheet(
                             ) {
                                 Text("Discovered", style = MaterialTheme.typography.titleMedium)
                                 if (state.isLoading) {
-                                    Text("Scanning local network and tailscale...", color = LitterTheme.textSecondary)
+                                    Text("Scanning local network and tailscale...", color = ShitterTheme.textSecondary)
                                 }
 
                                 Surface(
                                     modifier = Modifier.fillMaxSize(),
-                                    color = LitterTheme.surface.copy(alpha = 0.6f),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
                                     shape = RoundedCornerShape(10.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                 ) {
                                     if (state.servers.isEmpty() && !state.isLoading) {
                                         Box(
                                             modifier = Modifier.fillMaxSize().padding(16.dp),
                                             contentAlignment = Alignment.Center,
                                         ) {
-                                            Text("No servers discovered", color = LitterTheme.textMuted)
+                                            Text("No servers discovered", color = ShitterTheme.textMuted)
                                         }
                                     } else {
                                         LazyColumn(
@@ -2939,9 +2939,9 @@ private fun DiscoverySheet(
                                                             .focusProperties {
                                                                 right = manualHostFocusRequester
                                                             }.clickable { onConnectDiscovered(server.id) },
-                                                    color = LitterTheme.surfaceLight.copy(alpha = 0.45f),
+                                                    color = ShitterTheme.surfaceLight.copy(alpha = 0.45f),
                                                     shape = RoundedCornerShape(8.dp),
-                                                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                                 ) {
                                                     Column(
                                                         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -2954,25 +2954,25 @@ private fun DiscoverySheet(
                                                         ) {
                                                             Text(
                                                                 server.name,
-                                                                color = LitterTheme.textPrimary,
+                                                                color = ShitterTheme.textPrimary,
                                                                 maxLines = 1,
                                                                 overflow = TextOverflow.Ellipsis,
                                                             )
                                                             Text(
                                                                 discoverySourceLabel(server.source),
                                                                 style = MaterialTheme.typography.labelLarge,
-                                                                color = LitterTheme.textSecondary,
+                                                                color = ShitterTheme.textSecondary,
                                                             )
                                                         }
                                                         Text(
                                                             "${server.host}:${server.port}",
-                                                            color = LitterTheme.textSecondary,
+                                                            color = ShitterTheme.textSecondary,
                                                             style = MaterialTheme.typography.labelLarge,
                                                         )
                                                         Text(
                                                             if (server.hasCodexServer) "codex running" else "ssh only",
                                                             style = MaterialTheme.typography.labelLarge,
-                                                            color = if (server.hasCodexServer) LitterTheme.accent else LitterTheme.textMuted,
+                                                            color = if (server.hasCodexServer) ShitterTheme.accent else ShitterTheme.textMuted,
                                                         )
                                                     }
                                                 }
@@ -2989,9 +2989,9 @@ private fun DiscoverySheet(
                                 Text("Manual", style = MaterialTheme.typography.titleMedium)
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
-                                    color = LitterTheme.surface.copy(alpha = 0.6f),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
                                     shape = RoundedCornerShape(10.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                 ) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -3053,7 +3053,7 @@ private fun DiscoverySheet(
                                                 ) {
                                                     Text(
                                                         "Editing host",
-                                                        color = LitterTheme.textMuted,
+                                                        color = ShitterTheme.textMuted,
                                                         style = MaterialTheme.typography.labelLarge,
                                                     )
                                                     TextButton(
@@ -3085,18 +3085,18 @@ private fun DiscoverySheet(
                                                             editingField = ManualField.HOST
                                                             editingValue = state.manualHost
                                                         },
-                                                color = LitterTheme.surfaceLight.copy(alpha = 0.65f),
+                                                color = ShitterTheme.surfaceLight.copy(alpha = 0.65f),
                                                 shape = RoundedCornerShape(8.dp),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                             ) {
                                                 Column(
                                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
                                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                                 ) {
-                                                    Text("Host", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                                    Text("Host", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                                                     Text(
                                                         if (state.manualHost.isBlank()) "Set host" else state.manualHost,
-                                                        color = if (state.manualHost.isBlank()) LitterTheme.textMuted else LitterTheme.textPrimary,
+                                                        color = if (state.manualHost.isBlank()) ShitterTheme.textMuted else ShitterTheme.textPrimary,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                     )
@@ -3155,7 +3155,7 @@ private fun DiscoverySheet(
                                                 ) {
                                                     Text(
                                                         "Editing port",
-                                                        color = LitterTheme.textMuted,
+                                                        color = ShitterTheme.textMuted,
                                                         style = MaterialTheme.typography.labelLarge,
                                                     )
                                                     TextButton(
@@ -3185,18 +3185,18 @@ private fun DiscoverySheet(
                                                             editingField = ManualField.PORT
                                                             editingValue = state.manualPort
                                                         },
-                                                color = LitterTheme.surfaceLight.copy(alpha = 0.65f),
+                                                color = ShitterTheme.surfaceLight.copy(alpha = 0.65f),
                                                 shape = RoundedCornerShape(8.dp),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                             ) {
                                                 Column(
                                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
                                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                                 ) {
-                                                    Text("Port", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                                    Text("Port", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                                                     Text(
                                                         if (state.manualPort.isBlank()) "Set port" else state.manualPort,
-                                                        color = if (state.manualPort.isBlank()) LitterTheme.textMuted else LitterTheme.textPrimary,
+                                                        color = if (state.manualPort.isBlank()) ShitterTheme.textMuted else ShitterTheme.textPrimary,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                     )
@@ -3255,15 +3255,15 @@ private fun DiscoverySheet(
             }
 
             if (state.isLoading) {
-                Text("Scanning local network and tailscale...", color = LitterTheme.textSecondary)
+                Text("Scanning local network and tailscale...", color = ShitterTheme.textSecondary)
             }
 
             if (state.errorMessage != null) {
-                Text(state.errorMessage, color = LitterTheme.danger)
+                Text(state.errorMessage, color = ShitterTheme.danger)
             }
 
             if (state.servers.isEmpty() && !state.isLoading) {
-                Text("No servers discovered", color = LitterTheme.textMuted)
+                Text("No servers discovered", color = ShitterTheme.textMuted)
             } else {
                 LazyColumn(
                     modifier =
@@ -3276,9 +3276,9 @@ private fun DiscoverySheet(
                     items(state.servers, key = { it.id }) { server ->
                         Surface(
                             modifier = Modifier.fillMaxWidth().clickable { onConnectDiscovered(server.id) },
-                            color = LitterTheme.surface.copy(alpha = 0.6f),
+                            color = ShitterTheme.surface.copy(alpha = 0.6f),
                             shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                         ) {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
@@ -3291,25 +3291,25 @@ private fun DiscoverySheet(
                                 ) {
                                     Text(
                                         server.name,
-                                        color = LitterTheme.textPrimary,
+                                        color = ShitterTheme.textPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
                                         discoverySourceLabel(server.source),
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = LitterTheme.textSecondary,
+                                        color = ShitterTheme.textSecondary,
                                     )
                                 }
                                 Text(
                                     "${server.host}:${server.port}",
-                                    color = LitterTheme.textSecondary,
+                                    color = ShitterTheme.textSecondary,
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
                                     if (server.hasCodexServer) "codex running" else "ssh only",
                                     style = MaterialTheme.typography.labelLarge,
-                                    color = if (server.hasCodexServer) LitterTheme.accent else LitterTheme.textMuted,
+                                    color = if (server.hasCodexServer) ShitterTheme.accent else ShitterTheme.textMuted,
                                 )
                             }
                         }
@@ -3375,7 +3375,7 @@ private fun SshLoginSheet(
             Text("SSH Login", style = MaterialTheme.typography.titleMedium)
             Text(
                 "${state.serverName.ifBlank { state.host }} (${state.host}:${state.port})",
-                color = LitterTheme.textSecondary,
+                color = ShitterTheme.textSecondary,
                 style = MaterialTheme.typography.labelLarge,
             )
 
@@ -3394,14 +3394,14 @@ private fun SshLoginSheet(
                 OutlinedButton(
                     onClick = { onUseKeyChanged(false) },
                     modifier = Modifier.weight(1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (!state.useKey) LitterTheme.accent else LitterTheme.border),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (!state.useKey) ShitterTheme.accent else ShitterTheme.border),
                 ) {
                     Text("Password")
                 }
                 OutlinedButton(
                     onClick = { onUseKeyChanged(true) },
                     modifier = Modifier.weight(1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (state.useKey) LitterTheme.accent else LitterTheme.border),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (state.useKey) ShitterTheme.accent else ShitterTheme.border),
                 ) {
                     Text("SSH Key")
                 }
@@ -3445,17 +3445,17 @@ private fun SshLoginSheet(
                         checked = state.rememberCredentials,
                         onCheckedChange = onRememberChanged,
                     )
-                    Text("Remember on this device", color = LitterTheme.textSecondary)
+                    Text("Remember on this device", color = ShitterTheme.textSecondary)
                 }
                 if (state.hasSavedCredentials) {
                     TextButton(onClick = onForgetSaved) {
-                        Text("Forget Saved", color = LitterTheme.danger)
+                        Text("Forget Saved", color = ShitterTheme.danger)
                     }
                 }
             }
 
             if (state.errorMessage != null) {
-                Text(state.errorMessage, color = LitterTheme.danger, style = MaterialTheme.typography.labelLarge)
+                Text(state.errorMessage, color = ShitterTheme.danger, style = MaterialTheme.typography.labelLarge)
             }
 
             Button(
@@ -3489,12 +3489,12 @@ private fun SettingsSheet(
         ) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
 
-            Text("Authentication", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+            Text("Authentication", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
             Surface(
                 modifier = Modifier.fillMaxWidth().clickable { onOpenAccount() },
-                color = LitterTheme.surface.copy(alpha = 0.6f),
+                color = ShitterTheme.surface.copy(alpha = 0.6f),
                 shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
@@ -3502,10 +3502,10 @@ private fun SettingsSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Account", color = LitterTheme.textPrimary)
-                        Text(accountState.summaryTitle, color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                        Text("Account", color = ShitterTheme.textPrimary)
+                        Text(accountState.summaryTitle, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                     }
-                    Text("Open", color = LitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+                    Text("Open", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
                 }
             }
 
@@ -3514,21 +3514,21 @@ private fun SettingsSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Servers", color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                Text("Servers", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                 TextButton(onClick = onOpenDiscovery) {
                     Text("Add Server")
                 }
             }
 
             if (connectedServers.isEmpty()) {
-                Text("No servers connected", color = LitterTheme.textMuted)
+                Text("No servers connected", color = ShitterTheme.textMuted)
             } else {
                 connectedServers.forEach { server ->
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        color = LitterTheme.surface.copy(alpha = 0.6f),
+                        color = ShitterTheme.surface.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
@@ -3536,17 +3536,17 @@ private fun SettingsSheet(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(server.name, color = LitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(server.name, color = ShitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
                                     "${server.host}:${server.port} * ${serverSourceLabel(server.source)}",
-                                    color = LitterTheme.textSecondary,
+                                    color = ShitterTheme.textSecondary,
                                     style = MaterialTheme.typography.labelLarge,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             TextButton(onClick = { onRemoveServer(server.id) }) {
-                                Text("Remove", color = LitterTheme.danger)
+                                Text("Remove", color = ShitterTheme.danger)
                             }
                         }
                     }
@@ -3580,9 +3580,9 @@ private fun AccountSheet(
 
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = LitterTheme.surface.copy(alpha = 0.6f),
+                color = ShitterTheme.surface.copy(alpha = 0.6f),
                 shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
@@ -3597,15 +3597,15 @@ private fun AccountSheet(
                                 .background(accountStatusColor(accountState.status)),
                     )
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(accountState.summaryTitle, color = LitterTheme.textPrimary)
+                        Text(accountState.summaryTitle, color = ShitterTheme.textPrimary)
                         val subtitle = accountState.summarySubtitle
                         if (subtitle != null) {
-                            Text(subtitle, color = LitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                            Text(subtitle, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                         }
                     }
                     if (accountState.status == AuthStatus.API_KEY || accountState.status == AuthStatus.CHATGPT) {
                         TextButton(onClick = onLogout, enabled = !isWorking) {
-                            Text("Logout", color = LitterTheme.danger)
+                            Text("Logout", color = ShitterTheme.danger)
                         }
                     }
                 }
@@ -3622,21 +3622,21 @@ private fun AccountSheet(
             if (accountState.oauthUrl != null) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = LitterTheme.surface.copy(alpha = 0.6f),
+                    color = ShitterTheme.surface.copy(alpha = 0.6f),
                     shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, LitterTheme.border),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("Finish login in browser", color = LitterTheme.textSecondary)
+                        Text("Finish login in browser", color = ShitterTheme.textSecondary)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { uriHandler.openUri(accountState.oauthUrl) }) {
                                 Text("Open Browser")
                             }
                             TextButton(onClick = onCancelLogin) {
-                                Text("Cancel", color = LitterTheme.danger)
+                                Text("Cancel", color = ShitterTheme.danger)
                             }
                         }
                     }
@@ -3662,7 +3662,7 @@ private fun AccountSheet(
             }
 
             if (accountState.lastError != null) {
-                Text(accountState.lastError, color = LitterTheme.danger, style = MaterialTheme.typography.labelLarge)
+                Text(accountState.lastError, color = ShitterTheme.danger, style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -3679,10 +3679,10 @@ private fun relativeDate(timestamp: Long): String {
 
 private fun accountStatusColor(status: AuthStatus): Color =
     when (status) {
-        AuthStatus.CHATGPT -> LitterTheme.accent
+        AuthStatus.CHATGPT -> ShitterTheme.accent
         AuthStatus.API_KEY -> Color(0xFF00AAFF)
-        AuthStatus.NOT_LOGGED_IN -> LitterTheme.textMuted
-        AuthStatus.UNKNOWN -> LitterTheme.textMuted
+        AuthStatus.NOT_LOGGED_IN -> ShitterTheme.textMuted
+        AuthStatus.UNKNOWN -> ShitterTheme.textMuted
     }
 
 private fun serverSourceLabel(source: ServerSource): String =
@@ -3697,12 +3697,12 @@ private fun serverSourceLabel(source: ServerSource): String =
 
 private fun serverSourceAccentColor(source: ServerSource): Color =
     when (source) {
-        ServerSource.LOCAL -> LitterTheme.accent
-        ServerSource.BONJOUR -> LitterTheme.accent
-        ServerSource.SSH -> LitterTheme.accent
-        ServerSource.TAILSCALE -> LitterTheme.accent
-        ServerSource.MANUAL -> LitterTheme.accent
-        ServerSource.REMOTE -> LitterTheme.accent
+        ServerSource.LOCAL -> ShitterTheme.accent
+        ServerSource.BONJOUR -> ShitterTheme.accent
+        ServerSource.SSH -> ShitterTheme.accent
+        ServerSource.TAILSCALE -> ShitterTheme.accent
+        ServerSource.MANUAL -> ShitterTheme.accent
+        ServerSource.REMOTE -> ShitterTheme.accent
     }
 
 private fun cwdLeaf(path: String): String {
