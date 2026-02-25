@@ -21,13 +21,13 @@ struct SessionSidebarView: View {
 
             if isLoading {
                 Spacer()
-                ProgressView().tint(LitterTheme.accent).frame(maxWidth: .infinity)
+                ProgressView().tint(ShitterTheme.accent).frame(maxWidth: .infinity)
                 Spacer()
             } else if allThreads.isEmpty {
                 Spacer()
                 Text("No sessions yet")
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else {
@@ -37,7 +37,7 @@ struct SessionSidebarView: View {
                     Spacer()
                     Text("No matches for \"\(trimmedSessionSearchQuery)\"")
                         .font(.system(.footnote, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                         .frame(maxWidth: .infinity)
                     Spacer()
                 } else {
@@ -91,7 +91,7 @@ struct SessionSidebarView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") { showDirectoryPicker = false }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                 }
             }
@@ -151,11 +151,11 @@ struct SessionSidebarView: View {
         Button { showSettings = true } label: {
             HStack(spacing: 10) {
                 Image(systemName: "gear")
-                    .foregroundColor(LitterTheme.textSecondary)
+                    .foregroundColor(ShitterTheme.textSecondary)
                     .frame(width: 20)
                 Text("Settings")
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(LitterTheme.textSecondary)
+                    .foregroundColor(ShitterTheme.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -181,7 +181,7 @@ struct SessionSidebarView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
-            .modifier(GlassRectModifier(cornerRadius: 8, tint: LitterTheme.accent))
+            .modifier(GlassRectModifier(cornerRadius: 8, tint: ShitterTheme.accent))
         }
         .padding(16)
     }
@@ -191,21 +191,21 @@ struct SessionSidebarView: View {
             let connected = serverManager.connections.values.filter { $0.isConnected }
             if connected.isEmpty {
                 Image(systemName: "xmark.circle")
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
                     .frame(width: 20)
                 Text("Not connected")
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
                 Spacer()
                 Button("Connect") {
                     withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
                     appState.showServerPicker = true
                 }
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.accent)
+                .foregroundColor(ShitterTheme.accent)
             } else {
                 Image(systemName: "server.rack")
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .frame(width: 20)
                 Text("\(connected.count) server\(connected.count == 1 ? "" : "s")")
                     .font(.system(.footnote, design: .monospaced))
@@ -216,7 +216,7 @@ struct SessionSidebarView: View {
                     appState.showServerPicker = true
                 }
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.accent)
+                .foregroundColor(ShitterTheme.accent)
             }
         }
         .padding(.horizontal, 16)
@@ -226,7 +226,7 @@ struct SessionSidebarView: View {
     private var sessionSearchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(LitterTheme.textMuted)
+                .foregroundColor(ShitterTheme.textMuted)
                 .font(.system(.caption, design: .monospaced))
 
             TextField("Search sessions", text: $sessionSearchQuery)
@@ -240,7 +240,7 @@ struct SessionSidebarView: View {
                     sessionSearchQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
@@ -248,10 +248,10 @@ struct SessionSidebarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(LitterTheme.surface.opacity(0.55))
+        .background(ShitterTheme.surface.opacity(0.55))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(LitterTheme.border.opacity(0.85), lineWidth: 1)
+                .stroke(ShitterTheme.border.opacity(0.85), lineWidth: 1)
         )
         .cornerRadius(8)
         .padding(.horizontal, 16)
@@ -289,28 +289,28 @@ struct SessionSidebarView: View {
                 HStack(spacing: 6) {
                     Text(relativeDate(thread.updatedAt))
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textSecondary)
+                        .foregroundColor(ShitterTheme.textSecondary)
                     HStack(spacing: 3) {
                         Image(systemName: serverIconName(for: thread.serverSource))
                             .font(.system(.caption2))
                         Text(thread.serverName)
                             .font(.system(.caption2, design: .monospaced))
                     }
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(LitterTheme.accent.opacity(0.12))
+                    .background(ShitterTheme.accent.opacity(0.12))
                     .cornerRadius(4)
                     Text((thread.cwd as NSString).lastPathComponent)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
             }
             Spacer(minLength: 0)
             if resumingKey == thread.key {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(LitterTheme.accent)
+                    .tint(ShitterTheme.accent)
             }
         }
         .padding(.horizontal, 16)
@@ -375,7 +375,7 @@ struct PulsingDot: View {
 
     var body: some View {
         Circle()
-            .fill(LitterTheme.accent)
+            .fill(ShitterTheme.accent)
             .frame(width: 8, height: 8)
             .scaleEffect(pulse ? 1.3 : 1.0)
             .opacity(pulse ? 0.6 : 1.0)

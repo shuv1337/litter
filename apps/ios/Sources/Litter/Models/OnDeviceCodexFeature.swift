@@ -2,7 +2,7 @@ import Foundation
 
 enum OnDeviceCodexFeature {
     static var compiledIn: Bool {
-#if LITTER_DISABLE_ON_DEVICE_CODEX
+#if SHITTER_DISABLE_ON_DEVICE_CODEX
         return false
 #else
         return true

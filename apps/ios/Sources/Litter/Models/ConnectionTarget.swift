@@ -45,7 +45,7 @@ enum SSHCredentialStoreError: LocalizedError {
 final class SSHCredentialStore {
     static let shared = SSHCredentialStore()
 
-    private let service = "com.litter.ssh.credentials"
+    private let service = "io.latitudes.shitter.ssh.credentials"
 
     private init() {}
 

@@ -14,7 +14,7 @@ struct DiscoveryView: View {
 
     var body: some View {
         ZStack {
-            LitterTheme.backgroundGradient.ignoresSafeArea()
+            ShitterTheme.backgroundGradient.ignoresSafeArea()
             List {
                 Section {
                     HStack {
@@ -43,7 +43,7 @@ struct DiscoveryView: View {
                     discovery.startScanning()
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
                 .disabled(discovery.isScanning)
             }
@@ -91,9 +91,9 @@ struct DiscoveryView: View {
             }
         } header: {
             Text("This Device")
-                .foregroundColor(LitterTheme.textSecondary)
+                .foregroundColor(ShitterTheme.textSecondary)
         }
-        .listRowBackground(LitterTheme.surface.opacity(0.6))
+        .listRowBackground(ShitterTheme.surface.opacity(0.6))
     }
 
     private var networkSection: some View {
@@ -102,17 +102,17 @@ struct DiscoveryView: View {
             if networkServers.isEmpty {
                 if discovery.isScanning {
                     HStack {
-                        ProgressView().tint(LitterTheme.textMuted).scaleEffect(0.7)
+                        ProgressView().tint(ShitterTheme.textMuted).scaleEffect(0.7)
                         Text("Scanning Bonjour + Tailscale...")
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.textMuted)
+                            .foregroundColor(ShitterTheme.textMuted)
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 } else {
                     Text("No IPv4 Codex/SSH hosts found via Bonjour/Tailscale")
                         .font(.system(.footnote, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
+                        .foregroundColor(ShitterTheme.textMuted)
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 }
             } else {
                 ForEach(networkServers) { server in
@@ -121,9 +121,9 @@ struct DiscoveryView: View {
             }
         } header: {
             Text("Network")
-                .foregroundColor(LitterTheme.textSecondary)
+                .foregroundColor(ShitterTheme.textSecondary)
         }
-        .listRowBackground(LitterTheme.surface.opacity(0.6))
+        .listRowBackground(ShitterTheme.surface.opacity(0.6))
     }
 
     private var manualSection: some View {
@@ -133,13 +133,13 @@ struct DiscoveryView: View {
             } label: {
                 HStack {
                     Image(systemName: "plus.circle")
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                     Text("Add Server")
                         .font(.system(.subheadline, design: .monospaced))
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             }
-            .listRowBackground(LitterTheme.surface.opacity(0.6))
+            .listRowBackground(ShitterTheme.surface.opacity(0.6))
         }
     }
 
@@ -151,7 +151,7 @@ struct DiscoveryView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: serverIconName(for: server.source))
-                    .foregroundColor(server.hasCodexServer ? LitterTheme.accent : LitterTheme.textSecondary)
+                    .foregroundColor(server.hasCodexServer ? ShitterTheme.accent : ShitterTheme.textSecondary)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
@@ -159,22 +159,22 @@ struct DiscoveryView: View {
                         .foregroundColor(.white)
                     Text(serverSubtitle(server))
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textSecondary)
+                        .foregroundColor(ShitterTheme.textSecondary)
                 }
                 Spacer()
                 if serverManager.connections[server.id]?.isConnected == true {
                     Text("connected")
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(LitterTheme.accent.opacity(0.15))
+                        .background(ShitterTheme.accent.opacity(0.15))
                         .cornerRadius(4)
                 } else if connectingServer?.id == server.id {
-                    ProgressView().controlSize(.small).tint(LitterTheme.accent)
+                    ProgressView().controlSize(.small).tint(ShitterTheme.accent)
                 } else {
                     Image(systemName: "chevron.right")
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                         .font(.caption)
                 }
             }
@@ -236,7 +236,7 @@ struct DiscoveryView: View {
     private var manualEntrySheet: some View {
         NavigationStack {
             ZStack {
-                LitterTheme.backgroundGradient.ignoresSafeArea()
+                ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
                     Section {
                         TextField("hostname or IP", text: $manualHost)
@@ -249,7 +249,7 @@ struct DiscoveryView: View {
                             .foregroundColor(.white)
                             .keyboardType(.numberPad)
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
                         Button("Connect") {
@@ -262,10 +262,10 @@ struct DiscoveryView: View {
                             showManualEntry = false
                             Task { await connectToServer(server) }
                         }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                         .font(.system(.subheadline, design: .monospaced))
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 }
                 .scrollContentBackground(.hidden)
             }
@@ -275,7 +275,7 @@ struct DiscoveryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Cancel") { showManualEntry = false }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             }
         }

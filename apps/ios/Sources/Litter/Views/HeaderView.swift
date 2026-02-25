@@ -109,11 +109,11 @@ struct HeaderView: View {
                 if isReloading {
                     ProgressView()
                         .scaleEffect(0.7)
-                        .tint(LitterTheme.accent)
+                        .tint(ShitterTheme.accent)
                 } else {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(.subheadline, weight: .semibold))
-                        .foregroundColor(serverManager.hasAnyConnection ? LitterTheme.accent : LitterTheme.textMuted)
+                        .foregroundColor(serverManager.hasAnyConnection ? ShitterTheme.accent : ShitterTheme.textMuted)
                 }
             }
             .frame(width: 18, height: 18)
@@ -149,7 +149,7 @@ struct ModelSelectorView: View {
                 if let err = loadError {
                     Text(err)
                         .font(.system(.footnote))
-                        .foregroundColor(LitterTheme.textSecondary)
+                        .foregroundColor(ShitterTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .padding(20)
                     Button("Retry") {
@@ -157,9 +157,9 @@ struct ModelSelectorView: View {
                         Task { await loadModels() }
                     }
                     .font(.system(.subheadline, weight: .medium))
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                 } else {
-                    ProgressView().tint(LitterTheme.accent)
+                    ProgressView().tint(ShitterTheme.accent)
                 }
                 Spacer()
             } else {
@@ -179,22 +179,22 @@ struct ModelSelectorView: View {
                                             if model.isDefault {
                                                 Text("default")
                                                     .font(.system(.caption2, weight: .medium))
-                                                    .foregroundColor(LitterTheme.accent)
+                                                    .foregroundColor(ShitterTheme.accent)
                                                     .padding(.horizontal, 6)
                                                     .padding(.vertical, 2)
-                                                    .background(LitterTheme.accent.opacity(0.15))
+                                                    .background(ShitterTheme.accent.opacity(0.15))
                                                     .clipShape(Capsule())
                                             }
                                         }
                                         Text(model.description)
                                             .font(.system(.caption))
-                                            .foregroundColor(LitterTheme.textSecondary)
+                                            .foregroundColor(ShitterTheme.textSecondary)
                                     }
                                     Spacer()
                                     if model.id == appState.selectedModel {
                                         Image(systemName: "checkmark")
                                             .font(.system(.subheadline, weight: .medium))
-                                            .foregroundColor(LitterTheme.accent)
+                                            .foregroundColor(ShitterTheme.accent)
                                     }
                                 }
                                 .padding(.horizontal, 20)
@@ -223,7 +223,7 @@ struct ModelSelectorView: View {
                                                 .foregroundColor(effort.reasoningEffort == appState.reasoningEffort ? .black : .white)
                                                 .padding(.horizontal, 12)
                                                 .padding(.vertical, 8)
-                                                .background(effort.reasoningEffort == appState.reasoningEffort ? LitterTheme.accent : LitterTheme.surfaceLight)
+                                                .background(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.accent : ShitterTheme.surfaceLight)
                                                 .clipShape(Capsule())
                                         }
                                     }

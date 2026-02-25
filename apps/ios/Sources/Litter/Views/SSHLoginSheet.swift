@@ -19,23 +19,23 @@ struct SSHLoginSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LitterTheme.backgroundGradient.ignoresSafeArea()
+                ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
                     Section {
                         HStack(spacing: 12) {
                             Image(systemName: "terminal")
-                                .foregroundColor(LitterTheme.accent)
+                                .foregroundColor(ShitterTheme.accent)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(server.name)
                                     .font(.system(.subheadline, design: .monospaced))
                                     .foregroundColor(.white)
                                 Text(server.hostname)
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(LitterTheme.textSecondary)
+                                    .foregroundColor(ShitterTheme.textSecondary)
                             }
                         }
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
                         TextField("username", text: $username)
@@ -45,9 +45,9 @@ struct SSHLoginSheet: View {
                             .disableAutocorrection(true)
                     } header: {
                         Text("Username")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
                         Picker("Method", selection: $useKey) {
@@ -55,7 +55,7 @@ struct SSHLoginSheet: View {
                             Text("SSH Key").tag(true)
                         }
                         .pickerStyle(.segmented)
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                         if useKey {
                             TextEditor(text: $privateKey)
@@ -67,7 +67,7 @@ struct SSHLoginSheet: View {
                                     if privateKey.isEmpty {
                                         Text("Paste private key here...")
                                             .font(.system(.caption, design: .monospaced))
-                                            .foregroundColor(LitterTheme.textMuted)
+                                            .foregroundColor(ShitterTheme.textMuted)
                                             .padding(.top, 8)
                                             .padding(.leading, 4)
                                             .allowsHitTesting(false)
@@ -83,9 +83,9 @@ struct SSHLoginSheet: View {
                         }
                     } header: {
                         Text("Authentication")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
                         Toggle(isOn: $rememberCredentials) {
@@ -93,7 +93,7 @@ struct SSHLoginSheet: View {
                                 .font(.system(.footnote, design: .monospaced))
                                 .foregroundColor(.white)
                         }
-                        .tint(LitterTheme.accent)
+                        .tint(ShitterTheme.accent)
 
                         if hasSavedCredentials {
                             Button(role: .destructive) {
@@ -105,9 +105,9 @@ struct SSHLoginSheet: View {
                         }
                     } header: {
                         Text("Saved Credentials")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
                         Button {
@@ -115,16 +115,16 @@ struct SSHLoginSheet: View {
                         } label: {
                             HStack {
                                 if isConnecting {
-                                    ProgressView().tint(LitterTheme.accent)
+                                    ProgressView().tint(ShitterTheme.accent)
                                 }
                                 Text("Connect")
-                                    .foregroundColor(LitterTheme.accent)
+                                    .foregroundColor(ShitterTheme.accent)
                                     .font(.system(.subheadline, design: .monospaced))
                             }
                         }
                         .disabled(isConnecting || username.isEmpty || (!useKey && password.isEmpty) || (useKey && privateKey.isEmpty))
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     if let err = errorMessage {
                         Section {
@@ -132,7 +132,7 @@ struct SSHLoginSheet: View {
                                 .foregroundColor(.red)
                                 .font(.system(.caption, design: .monospaced))
                         }
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -143,7 +143,7 @@ struct SSHLoginSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             }
         }

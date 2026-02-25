@@ -21,7 +21,7 @@ actor CodexBridge {
         if isRunning {
             return port
         }
-#if LITTER_DISABLE_ON_DEVICE_CODEX
+#if SHITTER_DISABLE_ON_DEVICE_CODEX
         throw CodexError.unavailable
 #else
         var p: UInt16 = 0
@@ -38,7 +38,7 @@ actor CodexBridge {
     }
 
     func stop() {
-#if !LITTER_DISABLE_ON_DEVICE_CODEX
+#if !SHITTER_DISABLE_ON_DEVICE_CODEX
         codex_stop_server()
 #endif
         isRunning = false

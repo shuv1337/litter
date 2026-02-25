@@ -8,7 +8,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LitterTheme.backgroundGradient.ignoresSafeArea()
+                ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
                     Section {
                         Button {
@@ -21,18 +21,18 @@ struct SettingsView: View {
                                         .font(.system(.subheadline, design: .monospaced))
                                     Text(accountSummary)
                                         .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(LitterTheme.textSecondary)
+                                        .foregroundColor(ShitterTheme.textSecondary)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .foregroundColor(LitterTheme.textMuted)
+                                    .foregroundColor(ShitterTheme.textMuted)
                                     .font(.caption)
                             }
                         }
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
                     } header: {
                         Text("Authentication")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
 
                     Section {
@@ -40,13 +40,13 @@ struct SettingsView: View {
                         if connected.isEmpty {
                             Text("No servers connected")
                                 .font(.system(.footnote, design: .monospaced))
-                                .foregroundColor(LitterTheme.textMuted)
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                                .foregroundColor(ShitterTheme.textMuted)
+                                .listRowBackground(ShitterTheme.surface.opacity(0.6))
                         } else {
                             ForEach(Array(connected), id: \.id) { conn in
                                 HStack {
                                     Image(systemName: serverIconName(for: conn.server.source))
-                                        .foregroundColor(LitterTheme.accent)
+                                        .foregroundColor(ShitterTheme.accent)
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(conn.server.name)
@@ -54,7 +54,7 @@ struct SettingsView: View {
                                             .foregroundColor(.white)
                                         Text(conn.isConnected ? "Connected" : "Disconnected")
                                             .font(.system(.caption, design: .monospaced))
-                                            .foregroundColor(conn.isConnected ? LitterTheme.accent : LitterTheme.textSecondary)
+                                            .foregroundColor(conn.isConnected ? ShitterTheme.accent : ShitterTheme.textSecondary)
                                     }
                                     Spacer()
                                     Button("Remove") {
@@ -63,12 +63,12 @@ struct SettingsView: View {
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(Color(hex: "#FF5555"))
                                 }
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                                .listRowBackground(ShitterTheme.surface.opacity(0.6))
                             }
                         }
                     } header: {
                         Text("Servers")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -79,7 +79,7 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             }
         }

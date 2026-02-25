@@ -27,15 +27,15 @@ struct EmptyStateView: View {
                 BrandLogo(size: 112)
                 Text("Open the sidebar to start a session")
                     .font(.system(.body, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
                 if !connectedServerNames.isEmpty {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(LitterTheme.accent)
+                            .fill(ShitterTheme.accent)
                             .frame(width: 8, height: 8)
                         Text(connectionSummary)
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
@@ -45,12 +45,12 @@ struct EmptyStateView: View {
                         appState.showServerPicker = true
                     }
                     .font(.system(.body, design: .monospaced))
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(LitterTheme.accent.opacity(0.4), lineWidth: 1)
+                            .stroke(ShitterTheme.accent.opacity(0.4), lineWidth: 1)
                     )
                 }
             }

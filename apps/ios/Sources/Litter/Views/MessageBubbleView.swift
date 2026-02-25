@@ -56,7 +56,7 @@ struct MessageBubbleView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .modifier(GlassRectModifier(cornerRadius: 14, tint: LitterTheme.accent.opacity(0.3)))
+        .modifier(GlassRectModifier(cornerRadius: 14, tint: ShitterTheme.accent.opacity(0.3)))
     }
 
     private var assistantContent: some View {
@@ -66,7 +66,7 @@ struct MessageBubbleView: View {
                 switch segment {
                 case .text(let md):
                     Markdown(md)
-                        .markdownTheme(.litter(bodySize: mdBodySize, codeSize: mdCodeSize))
+                        .markdownTheme(.shitter(bodySize: mdBodySize, codeSize: mdCodeSize))
                         .markdownCodeSyntaxHighlighter(.plain)
                         .textSelection(.enabled)
                 case .imageData(let data):
@@ -88,7 +88,7 @@ struct MessageBubbleView: View {
         return Text(body)
             .font(.system(.footnote, design: .monospaced))
             .italic()
-            .foregroundColor(LitterTheme.textSecondary)
+            .foregroundColor(ShitterTheme.textSecondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -115,7 +115,7 @@ struct MessageBubbleView: View {
                 if toolCall, let summary {
                     Text(summary)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textSystem)
+                        .foregroundColor(ShitterTheme.textSystem)
                         .lineLimit(1)
                 } else if let title {
                     Text(title.uppercased())
@@ -126,7 +126,7 @@ struct MessageBubbleView: View {
                 if toolCall {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.system(.caption2, weight: .medium))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
             }
             .contentShape(Rectangle())
@@ -137,7 +137,7 @@ struct MessageBubbleView: View {
             // Expanded body
             if !toolCall || expanded {
                 Markdown(body)
-                    .markdownTheme(.litterSystem(bodySize: mdSystemBodySize, codeSize: mdSystemCodeSize))
+                    .markdownTheme(.shitterSystem(bodySize: mdSystemBodySize, codeSize: mdSystemCodeSize))
                     .markdownCodeSyntaxHighlighter(.plain)
                     .textSelection(.enabled)
                     .padding(.top, 8)
@@ -330,13 +330,13 @@ extension CodeSyntaxHighlighter where Self == PlainSyntaxHighlighter {
     static var plain: PlainSyntaxHighlighter { PlainSyntaxHighlighter() }
 }
 
-// MARK: - Litter Markdown Theme
+// MARK: - Shitter Markdown Theme
 
 extension MarkdownUI.Theme {
-    static func litter(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
+    static func shitter(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
         Theme()
             .text {
-                ForegroundColor(LitterTheme.textBody)
+                ForegroundColor(ShitterTheme.textBody)
                 FontFamily(.custom("SFMono-Regular"))
                 FontSize(bodySize)
             }
@@ -375,13 +375,13 @@ extension MarkdownUI.Theme {
                 FontStyle(.italic)
             }
             .link {
-                ForegroundColor(LitterTheme.accent)
+                ForegroundColor(ShitterTheme.accent)
             }
             .code {
                 FontFamily(.custom("SFMono-Regular"))
                 FontSize(codeSize)
-                ForegroundColor(LitterTheme.accent)
-                BackgroundColor(LitterTheme.surface)
+                ForegroundColor(ShitterTheme.accent)
+                BackgroundColor(ShitterTheme.surface)
             }
             .codeBlock { configuration in
                 CodeBlockView(
@@ -397,28 +397,28 @@ extension MarkdownUI.Theme {
             .blockquote { configuration in
                 configuration.label
                     .markdownTextStyle {
-                        ForegroundColor(LitterTheme.textSecondary)
+                        ForegroundColor(ShitterTheme.textSecondary)
                         FontStyle(.italic)
                     }
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {
                         Rectangle()
-                            .fill(LitterTheme.border)
+                            .fill(ShitterTheme.border)
                             .frame(width: 3)
                     }
                     .markdownMargin(top: 8, bottom: 8)
             }
             .thematicBreak {
                 Divider()
-                    .overlay(LitterTheme.border)
+                    .overlay(ShitterTheme.border)
                     .markdownMargin(top: 12, bottom: 12)
             }
     }
 
-    static func litterSystem(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
+    static func shitterSystem(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
         Theme()
             .text {
-                ForegroundColor(LitterTheme.textSystem)
+                ForegroundColor(ShitterTheme.textSystem)
                 FontFamily(.custom("SFMono-Regular"))
                 FontSize(bodySize)
             }
@@ -457,13 +457,13 @@ extension MarkdownUI.Theme {
                 FontStyle(.italic)
             }
             .link {
-                ForegroundColor(LitterTheme.accent)
+                ForegroundColor(ShitterTheme.accent)
             }
             .code {
                 FontFamily(.custom("SFMono-Regular"))
                 FontSize(codeSize)
-                ForegroundColor(LitterTheme.accent)
-                BackgroundColor(LitterTheme.surface)
+                ForegroundColor(ShitterTheme.accent)
+                BackgroundColor(ShitterTheme.surface)
             }
             .codeBlock { configuration in
                 CodeBlockView(
@@ -479,20 +479,20 @@ extension MarkdownUI.Theme {
             .blockquote { configuration in
                 configuration.label
                     .markdownTextStyle {
-                        ForegroundColor(LitterTheme.textSecondary)
+                        ForegroundColor(ShitterTheme.textSecondary)
                         FontStyle(.italic)
                     }
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {
                         Rectangle()
-                            .fill(LitterTheme.border)
+                            .fill(ShitterTheme.border)
                             .frame(width: 3)
                     }
                     .markdownMargin(top: 6, bottom: 6)
             }
             .thematicBreak {
                 Divider()
-                    .overlay(LitterTheme.border)
+                    .overlay(ShitterTheme.border)
                     .markdownMargin(top: 8, bottom: 8)
             }
     }

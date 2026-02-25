@@ -19,7 +19,7 @@ struct BrandLogo: View {
         } else {
             Text("shitter")
                 .font(.system(size: size * 0.32, weight: .bold, design: .monospaced))
-                .foregroundColor(LitterTheme.accent)
+                .foregroundColor(ShitterTheme.accent)
         }
     }
 }

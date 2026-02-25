@@ -14,7 +14,7 @@ extension Color {
 
 // MARK: - Central Theme
 
-enum LitterTheme {
+enum ShitterTheme {
     static let accent       = Color(hex: "#B0B0B0")
     static let textPrimary  = Color.white
     static let textSecondary = Color(hex: "#888888")
@@ -73,7 +73,7 @@ struct GlassRectModifier: ViewModifier {
         } else {
             content.overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke((tint ?? LitterTheme.surfaceLight).opacity(0.4), lineWidth: 1)
+                    .stroke((tint ?? ShitterTheme.surfaceLight).opacity(0.4), lineWidth: 1)
             )
         }
     }
@@ -85,7 +85,7 @@ struct GlassCapsuleModifier: ViewModifier {
             content.glassEffect(.regular, in: .capsule)
         } else {
             content
-                .background(LitterTheme.surfaceLight)
+                .background(ShitterTheme.surfaceLight)
                 .clipShape(Capsule())
         }
     }
@@ -97,7 +97,7 @@ struct GlassCircleModifier: ViewModifier {
             content.glassEffect(.regular, in: .circle)
         } else {
             content
-                .background(LitterTheme.surfaceLight)
+                .background(ShitterTheme.surfaceLight)
                 .clipShape(Circle())
         }
     }

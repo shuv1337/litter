@@ -2,7 +2,7 @@ import SwiftUI
 import Inject
 
 @main
-struct LitterApp: App {
+struct ShitterApp: App {
     @StateObject private var serverManager = ServerManager()
 
     var body: some Scene {
@@ -27,7 +27,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            LitterTheme.backgroundGradient.ignoresSafeArea()
+            ShitterTheme.backgroundGradient.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 HeaderView()
@@ -103,26 +103,26 @@ private struct ApprovalPromptView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(title)
                     .font(.system(.headline, design: .monospaced))
-                    .foregroundColor(LitterTheme.textPrimary)
+                    .foregroundColor(ShitterTheme.textPrimary)
 
                 if let reason = approval.reason, !reason.isEmpty {
                     Text(reason)
                         .font(.system(.footnote, design: .monospaced))
-                        .foregroundColor(LitterTheme.textSecondary)
+                        .foregroundColor(ShitterTheme.textSecondary)
                 }
 
                 if let command = approval.command, !command.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Command")
                             .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(LitterTheme.textMuted)
+                            .foregroundColor(ShitterTheme.textMuted)
                         ScrollView(.horizontal, showsIndicators: false) {
                             Text(command)
                                 .font(.system(.footnote, design: .monospaced))
-                                .foregroundColor(LitterTheme.textBody)
+                                .foregroundColor(ShitterTheme.textBody)
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(LitterTheme.surface)
+                                .background(ShitterTheme.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
@@ -131,19 +131,19 @@ private struct ApprovalPromptView: View {
                 if let cwd = approval.cwd, !cwd.isEmpty {
                     Text("CWD: \(cwd)")
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let grantRoot = approval.grantRoot, !grantRoot.isEmpty {
                     Text("Grant Root: \(grantRoot)")
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 VStack(spacing: 8) {
                     Button("Allow Once") { onDecision(.accept) }
                         .buttonStyle(.borderedProminent)
-                        .tint(LitterTheme.accent)
+                        .tint(ShitterTheme.accent)
                         .frame(maxWidth: .infinity)
 
                     Button("Allow for Session") { onDecision(.acceptForSession) }
@@ -167,7 +167,7 @@ private struct ApprovalPromptView: View {
             .modifier(GlassRectModifier(cornerRadius: 14))
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(LitterTheme.border, lineWidth: 1)
+                    .stroke(ShitterTheme.border, lineWidth: 1)
             )
             .padding(.horizontal, 16)
         }
@@ -178,12 +178,12 @@ private struct ApprovalPromptView: View {
 struct LaunchView: View {
     var body: some View {
         ZStack {
-            LitterTheme.backgroundGradient.ignoresSafeArea()
+            ShitterTheme.backgroundGradient.ignoresSafeArea()
             VStack(spacing: 24) {
                 BrandLogo(size: 132)
                 Text("AI coding agent on iOS")
                     .font(.system(.body, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
             }
         }
     }

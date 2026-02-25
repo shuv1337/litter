@@ -1,6 +1,6 @@
-name: Litter
+name: Shitter
 options:
-  bundleIdPrefix: com.litter
+  bundleIdPrefix: io.latitudes.shitter
   deploymentTarget:
     iOS: "26.0"
   xcodeVersion: "16.0"
@@ -13,7 +13,7 @@ settings:
     SWIFT_STRICT_CONCURRENCY: targeted
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
-    SWIFT_OBJC_BRIDGING_HEADER: Sources/Litter/Bridge/codex_bridge_objc.h
+    SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
     OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
 
@@ -29,12 +29,12 @@ packages:
     from: "1.5.2"
 
 targets:
-  LitterRemote:
+  ShitterRemote:
     type: application
     platform: iOS
     deploymentTarget: "26.0"
     sources:
-      - path: Sources/Litter
+      - path: Sources/Shitter
         excludes:
           - "**/*.h"
     dependencies:
@@ -55,19 +55,19 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter.remote
-        INFOPLIST_FILE: Sources/Litter/Info.plist
-        SWIFT_OBJC_BRIDGING_HEADER: Sources/Litter/Bridge/codex_bridge_objc.h
+        INFOPLIST_FILE: Sources/Shitter/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) LITTER_DISABLE_ON_DEVICE_CODEX"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) SHITTER_DISABLE_ON_DEVICE_CODEX"
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
-  Litter:
+  Shitter:
     type: application
     platform: iOS
     deploymentTarget: "26.0"
     sources:
-      - path: Sources/Litter
+      - path: Sources/Shitter
         excludes:
           - "**/*.h"
     dependencies:
@@ -90,18 +90,18 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter
-        INFOPLIST_FILE: Sources/Litter/Info.plist
-        SWIFT_OBJC_BRIDGING_HEADER: Sources/Litter/Bridge/codex_bridge_objc.h
+        INFOPLIST_FILE: Sources/Shitter/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
 
 schemes:
-  LitterRemote:
+  ShitterRemote:
     build:
       targets:
-        LitterRemote: all
+        ShitterRemote: all
     run:
       config: Debug
     test:
@@ -115,10 +115,10 @@ schemes:
     management:
       isShown: true
       orderHint: 0
-  Litter:
+  Shitter:
     build:
       targets:
-        Litter: all
+        Shitter: all
     run:
       config: Debug
     test:

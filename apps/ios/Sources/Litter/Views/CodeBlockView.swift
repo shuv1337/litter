@@ -12,7 +12,7 @@ struct CodeBlockView: View {
                 if !language.isEmpty {
                     Text(language)
                         .font(.system(.caption2, weight: .medium))
-                        .foregroundColor(LitterTheme.textSecondary)
+                        .foregroundColor(ShitterTheme.textSecondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(.ultraThinMaterial)
@@ -28,7 +28,7 @@ struct CodeBlockView: View {
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(.caption2))
-                        .foregroundColor(copied ? LitterTheme.accent : LitterTheme.textSecondary)
+                        .foregroundColor(copied ? ShitterTheme.accent : ShitterTheme.textSecondary)
                 }
             }
             .padding(.horizontal, 12)

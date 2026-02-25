@@ -48,7 +48,7 @@ struct DirectoryPickerView: View {
 
     var body: some View {
         ZStack {
-            LitterTheme.backgroundGradient.ignoresSafeArea()
+            ShitterTheme.backgroundGradient.ignoresSafeArea()
             VStack(spacing: 0) {
                 serverSelectorBar
                 pathBar
@@ -65,14 +65,14 @@ struct DirectoryPickerView: View {
                     showHiddenDirectories.toggle()
                 } label: {
                     Image(systemName: showHiddenDirectories ? "eye" : "eye.slash")
-                        .foregroundColor(showHiddenDirectories ? LitterTheme.accent : LitterTheme.textSecondary)
+                        .foregroundColor(showHiddenDirectories ? ShitterTheme.accent : ShitterTheme.textSecondary)
                 }
                 .accessibilityLabel(showHiddenDirectories ? "Hide Hidden Folders" : "Show Hidden Folders")
             }
 
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Select") { onDirectorySelected?(selectedServerId, currentPath) }
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .disabled(!canSelectPath)
             }
         }
@@ -91,12 +91,12 @@ struct DirectoryPickerView: View {
         HStack(spacing: 8) {
             Text("Server")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.textSecondary)
+                .foregroundColor(ShitterTheme.textSecondary)
             Spacer()
             if servers.isEmpty {
                 Text("No connected server")
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
+                    .foregroundColor(ShitterTheme.textMuted)
             } else {
                 Picker("Server", selection: $selectedServerId) {
                     ForEach(servers) { server in
@@ -105,7 +105,7 @@ struct DirectoryPickerView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .tint(LitterTheme.accent)
+                .tint(ShitterTheme.accent)
                 .font(.system(.caption, design: .monospaced))
             }
         }
@@ -118,7 +118,7 @@ struct DirectoryPickerView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(currentPath.isEmpty ? "~" : currentPath)
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.accent)
+                .foregroundColor(ShitterTheme.accent)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
         }
@@ -128,7 +128,7 @@ struct DirectoryPickerView: View {
     @ViewBuilder
     private var content: some View {
         if isLoading {
-            ProgressView().tint(LitterTheme.accent).frame(maxHeight: .infinity)
+            ProgressView().tint(ShitterTheme.accent).frame(maxHeight: .infinity)
         } else if let err = errorMessage {
             VStack(spacing: 12) {
                 Text(err)
@@ -137,7 +137,7 @@ struct DirectoryPickerView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 Button("Retry") { Task { await loadInitialPath() } }
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
             }
             .frame(maxHeight: .infinity)
         } else {
@@ -153,21 +153,21 @@ struct DirectoryPickerView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "arrow.turn.up.left")
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                             .frame(width: 20)
                         Text("..")
                             .font(.system(.subheadline, design: .monospaced))
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
-                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
 
             if visibleEntries.isEmpty {
                 Text(emptyMessage)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(LitterTheme.textMuted)
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .foregroundColor(ShitterTheme.textMuted)
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
             } else {
                 ForEach(visibleEntries, id: \.self) { entry in
                     Button {
@@ -175,18 +175,18 @@ struct DirectoryPickerView: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "folder.fill")
-                                .foregroundColor(LitterTheme.accent)
+                                .foregroundColor(ShitterTheme.accent)
                                 .frame(width: 20)
                             Text(entry)
                                 .font(.system(.subheadline, design: .monospaced))
                                 .foregroundColor(.white)
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .foregroundColor(LitterTheme.textMuted)
+                                .foregroundColor(ShitterTheme.textMuted)
                                 .font(.caption)
                         }
                     }
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 }
             }
         }

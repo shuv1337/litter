@@ -200,7 +200,7 @@ private struct ConversationInputBar: View {
                                     .foregroundColor(Color(hex: "#6EA676"))
                                 Text(command.description)
                                     .font(.system(.body, design: .monospaced))
-                                    .foregroundColor(LitterTheme.textSecondary)
+                                    .foregroundColor(ShitterTheme.textSecondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
@@ -209,7 +209,7 @@ private struct ConversationInputBar: View {
                         }
                         .buttonStyle(.plain)
                         if index < slashSuggestions.count - 1 {
-                            Divider().background(LitterTheme.border)
+                            Divider().background(ShitterTheme.border)
                         }
                     }
                 }
@@ -220,7 +220,7 @@ private struct ConversationInputBar: View {
                     if fileSearchLoading {
                         Text("Searching files...")
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
@@ -234,7 +234,7 @@ private struct ConversationInputBar: View {
                     } else if fileSuggestions.isEmpty {
                         Text("No matches")
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
@@ -246,7 +246,7 @@ private struct ConversationInputBar: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "folder")
                                         .font(.system(.caption))
-                                        .foregroundColor(LitterTheme.textSecondary)
+                                        .foregroundColor(ShitterTheme.textSecondary)
                                     Text(suggestion.path)
                                         .font(.system(.footnote, design: .monospaced))
                                         .foregroundColor(.white)
@@ -258,7 +258,7 @@ private struct ConversationInputBar: View {
                             }
                             .buttonStyle(.plain)
                             if index < min(fileSuggestions.count, 8) - 1 {
-                                Divider().background(LitterTheme.border)
+                                Divider().background(ShitterTheme.border)
                             }
                         }
                     }
@@ -304,7 +304,7 @@ private struct ConversationInputBar: View {
                         } label: {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.system(.title2))
-                                .foregroundColor(LitterTheme.accent)
+                                .foregroundColor(ShitterTheme.accent)
                         }
                         .padding(.trailing, 4)
                     }
@@ -363,25 +363,25 @@ private struct ConversationInputBar: View {
                                     Spacer()
                                     if preset.approvalPolicy == appState.approvalPolicy && preset.sandboxMode == appState.sandboxMode {
                                         Image(systemName: "checkmark")
-                                            .foregroundColor(LitterTheme.accent)
+                                            .foregroundColor(ShitterTheme.accent)
                                     }
                                 }
                                 Text(preset.description)
-                                    .foregroundColor(LitterTheme.textSecondary)
+                                    .foregroundColor(ShitterTheme.textSecondary)
                                     .font(.system(.caption, design: .monospaced))
                             }
                         }
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(LitterTheme.backgroundGradient.ignoresSafeArea())
+                .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
                 .navigationTitle("Permissions")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showPermissionsSheet = false }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                 }
             }
@@ -391,11 +391,11 @@ private struct ConversationInputBar: View {
             NavigationStack {
                 Group {
                     if experimentalFeaturesLoading {
-                        ProgressView().tint(LitterTheme.accent)
+                        ProgressView().tint(ShitterTheme.accent)
                     } else if experimentalFeatures.isEmpty {
                         Text("No experimental features available")
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.textMuted)
+                            .foregroundColor(ShitterTheme.textMuted)
                     } else {
                         List {
                             ForEach(experimentalFeatures) { feature in
@@ -406,7 +406,7 @@ private struct ConversationInputBar: View {
                                             .foregroundColor(.white)
                                         Text(feature.description ?? feature.stage)
                                             .font(.system(.caption, design: .monospaced))
-                                            .foregroundColor(LitterTheme.textSecondary)
+                                            .foregroundColor(ShitterTheme.textSecondary)
                                     }
                                     Spacer(minLength: 0)
                                     Toggle(
@@ -419,26 +419,26 @@ private struct ConversationInputBar: View {
                                         )
                                     )
                                     .labelsHidden()
-                                    .tint(LitterTheme.accent)
+                                    .tint(ShitterTheme.accent)
                                 }
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                                .listRowBackground(ShitterTheme.surface.opacity(0.6))
                             }
                         }
                         .scrollContentBackground(.hidden)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LitterTheme.backgroundGradient.ignoresSafeArea())
+                .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
                 .navigationTitle("Experimental")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Reload") { Task { await loadExperimentalFeatures() } }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showExperimentalSheet = false }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                 }
             }
@@ -448,11 +448,11 @@ private struct ConversationInputBar: View {
             NavigationStack {
                 Group {
                     if skillsLoading {
-                        ProgressView().tint(LitterTheme.accent)
+                        ProgressView().tint(ShitterTheme.accent)
                     } else if skills.isEmpty {
                         Text("No skills available for this workspace")
                             .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(LitterTheme.textMuted)
+                            .foregroundColor(ShitterTheme.textMuted)
                     } else {
                         List {
                             ForEach(skills) { skill in
@@ -465,34 +465,34 @@ private struct ConversationInputBar: View {
                                         if skill.enabled {
                                             Text("enabled")
                                                 .font(.system(.caption2, design: .monospaced))
-                                                .foregroundColor(LitterTheme.accent)
+                                                .foregroundColor(ShitterTheme.accent)
                                         }
                                     }
                                     Text(skill.description)
                                         .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(LitterTheme.textSecondary)
+                                        .foregroundColor(ShitterTheme.textSecondary)
                                     Text(skill.path)
                                         .font(.system(.caption2, design: .monospaced))
-                                        .foregroundColor(LitterTheme.textMuted)
+                                        .foregroundColor(ShitterTheme.textMuted)
                                 }
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                                .listRowBackground(ShitterTheme.surface.opacity(0.6))
                             }
                         }
                         .scrollContentBackground(.hidden)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LitterTheme.backgroundGradient.ignoresSafeArea())
+                .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
                 .navigationTitle("Skills")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Reload") { Task { await loadSkills(forceReload: true) } }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showSkillsSheet = false }
-                            .foregroundColor(LitterTheme.accent)
+                            .foregroundColor(ShitterTheme.accent)
                     }
                 }
             }
@@ -525,10 +525,10 @@ private struct ConversationInputBar: View {
             content()
         }
         .frame(maxWidth: .infinity)
-        .background(LitterTheme.surface.opacity(0.95))
+        .background(ShitterTheme.surface.opacity(0.95))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(LitterTheme.border, lineWidth: 1)
+                .stroke(ShitterTheme.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
@@ -1033,7 +1033,7 @@ struct TypingIndicator: View {
         HStack(spacing: 4) {
             ForEach(0..<3) { i in
                 Circle()
-                    .fill(LitterTheme.accent)
+                    .fill(ShitterTheme.accent)
                     .frame(width: 6, height: 6)
                     .opacity(phase == i ? 1 : 0.3)
             }

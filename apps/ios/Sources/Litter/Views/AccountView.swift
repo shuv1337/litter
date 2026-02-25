@@ -19,11 +19,11 @@ struct AccountView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LitterTheme.backgroundGradient.ignoresSafeArea()
+                ShitterTheme.backgroundGradient.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         currentAccountSection
-                        Divider().background(LitterTheme.surfaceLight)
+                        Divider().background(ShitterTheme.surfaceLight)
                         loginSection
                         if let err = errorMsg {
                             Text(err).font(.caption).foregroundColor(.red)
@@ -39,7 +39,7 @@ struct AccountView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             }
         }
@@ -62,7 +62,7 @@ struct AccountView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("CURRENT ACCOUNT")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.textMuted)
+                .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
             HStack(spacing: 12) {
@@ -76,7 +76,7 @@ struct AccountView: View {
                     if let sub = authSubtitle {
                         Text(sub)
                             .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(LitterTheme.textSecondary)
+                            .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
                 Spacer()
@@ -100,7 +100,7 @@ struct AccountView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("LOGIN")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.textMuted)
+                .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
             Button {
@@ -122,7 +122,7 @@ struct AccountView: View {
                 .foregroundColor(Color(hex: "#0D0D0D"))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(LitterTheme.accent)
+                .background(ShitterTheme.accent)
                 .cornerRadius(10)
             }
             .padding(.horizontal, 16)
@@ -130,7 +130,7 @@ struct AccountView: View {
 
             Text("— or use an API key —")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(LitterTheme.textMuted)
+                .foregroundColor(ShitterTheme.textMuted)
                 .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -138,7 +138,7 @@ struct AccountView: View {
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundColor(.white)
                     .padding(12)
-                    .background(LitterTheme.surface)
+                    .background(ShitterTheme.surface)
                     .cornerRadius(8)
                     .padding(.horizontal, 16)
 
@@ -155,12 +155,12 @@ struct AccountView: View {
                 } label: {
                     Text("Save API Key")
                         .font(.system(.subheadline, design: .monospaced))
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
-                                .stroke(LitterTheme.accent.opacity(0.4), lineWidth: 1)
+                                .stroke(ShitterTheme.accent.opacity(0.4), lineWidth: 1)
                         )
                 }
                 .padding(.horizontal, 16)
@@ -195,9 +195,9 @@ struct AccountView: View {
 
     private var authColor: Color {
         switch authStatus {
-        case .chatgpt: return LitterTheme.accent
+        case .chatgpt: return ShitterTheme.accent
         case .apiKey:  return Color(hex: "#00AAFF")
-        case .notLoggedIn, .unknown: return LitterTheme.textMuted
+        case .notLoggedIn, .unknown: return ShitterTheme.textMuted
         }
     }
 

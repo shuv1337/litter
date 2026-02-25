@@ -19,17 +19,17 @@ struct SessionListView: View {
 
     var body: some View {
         ZStack {
-            LitterTheme.backgroundGradient.ignoresSafeArea()
+            ShitterTheme.backgroundGradient.ignoresSafeArea()
 
             if isLoading && sessions.isEmpty {
-                ProgressView().tint(LitterTheme.accent)
+                ProgressView().tint(ShitterTheme.accent)
             } else if let err = errorMessage, sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text(err)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(.red)
                     Button("Retry") { Task { await loadSessions() } }
-                        .foregroundColor(LitterTheme.accent)
+                        .foregroundColor(ShitterTheme.accent)
                 }
             } else {
                 sessionList
@@ -43,7 +43,7 @@ struct SessionListView: View {
                 Button("New Session") {
                     Task { await startNew() }
                 }
-                .foregroundColor(LitterTheme.accent)
+                .foregroundColor(ShitterTheme.accent)
                 .font(.system(.footnote, design: .monospaced))
             }
         }
@@ -64,14 +64,14 @@ struct SessionListView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.red)
                     .padding(.vertical, 6)
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
 
             if sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text("No previous sessions")
                         .font(.system(.subheadline, design: .monospaced))
-                        .foregroundColor(LitterTheme.textMuted)
+                        .foregroundColor(ShitterTheme.textMuted)
                     Text("Start a new session to begin")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(Color(hex: "#444444"))
@@ -88,15 +88,15 @@ struct SessionListView: View {
                     sessionRow(session)
                 }
                 .disabled(isResuming)
-                .listRowBackground(LitterTheme.surface.opacity(0.6))
+                .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
 
             if nextCursor != nil {
                 Button("Load more") { Task { await loadMore() } }
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .font(.system(.footnote, design: .monospaced))
                     .frame(maxWidth: .infinity)
-                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
         }
         .scrollContentBackground(.hidden)
@@ -113,19 +113,19 @@ struct SessionListView: View {
                 if resumingThreadId == session.id {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(LitterTheme.accent)
+                        .tint(ShitterTheme.accent)
                 }
             }
             HStack(spacing: 8) {
                 Text(relativeDate(session.updatedAt))
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(LitterTheme.textSecondary)
+                    .foregroundColor(ShitterTheme.textSecondary)
                 Text(session.modelProvider)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundColor(LitterTheme.accent)
+                    .foregroundColor(ShitterTheme.accent)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(LitterTheme.accent.opacity(0.15))
+                    .background(ShitterTheme.accent.opacity(0.15))
                     .cornerRadius(4)
             }
         }
