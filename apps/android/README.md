@@ -32,6 +32,27 @@ Examples:
 ./gradlew :app:assembleRemoteOnlyDebug
 ```
 
+Open in Android Studio (macOS):
+
+```bash
+open -a "Android Studio" apps/android
+```
+
+Rebuild + reopen workflow:
+
+```bash
+./apps/android/scripts/rebuild-and-reopen.sh
+```
+
+Optional variants:
+
+```bash
+./apps/android/scripts/rebuild-and-reopen.sh --on-device
+./apps/android/scripts/rebuild-and-reopen.sh --remote-only
+./apps/android/scripts/rebuild-and-reopen.sh --both --with-rust
+./apps/android/scripts/rebuild-and-reopen.sh --no-open
+```
+
 QA matrix and regression command list: `apps/android/docs/qa-matrix.md`.
 
 ## Rust Bridge (Android)
@@ -45,5 +66,6 @@ Build and copy JNI artifacts into `core:bridge`:
 ```
 
 Prerequisites:
+
 - Android NDK (`ANDROID_NDK_HOME` or `ANDROID_NDK_ROOT` set)
 - `cargo-ndk` (`cargo install cargo-ndk`)

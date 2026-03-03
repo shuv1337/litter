@@ -5,6 +5,14 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showAccount = false
 
+    private var connectedServers: [ServerConnection] {
+        serverManager.connections.values
+            .filter { $0.isConnected }
+            .sorted { lhs, rhs in
+                lhs.server.name.localizedCaseInsensitiveCompare(rhs.server.name) == .orderedAscending
+            }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -18,9 +26,9 @@ struct SettingsView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text("Account")
                                         .foregroundColor(.white)
-                                        .font(.system(.subheadline, design: .monospaced))
+                                        .font(ShitterFont.monospaced(.subheadline))
                                     Text(accountSummary)
-                                        .font(.system(.caption, design: .monospaced))
+                                        .font(ShitterFont.monospaced(.caption))
                                         .foregroundColor(ShitterTheme.textSecondary)
                                 }
                                 Spacer()
@@ -36,31 +44,30 @@ struct SettingsView: View {
                     }
 
                     Section {
-                        let connected = serverManager.connections.values.filter { $0.isConnected }
-                        if connected.isEmpty {
+                        if connectedServers.isEmpty {
                             Text("No servers connected")
-                                .font(.system(.footnote, design: .monospaced))
+                                .font(ShitterFont.monospaced(.footnote))
                                 .foregroundColor(ShitterTheme.textMuted)
                                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
                         } else {
-                            ForEach(Array(connected), id: \.id) { conn in
+                            ForEach(connectedServers, id: \.id) { conn in
                                 HStack {
                                     Image(systemName: serverIconName(for: conn.server.source))
                                         .foregroundColor(ShitterTheme.accent)
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(conn.server.name)
-                                            .font(.system(.footnote, design: .monospaced))
+                                            .font(ShitterFont.monospaced(.footnote))
                                             .foregroundColor(.white)
                                         Text(conn.isConnected ? "Connected" : "Disconnected")
-                                            .font(.system(.caption, design: .monospaced))
+                                            .font(ShitterFont.monospaced(.caption))
                                             .foregroundColor(conn.isConnected ? ShitterTheme.accent : ShitterTheme.textSecondary)
                                     }
                                     Spacer()
                                     Button("Remove") {
                                         serverManager.removeServer(id: conn.id)
                                     }
-                                    .font(.system(.caption, design: .monospaced))
+                                    .font(ShitterFont.monospaced(.caption))
                                     .foregroundColor(Color(hex: "#FF5555"))
                                 }
                                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -68,6 +75,21 @@ struct SettingsView: View {
                         }
                     } header: {
                         Text("Servers")
+                            .foregroundColor(ShitterTheme.textSecondary)
+                    }
+
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Custom Font")
+                                .font(ShitterFont.monospaced(.subheadline))
+                                .foregroundColor(.white)
+                            Text("Using Berkeley Mono for app typography.")
+                                .font(ShitterFont.monospaced(.caption))
+                                .foregroundColor(ShitterTheme.textSecondary)
+                        }
+                        .listRowBackground(ShitterTheme.surface.opacity(0.6))
+                    } header: {
+                        Text("Typography")
                             .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }

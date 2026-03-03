@@ -7,17 +7,26 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.text.format.DateUtils
 import android.util.Base64
+import android.util.Log
 import android.widget.TextView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +42,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -47,11 +57,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
@@ -63,13 +77,21 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,17 +109,24 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -106,59 +135,96 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.latitudes.shitter.android.core.network.DiscoverySource
 import io.latitudes.shitter.android.state.AccountState
+import io.latitudes.shitter.android.state.ApprovalDecision
+import io.latitudes.shitter.android.state.ApprovalKind
 import io.latitudes.shitter.android.state.AuthStatus
 import io.latitudes.shitter.android.state.ChatMessage
 import io.latitudes.shitter.android.state.ExperimentalFeature
 import io.latitudes.shitter.android.state.FuzzyFileSearchResult
 import io.latitudes.shitter.android.state.MessageRole
 import io.latitudes.shitter.android.state.ModelOption
+import io.latitudes.shitter.android.state.PendingApproval
 import io.latitudes.shitter.android.state.ServerConfig
 import io.latitudes.shitter.android.state.ServerConnectionStatus
 import io.latitudes.shitter.android.state.ServerSource
+import io.latitudes.shitter.android.state.SkillMentionInput
 import io.latitudes.shitter.android.state.SkillMetadata
 import io.latitudes.shitter.android.state.ThreadKey
 import io.latitudes.shitter.android.state.ThreadState
+import io.latitudes.shitter.android.BuildConfig
 import io.latitudes.shitter.android.R
 import io.noties.markwon.Markwon
+import io.noties.markwon.syntax.Prism4jThemeDarkula
+import io.noties.markwon.syntax.SyntaxHighlightPlugin
+import io.noties.prism4j.GrammarLocator
+import io.noties.prism4j.Prism4j
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.LinkedHashMap
 import java.util.Locale
 
-@Composable
-fun ShitterAppShell(appState: ShitterAppState) {
-    val uiState by appState.uiState.collectAsStateWithLifecycle()
-    val drawerWidth = 304.dp
-    val drawerOffset by
-        animateDpAsState(
-            targetValue = if (uiState.isSidebarOpen) 0.dp else -drawerWidth,
-            animationSpec = tween(durationMillis = 220),
-            label = "sidebar_offset",
-        )
+private const val PERF_LOG_TAG = "ShitterComposePerf"
 
-    Box(modifier = Modifier.fillMaxSize().background(ShitterTheme.backgroundBrush)) {
+private fun Context.monospaceTypeface(): Typeface = Typeface.MONOSPACE
+
+@Composable
+private fun DebugRecomposeCheckpoint(name: String) {
+    if (!BuildConfig.DEBUG) {
+        return
+    }
+    val counter = remember(name) { mutableIntStateOf(0) }
+    SideEffect {
+        counter.intValue += 1
+        if (counter.intValue == 1 || counter.intValue % 25 == 0) {
+            Log.d(PERF_LOG_TAG, "$name recomposed ${counter.intValue}x")
+        }
+    }
+}
+
+@Composable
+fun ShitterAppShell(
+    appState: ShitterAppState,
+    modifier: Modifier = Modifier,
+) {
+    val uiState by appState.uiState.collectAsStateWithLifecycle()
+    DebugRecomposeCheckpoint(name = "ShitterAppShell")
+    val drawerWidth = 350.dp
+
+    Box(modifier = modifier.fillMaxSize().background(ShitterTheme.backgroundBrush)) {
         Column(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
         ) {
@@ -182,6 +248,9 @@ fun ShitterAppShell(appState: ShitterAppState) {
             } else {
                 ConversationPanel(
                     messages = uiState.messages,
+                    toolTargetLabelsById = uiState.toolTargetLabelsById,
+                    activeThreadKey = uiState.activeThreadKey,
+                    conversationTextSizeStep = uiState.conversationTextSizeStep,
                     draft = uiState.draft,
                     isSending = uiState.isSending,
                     models = uiState.models,
@@ -192,6 +261,7 @@ fun ShitterAppShell(appState: ShitterAppState) {
                     currentCwd = uiState.currentCwd,
                     activeThreadPreview = uiState.sessions.firstOrNull { it.key == uiState.activeThreadKey }?.preview.orEmpty(),
                     onDraftChange = appState::updateDraft,
+                    onConversationTextSizeStepChanged = appState::updateConversationTextSizeStep,
                     onFileSearch = appState::searchComposerFiles,
                     onSelectModel = appState::selectModel,
                     onSelectReasoningEffort = appState::selectReasoningEffort,
@@ -203,9 +273,12 @@ fun ShitterAppShell(appState: ShitterAppState) {
                     onListExperimentalFeatures = appState::listExperimentalFeatures,
                     onSetExperimentalFeatureEnabled = appState::setExperimentalFeatureEnabled,
                     onListSkills = appState::listSkills,
-                    onSend = { payloadDraft ->
+                    onForkConversation = appState::forkConversation,
+                    onEditMessage = appState::editMessage,
+                    onForkFromMessage = appState::forkConversationFromMessage,
+                    onSend = { payloadDraft, skillMentions ->
                         appState.updateDraft(payloadDraft)
-                        appState.sendDraft()
+                        appState.sendDraft(skillMentions)
                     },
                     onInterrupt = appState::interrupt,
                 )
@@ -226,30 +299,50 @@ fun ShitterAppShell(appState: ShitterAppState) {
             )
         }
 
-        SessionSidebar(
-            modifier =
-                Modifier
-                    .fillMaxHeight()
-                    .width(drawerWidth)
-                    .offset(x = drawerOffset),
-            connectionStatus = uiState.connectionStatus,
-            serverCount = uiState.serverCount,
-            sessions = uiState.sessions,
-            sessionSearchQuery = uiState.sessionSearchQuery,
-            activeThreadKey = uiState.activeThreadKey,
-            onSessionSelected = appState::selectSession,
-            onSessionSearchQueryChange = appState::updateSessionSearchQuery,
-            onNewSession = appState::openNewSessionPicker,
-            onRefresh = appState::refreshSessions,
-            onOpenDiscovery = {
-                appState.dismissSidebar()
-                appState.openDiscovery()
-            },
-            onOpenSettings = {
-                appState.dismissSidebar()
-                appState.openSettings()
-            },
-        )
+        AnimatedVisibility(
+            visible = uiState.isSidebarOpen,
+            enter = slideInHorizontally(animationSpec = tween(durationMillis = 220)) { fullWidth -> -fullWidth } + fadeIn(animationSpec = tween(durationMillis = 220)),
+            exit = slideOutHorizontally(animationSpec = tween(durationMillis = 200)) { fullWidth -> -fullWidth } + fadeOut(animationSpec = tween(durationMillis = 200)),
+        ) {
+            SessionSidebar(
+                modifier =
+                    Modifier
+                        .fillMaxHeight()
+                        .width(drawerWidth),
+                connectionStatus = uiState.connectionStatus,
+                connectedServers = uiState.connectedServers,
+                sessions = uiState.sessions,
+                isSidebarOpen = uiState.isSidebarOpen,
+                sessionSearchQuery = uiState.sessionSearchQuery,
+                selectedServerFilterId = uiState.sessionServerFilterId,
+                showOnlyForks = uiState.sessionShowOnlyForks,
+                workspaceSortModeRaw = uiState.sessionWorkspaceSortModeRaw,
+                activeThreadKey = uiState.activeThreadKey,
+                onSessionSelected = appState::selectSession,
+                onSessionSearchQueryChange = appState::updateSessionSearchQuery,
+                onSessionServerFilterChange = appState::updateSessionServerFilter,
+                onSessionShowOnlyForksChange = appState::updateSessionShowOnlyForks,
+                onSessionWorkspaceSortModeChange = appState::updateSessionWorkspaceSortMode,
+                onClearSessionFilters = appState::clearSessionFilters,
+                onNewSession = {
+                    appState.dismissSidebar()
+                    appState.openNewSessionPicker()
+                },
+                onRefresh = appState::refreshSessions,
+                onForkConversation = appState::forkConversation,
+                onForkSession = appState::forkSession,
+                onRenameSession = appState::renameSession,
+                onArchiveSession = appState::archiveSession,
+                onOpenDiscovery = {
+                    appState.dismissSidebar()
+                    appState.openDiscovery()
+                },
+                onOpenSettings = {
+                    appState.dismissSidebar()
+                    appState.openSettings()
+                },
+            )
+        }
 
         if (uiState.directoryPicker.isVisible) {
             DirectoryPickerSheet(
@@ -257,6 +350,7 @@ fun ShitterAppShell(appState: ShitterAppState) {
                 selectedServerId = uiState.directoryPicker.selectedServerId,
                 path = uiState.directoryPicker.currentPath,
                 entries = uiState.directoryPicker.entries,
+                recentDirectories = uiState.directoryPicker.recentDirectories,
                 isLoading = uiState.directoryPicker.isLoading,
                 error = uiState.directoryPicker.errorMessage,
                 searchQuery = uiState.directoryPicker.searchQuery,
@@ -267,7 +361,12 @@ fun ShitterAppShell(appState: ShitterAppState) {
                 onShowHiddenDirectoriesChange = appState::updateShowHiddenDirectories,
                 onNavigateUp = appState::navigateDirectoryUp,
                 onNavigateInto = appState::navigateDirectoryInto,
+                onNavigateToPath = appState::navigateDirectoryToPath,
                 onSelect = appState::confirmStartSessionFromPicker,
+                onSelectRecent = appState::startSessionFromRecent,
+                onRemoveRecentDirectory = appState::removeRecentDirectory,
+                onClearRecentDirectories = appState::clearRecentDirectories,
+                onRetry = appState::reloadDirectoryPicker,
             )
         }
 
@@ -304,14 +403,17 @@ fun ShitterAppShell(appState: ShitterAppState) {
                 connectedServers = uiState.connectedServers,
                 onDismiss = appState::dismissSettings,
                 onOpenAccount = appState::openAccount,
+                onCopyBundledLogs = appState::copyBundledLogs,
                 onOpenDiscovery = appState::openDiscovery,
                 onRemoveServer = appState::removeServer,
             )
         }
 
         if (uiState.showAccount) {
+            val activeServer = uiState.connectedServers.firstOrNull { it.id == uiState.activeServerId }
             AccountSheet(
                 accountState = uiState.accountState,
+                activeServerSource = activeServer?.source,
                 apiKeyDraft = uiState.apiKeyDraft,
                 isWorking = uiState.isAuthWorking,
                 onDismiss = appState::dismissAccount,
@@ -320,6 +422,37 @@ fun ShitterAppShell(appState: ShitterAppState) {
                 onLoginWithApiKey = appState::loginWithApiKey,
                 onLogout = appState::logoutAccount,
                 onCancelLogin = appState::cancelLogin,
+                onCopyBundledLogs = appState::copyBundledLogs,
+            )
+        }
+
+        uiState.activePendingApproval?.let { approval ->
+            PendingApprovalDialog(
+                approval = approval,
+                onAllowOnce = {
+                    appState.respondToPendingApproval(
+                        approvalId = approval.id,
+                        decision = ApprovalDecision.ACCEPT,
+                    )
+                },
+                onAllowForSession = {
+                    appState.respondToPendingApproval(
+                        approvalId = approval.id,
+                        decision = ApprovalDecision.ACCEPT_FOR_SESSION,
+                    )
+                },
+                onDeny = {
+                    appState.respondToPendingApproval(
+                        approvalId = approval.id,
+                        decision = ApprovalDecision.DECLINE,
+                    )
+                },
+                onAbort = {
+                    appState.respondToPendingApproval(
+                        approvalId = approval.id,
+                        decision = ApprovalDecision.CANCEL,
+                    )
+                },
             )
         }
 
@@ -334,6 +467,135 @@ fun ShitterAppShell(appState: ShitterAppState) {
                     }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun PendingApprovalDialog(
+    approval: PendingApproval,
+    onAllowOnce: () -> Unit,
+    onAllowForSession: () -> Unit,
+    onDeny: () -> Unit,
+    onAbort: () -> Unit,
+) {
+    val title =
+        when (approval.kind) {
+            ApprovalKind.COMMAND_EXECUTION -> "Approve Command"
+            ApprovalKind.FILE_CHANGE -> "Approve File Change"
+        }
+    val details =
+        remember(approval) {
+            buildList {
+                formatAgentLabel(approval.requesterAgentNickname, approval.requesterAgentRole)?.let {
+                    add("Requester: $it")
+                }
+                approval.reason?.takeIf { it.isNotBlank() }?.let { add("Reason: $it") }
+                approval.cwd?.takeIf { it.isNotBlank() }?.let { add("Directory: $it") }
+                approval.grantRoot?.takeIf { it.isNotBlank() }?.let { add("Grant root: $it") }
+                approval.threadId?.takeIf { it.isNotBlank() }?.let { add("Thread: $it") }
+            }
+        }
+
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = ShitterTheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = title,
+                    color = ShitterTheme.textPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = "Codex requested approval before continuing.",
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+
+                approval.command?.takeIf { it.isNotBlank() }?.let { command ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Command",
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = ShitterTheme.surfaceLight,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    text = command,
+                                    color = ShitterTheme.textPrimary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (details.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        details.forEach { line ->
+                            Text(
+                                text = line,
+                                color = ShitterTheme.textSecondary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onDeny,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Deny")
+                    }
+                    Button(
+                        onClick = onAllowOnce,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Allow Once")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onAbort,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Abort")
+                    }
+                    OutlinedButton(
+                        onClick = onAllowForSession,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Allow Session")
+                    }
+                }
+            }
         }
     }
 }
@@ -462,10 +724,10 @@ private fun ModelSelector(
 private fun StatusDot(connectionStatus: ServerConnectionStatus) {
     val color =
         when (connectionStatus) {
-            ServerConnectionStatus.CONNECTING -> Color(0xFFE2A644)
-            ServerConnectionStatus.READY -> ShitterTheme.accent
-            ServerConnectionStatus.ERROR -> ShitterTheme.danger
-            ServerConnectionStatus.DISCONNECTED -> ShitterTheme.textMuted
+            ServerConnectionStatus.CONNECTING -> ShitterTheme.statusConnecting
+            ServerConnectionStatus.READY -> ShitterTheme.statusReady
+            ServerConnectionStatus.ERROR -> ShitterTheme.statusError
+            ServerConnectionStatus.DISCONNECTED -> ShitterTheme.statusDisconnected
         }
     Box(
         modifier =
@@ -485,16 +747,14 @@ private fun EmptyState(
     val canConnect =
         connectionStatus == ServerConnectionStatus.DISCONNECTED ||
             connectionStatus == ServerConnectionStatus.ERROR
-    val connectedServerNames = remember(connectedServers) { connectedServers.map { it.name }.sorted() }
-    val connectionSummary =
-        remember(connectedServerNames) {
-            val first = connectedServerNames.firstOrNull()
-            if (first.isNullOrBlank()) {
-                ""
-            } else {
-                val extra = connectedServerNames.size - 1
-                if (extra <= 0) "Connected: $first" else "Connected: $first +$extra"
-            }
+    val connectedServerLabels =
+        remember(connectedServers) {
+            connectedServers
+                .sortedBy { it.name.lowercase(Locale.ROOT) }
+                .map { server ->
+                    val name = server.name.ifBlank { "server" }
+                    "$name * ${serverSourceLabel(server.source)}"
+                }
         }
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -511,30 +771,30 @@ private fun EmptyState(
                 style = MaterialTheme.typography.bodyMedium,
                 color = ShitterTheme.textMuted,
             )
-            if (connectedServerNames.isNotEmpty()) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            if (connectedServerLabels.isNotEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(ShitterTheme.accent),
-                    )
                     Text(
-                        text = connectionSummary,
+                        text = "Connected Servers",
                         style = MaterialTheme.typography.labelLarge,
-                        color = ShitterTheme.accent,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        color = ShitterTheme.textSecondary,
                     )
+                    connectedServerLabels.forEach { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ShitterTheme.accent,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
             if (canConnect) {
                 OutlinedButton(onClick = onOpenDiscovery) {
-                    Text("Connect to Server", color = ShitterTheme.accent)
+                    Text(stringResource(R.string.connect_to_server), color = ShitterTheme.accent)
                 }
             }
         }
@@ -543,26 +803,202 @@ private fun EmptyState(
 
 @Composable
 private fun SessionSidebar(
-    modifier: Modifier,
+    modifier: Modifier = Modifier,
     connectionStatus: ServerConnectionStatus,
-    serverCount: Int,
+    connectedServers: List<ServerConfig>,
     sessions: List<ThreadState>,
+    isSidebarOpen: Boolean,
     sessionSearchQuery: String,
+    selectedServerFilterId: String?,
+    showOnlyForks: Boolean,
+    workspaceSortModeRaw: String,
     activeThreadKey: ThreadKey?,
     onSessionSelected: (ThreadKey) -> Unit,
     onSessionSearchQueryChange: (String) -> Unit,
+    onSessionServerFilterChange: (String?) -> Unit,
+    onSessionShowOnlyForksChange: (Boolean) -> Unit,
+    onSessionWorkspaceSortModeChange: (String) -> Unit,
+    onClearSessionFilters: () -> Unit,
     onNewSession: () -> Unit,
     onRefresh: () -> Unit,
+    onForkConversation: () -> Unit,
+    onForkSession: (ThreadKey) -> Unit,
+    onRenameSession: (ThreadKey, String, (Result<Unit>) -> Unit) -> Unit,
+    onArchiveSession: (ThreadKey) -> Unit,
     onOpenDiscovery: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val normalizedQuery = sessionSearchQuery.trim()
-    val filteredSessions =
-        if (normalizedQuery.isEmpty()) {
-            sessions
-        } else {
-            sessions.filter { matchesSessionSearch(it, normalizedQuery) }
+    DebugRecomposeCheckpoint(name = "SessionSidebar")
+    var isServerFilterMenuOpen by remember { mutableStateOf(false) }
+    var isSortMenuOpen by remember { mutableStateOf(false) }
+    val workspaceSortMode = remember(workspaceSortModeRaw) { WorkspaceSortMode.fromRaw(workspaceSortModeRaw) }
+    val collapsedWorkspaceIdsSaver =
+        remember {
+            listSaver<Set<String>, String>(
+                save = { it.toList() },
+                restore = { restored -> restored.toSet() },
+            )
         }
+    var collapsedWorkspaceGroupIds by rememberSaveable(stateSaver = collapsedWorkspaceIdsSaver) { mutableStateOf(setOf<String>()) }
+    val collapsedSessionNodeIdsSaver =
+        remember {
+            listSaver<Set<String>, String>(
+                save = { it.toList() },
+                restore = { restored -> restored.toSet() },
+            )
+        }
+    var collapsedSessionNodeIds by rememberSaveable(stateSaver = collapsedSessionNodeIdsSaver) { mutableStateOf(setOf<String>()) }
+    var rowMenuThreadKey by remember { mutableStateOf<ThreadKey?>(null) }
+    var renameTargetThread by remember { mutableStateOf<ThreadState?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    var renameError by remember { mutableStateOf<String?>(null) }
+    var archiveTargetThread by remember { mutableStateOf<ThreadState?>(null) }
+    val sessionListState = rememberLazyListState()
+    var pendingActiveSessionScroll by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isSidebarOpen) {
+        pendingActiveSessionScroll = isSidebarOpen
+    }
+
+    LaunchedEffect(connectedServers, selectedServerFilterId) {
+        if (selectedServerFilterId != null && connectedServers.none { it.id == selectedServerFilterId }) {
+            onSessionServerFilterChange(null)
+        }
+    }
+
+    val lineageIndex = remember(sessions) { buildThreadLineageIndex(sessions) }
+    val normalizedQuery by remember(sessionSearchQuery) {
+        derivedStateOf { sessionSearchQuery.trim().lowercase(Locale.ROOT) }
+    }
+    val filteredSessions by
+        remember(sessions, selectedServerFilterId, showOnlyForks, normalizedQuery, lineageIndex.searchableTextByKey) {
+            derivedStateOf {
+                sessions
+                    .asSequence()
+                    .filter { thread ->
+                        val serverMatches = selectedServerFilterId == null || thread.key.serverId == selectedServerFilterId
+                        val forkMatches = !showOnlyForks || thread.isFork
+                        val searchMatches =
+                            normalizedQuery.isEmpty() ||
+                                matchesSessionSearch(
+                                    thread = thread,
+                                    normalizedQuery = normalizedQuery,
+                                    searchableTextByKey = lineageIndex.searchableTextByKey,
+                                )
+                        serverMatches && forkMatches && searchMatches
+                    }.toList()
+            }
+        }
+    val workspaceGroups by
+        remember(filteredSessions, workspaceSortMode) {
+            derivedStateOf { groupSessionsByWorkspace(filteredSessions, workspaceSortMode) }
+        }
+    val workspaceSections by
+        remember(workspaceGroups, workspaceSortMode) {
+            derivedStateOf { buildWorkspaceSections(workspaceGroups, workspaceSortMode) }
+        }
+    val activeSession = sessions.firstOrNull { it.key == activeThreadKey }
+    val activeWorkspaceGroupId by
+        remember(workspaceGroups, activeThreadKey) {
+            derivedStateOf {
+                val targetKey = activeThreadKey ?: return@derivedStateOf null
+                workspaceGroups.firstOrNull { group -> group.threads.any { it.key == targetKey } }?.id
+            }
+        }
+    val activeSessionItemIndex by
+        remember(workspaceSections, collapsedWorkspaceGroupIds, collapsedSessionNodeIds, activeThreadKey, lineageIndex.parentByKey) {
+            derivedStateOf {
+                val targetKey = activeThreadKey ?: return@derivedStateOf null
+                var runningIndex = 0
+                for (section in workspaceSections) {
+                    if (section.title != null) {
+                        runningIndex += 1 // date section label row
+                    }
+                    for (group in section.groups) {
+                        runningIndex += 1 // workspace header row
+                        if (collapsedWorkspaceGroupIds.contains(group.id)) {
+                            continue
+                        }
+                        val visibleRows =
+                            buildVisibleSessionTreeRows(
+                                groupThreads = group.threads,
+                                parentByKey = lineageIndex.parentByKey,
+                                collapsedNodeIds = collapsedSessionNodeIds,
+                            )
+                        val threadIndex = visibleRows.indexOfFirst { it.thread.key == targetKey }
+                        if (threadIndex >= 0) {
+                            return@derivedStateOf runningIndex + threadIndex
+                        }
+                        runningIndex += visibleRows.size
+                    }
+                }
+                null
+            }
+        }
+    val collapsedAncestorNodeId by
+        remember(activeThreadKey, collapsedSessionNodeIds, lineageIndex.parentByKey) {
+            derivedStateOf {
+                val targetKey = activeThreadKey ?: return@derivedStateOf null
+                ancestorThreadKeys(targetKey, lineageIndex.parentByKey)
+                    .asReversed()
+                    .map(::threadNodeId)
+                    .firstOrNull { collapsedSessionNodeIds.contains(it) }
+            }
+        }
+    val serverNameById =
+        remember(connectedServers) {
+            connectedServers.associate { it.id to it.name }
+        }
+
+    LaunchedEffect(workspaceGroups) {
+        val validIds = workspaceGroups.map { it.id }.toSet()
+        collapsedWorkspaceGroupIds = collapsedWorkspaceGroupIds.intersect(validIds)
+    }
+
+    LaunchedEffect(sessions) {
+        val validIds = sessions.map { thread -> threadNodeId(thread.key) }.toSet()
+        collapsedSessionNodeIds = collapsedSessionNodeIds.intersect(validIds)
+    }
+
+    LaunchedEffect(
+        pendingActiveSessionScroll,
+        isSidebarOpen,
+        activeThreadKey,
+        activeWorkspaceGroupId,
+        activeSessionItemIndex,
+        collapsedWorkspaceGroupIds,
+        collapsedAncestorNodeId,
+    ) {
+        if (!pendingActiveSessionScroll || !isSidebarOpen) {
+            return@LaunchedEffect
+        }
+        if (activeThreadKey == null) {
+            pendingActiveSessionScroll = false
+            return@LaunchedEffect
+        }
+        val targetGroupId = activeWorkspaceGroupId
+        if (targetGroupId == null) {
+            pendingActiveSessionScroll = false
+            return@LaunchedEffect
+        }
+        if (collapsedWorkspaceGroupIds.contains(targetGroupId)) {
+            collapsedWorkspaceGroupIds = collapsedWorkspaceGroupIds - targetGroupId
+            return@LaunchedEffect
+        }
+        val ancestorNodeId = collapsedAncestorNodeId
+        if (ancestorNodeId != null) {
+            collapsedSessionNodeIds = collapsedSessionNodeIds - ancestorNodeId
+            return@LaunchedEffect
+        }
+        val targetIndex = activeSessionItemIndex
+        if (targetIndex == null) {
+            pendingActiveSessionScroll = false
+            return@LaunchedEffect
+        }
+
+        pendingActiveSessionScroll = false
+        sessionListState.scrollToItem(targetIndex)
+    }
 
     Surface(
         modifier = modifier,
@@ -571,7 +1007,7 @@ private fun SessionSidebar(
     ) {
         Column(
             modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Button(
                 onClick = onNewSession,
@@ -589,7 +1025,7 @@ private fun SessionSidebar(
                 Text(
                     text =
                         if (connectionStatus == ServerConnectionStatus.READY) {
-                            "$serverCount server${if (serverCount == 1) "" else "s"}"
+                            "${connectedServers.size} server${if (connectedServers.size == 1) "" else "s"}"
                         } else {
                             "Not connected"
                         },
@@ -599,6 +1035,14 @@ private fun SessionSidebar(
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = onOpenDiscovery) {
                         Text(if (connectionStatus == ServerConnectionStatus.READY) "Add" else "Connect")
+                    }
+                    if (activeSession != null) {
+                        TextButton(
+                            enabled = !activeSession.hasTurnActive,
+                            onClick = onForkConversation,
+                        ) {
+                            Text("Fork")
+                        }
                     }
                     TextButton(onClick = onRefresh) {
                         Text("Refresh")
@@ -623,80 +1067,181 @@ private fun SessionSidebar(
                     singleLine = true,
                 )
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val selectedServerName =
+                        selectedServerFilterId
+                            ?.let { id -> serverNameById[id] }
+                            ?: "All servers"
+
+                    Box {
+                        OutlinedButton(
+                            onClick = { isServerFilterMenuOpen = true },
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(selectedServerName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        DropdownMenu(
+                            expanded = isServerFilterMenuOpen,
+                            onDismissRequest = { isServerFilterMenuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("All servers") },
+                                onClick = {
+                                    onSessionServerFilterChange(null)
+                                    isServerFilterMenuOpen = false
+                                },
+                            )
+                            connectedServers.forEach { server ->
+                                DropdownMenuItem(
+                                    text = { Text(server.name) },
+                                    onClick = {
+                                        onSessionServerFilterChange(server.id)
+                                        isServerFilterMenuOpen = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { onSessionShowOnlyForksChange(!showOnlyForks) },
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text(if (showOnlyForks) "Forks only" else "Forks")
+                    }
+
+                    Box {
+                        OutlinedButton(
+                            onClick = { isSortMenuOpen = true },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.size(40.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                        ) {
+                            Icon(
+                                imageVector = workspaceSortModeIcon(),
+                                contentDescription = "Sort sessions by ${workspaceSortMode.title}",
+                                tint = ShitterTheme.textSecondary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = isSortMenuOpen,
+                            onDismissRequest = { isSortMenuOpen = false },
+                        ) {
+                            WorkspaceSortMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(mode.title) },
+                                    onClick = {
+                                        onSessionWorkspaceSortModeChange(mode.name)
+                                        isSortMenuOpen = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    if (selectedServerFilterId != null || showOnlyForks) {
+                        TextButton(
+                            onClick = onClearSessionFilters,
+                        ) {
+                            Text("Clear")
+                        }
+                    }
+                }
+
                 if (filteredSessions.isEmpty()) {
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
-                        text = "No matches for \"$normalizedQuery\"",
+                        text = if (normalizedQuery.isEmpty()) "No sessions match the active filters" else "No matches for \"$normalizedQuery\"",
                         color = ShitterTheme.textMuted,
                         modifier = Modifier.align(Alignment.CenterHorizontally),
                     )
                     Spacer(modifier = Modifier.weight(1f))
                 } else {
                     LazyColumn(
+                        state = sessionListState,
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
                     ) {
-                        items(items = filteredSessions, key = { "${it.key.serverId}:${it.key.threadId}" }) { thread ->
-                            val isActive = thread.key == activeThreadKey
-                            Surface(
-                                modifier = Modifier.fillMaxWidth().clickable { onSessionSelected(thread.key) },
-                                color =
-                                    if (isActive) {
-                                        ShitterTheme.surfaceLight.copy(alpha = 0.58f)
-                                    } else {
-                                        ShitterTheme.surface.copy(alpha = 0.58f)
-                                    },
-                                shape = RoundedCornerShape(8.dp),
-                                border =
-                                    androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        if (isActive) ShitterTheme.accent else ShitterTheme.border,
-                                    ),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.Top,
-                                ) {
-                                    if (thread.hasTurnActive) {
-                                        ActiveTurnPulseDot(modifier = Modifier.padding(top = 3.dp))
-                                    } else {
-                                        Spacer(modifier = Modifier.size(8.dp))
-                                    }
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                    ) {
-                                        Text(
-                                            text = thread.preview.ifBlank { "Untitled session" },
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = ShitterTheme.textPrimary,
-                                            style = MaterialTheme.typography.bodyMedium,
+                        workspaceSections.forEach { section ->
+                            section.title?.let { title ->
+                                item(key = "workspace-section-${section.id}") {
+                                    Text(
+                                        text = title,
+                                        color = ShitterTheme.textMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+                                    )
+                                }
+                            }
+
+                            section.groups.forEach { group ->
+                                val isCollapsed = collapsedWorkspaceGroupIds.contains(group.id)
+                                item(key = "workspace-${group.id}") {
+                                    WorkspaceSessionGroupHeader(
+                                        group = group,
+                                        isCollapsed = isCollapsed,
+                                        onToggle = {
+                                            collapsedWorkspaceGroupIds =
+                                                if (isCollapsed) {
+                                                    collapsedWorkspaceGroupIds - group.id
+                                                } else {
+                                                    collapsedWorkspaceGroupIds + group.id
+                                                }
+                                        },
+                                    )
+                                }
+
+                                if (!isCollapsed) {
+                                    val visibleRows =
+                                        buildVisibleSessionTreeRows(
+                                            groupThreads = group.threads,
+                                            parentByKey = lineageIndex.parentByKey,
+                                            collapsedNodeIds = collapsedSessionNodeIds,
                                         )
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Text(
-                                                text = relativeDate(thread.updatedAtEpochMillis),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                color = ShitterTheme.textSecondary,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                            ServerSourceBadge(
-                                                source = thread.serverSource,
-                                                serverName = thread.serverName,
-                                            )
-                                            Text(
-                                                text = cwdLeaf(thread.cwd),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                color = ShitterTheme.textMuted,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                        }
+                                    items(items = visibleRows, key = { threadNodeId(it.thread.key) }) { row ->
+                                        val thread = row.thread
+                                        val isNodeCollapsed = collapsedSessionNodeIds.contains(threadNodeId(thread.key))
+                                        AllThreadsSessionRow(
+                                            row = row,
+                                            parentThread = lineageIndex.parentByKey[thread.key],
+                                            siblings = lineageIndex.siblingsByKey[thread.key].orEmpty(),
+                                            children = lineageIndex.childrenByParentKey[thread.key].orEmpty(),
+                                            isActive = thread.key == activeThreadKey,
+                                            isNodeCollapsed = isNodeCollapsed,
+                                            onSessionSelected = onSessionSelected,
+                                            onToggleNode = {
+                                                if (row.hasChildren) {
+                                                    collapsedSessionNodeIds =
+                                                        if (isNodeCollapsed) {
+                                                            collapsedSessionNodeIds - threadNodeId(thread.key)
+                                                        } else {
+                                                            collapsedSessionNodeIds + threadNodeId(thread.key)
+                                                        }
+                                                }
+                                            },
+                                            menuExpanded = rowMenuThreadKey == thread.key,
+                                            onOpenMenu = { rowMenuThreadKey = thread.key },
+                                            onDismissMenu = { rowMenuThreadKey = null },
+                                            onRename = {
+                                                renameTargetThread = thread
+                                                renameDraft = ""
+                                                renameError = null
+                                                rowMenuThreadKey = null
+                                            },
+                                            onFork = {
+                                                onForkSession(thread.key)
+                                                rowMenuThreadKey = null
+                                            },
+                                            onDelete = {
+                                                archiveTargetThread = thread
+                                                rowMenuThreadKey = null
+                                            },
+                                        )
                                     }
                                 }
                             }
@@ -729,18 +1274,765 @@ private fun SessionSidebar(
             }
         }
     }
+
+    renameTargetThread?.let { thread ->
+        AlertDialog(
+            onDismissRequest = {
+                renameTargetThread = null
+                renameDraft = ""
+                renameError = null
+            },
+            title = { Text("Rename Session") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = thread.preview.ifBlank { "Untitled session" },
+                        color = ShitterTheme.textSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = renameDraft,
+                        onValueChange = {
+                            renameDraft = it
+                            renameError = null
+                        },
+                        singleLine = true,
+                        label = { Text("New title") },
+                        placeholder = { Text("New session title") },
+                    )
+                    renameError?.let {
+                        Text(
+                            text = it,
+                            color = ShitterTheme.danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        renameTargetThread = null
+                        renameDraft = ""
+                        renameError = null
+                    },
+                ) {
+                    Text("Cancel")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = renameDraft.trim().isNotEmpty(),
+                    onClick = {
+                        onRenameSession(thread.key, renameDraft) { result ->
+                            result.onFailure { error ->
+                                renameError = error.message ?: "Failed to rename session"
+                            }
+                            result.onSuccess {
+                                renameTargetThread = null
+                                renameDraft = ""
+                                renameError = null
+                            }
+                        }
+                    },
+                ) {
+                    Text("Save")
+                }
+            },
+        )
+    }
+
+    archiveTargetThread?.let { thread ->
+        AlertDialog(
+            onDismissRequest = { archiveTargetThread = null },
+            title = { Text("Delete Session") },
+            text = { Text("Remove \"${thread.preview.ifBlank { "Untitled session" }}\" from the sidebar?") },
+            dismissButton = {
+                TextButton(onClick = { archiveTargetThread = null }) {
+                    Text("Cancel")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onArchiveSession(thread.key)
+                        archiveTargetThread = null
+                    },
+                ) {
+                    Text("Delete", color = ShitterTheme.danger)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun AllThreadsSessionRow(
+    row: SessionTreeRow,
+    parentThread: ThreadState?,
+    siblings: List<ThreadState>,
+    children: List<ThreadState>,
+    isActive: Boolean,
+    isNodeCollapsed: Boolean,
+    onSessionSelected: (ThreadKey) -> Unit,
+    onToggleNode: () -> Unit,
+    menuExpanded: Boolean,
+    onOpenMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRename: () -> Unit,
+    onFork: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val thread = row.thread
+    val hasLineage = parentThread != null || siblings.isNotEmpty() || children.isNotEmpty()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onSessionSelected(thread.key) }
+                    .background(
+                        if (isActive) {
+                            ShitterTheme.surfaceLight.copy(alpha = 0.55f)
+                        } else {
+                            Color.Transparent
+                        },
+                    ).padding(start = 1.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.Top,
+            ) {
+                SessionTreePrefix(
+                    depth = row.depth,
+                    hasChildren = row.hasChildren,
+                    isCollapsed = isNodeCollapsed,
+                    onToggle = onToggleNode,
+                )
+
+                Text(
+                    text = thread.preview.ifBlank { "Untitled session" },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = ShitterTheme.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+
+                if (thread.isFork) {
+                    Surface(
+                        color = ShitterTheme.accent,
+                        shape = RoundedCornerShape(4.dp),
+                    ) {
+                        Text(
+                            text = "Fork",
+                            color = Color.Black,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                SessionRowMenu(
+                    expanded = menuExpanded,
+                    onOpenMenu = onOpenMenu,
+                    onDismissMenu = onDismissMenu,
+                    onRename = onRename,
+                    onFork = onFork,
+                    onDelete = onDelete,
+                )
+            }
+
+            Text(
+                text = sessionMetaLine(thread),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = ShitterTheme.textSecondary,
+                style = MaterialTheme.typography.labelLarge,
+            )
+
+            parentThread?.let {
+                Text(
+                    text = "from ${it.preview.ifBlank { "Untitled session" }}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = ShitterTheme.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+
+            if (thread.cwd.isNotBlank()) {
+                Text(
+                    text = thread.cwd,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = ShitterTheme.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+
+            if (isActive && hasLineage) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    parentThread?.let {
+                        SessionLineageChip(
+                            title = "Parent",
+                            count = 1,
+                            onClick = { onSessionSelected(it.key) },
+                        )
+                    }
+                    if (siblings.isNotEmpty()) {
+                        SessionLineageChip(
+                            title = "Siblings",
+                            count = siblings.size,
+                            onClick = { siblings.firstOrNull()?.let { sibling -> onSessionSelected(sibling.key) } },
+                        )
+                    }
+                    if (children.isNotEmpty()) {
+                        SessionLineageChip(
+                            title = "Children",
+                            count = children.size,
+                            onClick = { children.firstOrNull()?.let { child -> onSessionSelected(child.key) } },
+                        )
+                    }
+                }
+            }
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 24.dp),
+            color = ShitterTheme.border.copy(alpha = 0.65f),
+            thickness = 1.dp,
+        )
+    }
+}
+
+@Composable
+private fun SessionRowMenu(
+    expanded: Boolean,
+    onOpenMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRename: () -> Unit,
+    onFork: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Box {
+        IconButton(
+            modifier = Modifier.size(20.dp),
+            onClick = onOpenMenu,
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "Session actions",
+                tint = ShitterTheme.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissMenu,
+        ) {
+            DropdownMenuItem(
+                text = { Text("Rename") },
+                onClick = onRename,
+            )
+            DropdownMenuItem(
+                text = { Text("Fork") },
+                onClick = onFork,
+            )
+            DropdownMenuItem(
+                text = { Text("Delete") },
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceSessionGroupHeader(
+    group: WorkspaceSessionGroup,
+    isCollapsed: Boolean,
+    onToggle: () -> Unit,
+) {
+    val sessionCountLabel = if (group.threads.size == 1) "1 session" else "${group.threads.size} sessions"
+    val detailLine =
+        if (group.workspacePath == group.workspaceTitle) {
+            "${group.serverName} • $sessionCountLabel"
+        } else {
+            "${group.serverName} • ${group.workspacePath} • $sessionCountLabel"
+        }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                contentDescription = null,
+                tint = ShitterTheme.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = ShitterTheme.accent,
+                modifier = Modifier.size(13.dp),
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = group.workspaceTitle,
+                    color = ShitterTheme.textPrimary,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = detailLine,
+                    color = ShitterTheme.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        HorizontalDivider(
+            color = ShitterTheme.border.copy(alpha = 0.75f),
+            thickness = 1.dp,
+        )
+    }
+}
+
+@Composable
+private fun SessionTreePrefix(
+    depth: Int,
+    hasChildren: Boolean,
+    isCollapsed: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.padding(top = 1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (depth > 0) {
+            Spacer(modifier = Modifier.width((depth * 8).dp))
+        }
+        if (hasChildren) {
+            Box(
+                modifier =
+                    Modifier
+                        .size(12.dp)
+                        .clickable(onClick = onToggle),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (isCollapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                    tint = ShitterTheme.textSecondary,
+                    modifier = Modifier.size(10.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionLineageChip(
+    title: String,
+    count: Int,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        color = ShitterTheme.surface.copy(alpha = 0.7f),
+        shape = RoundedCornerShape(5.dp),
+        border =
+            androidx.compose.foundation.BorderStroke(
+                1.dp,
+                ShitterTheme.accent.copy(alpha = 0.45f),
+            ),
+    ) {
+        Text(
+            text = "$title $count",
+            color = ShitterTheme.accent,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF000000)
+@Composable
+private fun SessionLineageChipPreview() {
+    ShitterAppTheme {
+        SessionLineageChip(
+            title = "Children",
+            count = 3,
+            onClick = {},
+        )
+    }
+}
+
+private fun sessionMetaLine(thread: ThreadState): String {
+    val modelLabel = thread.modelProvider.ifBlank { "default" }
+    val agentLabel = formatAgentLabel(thread.agentNickname, thread.agentRole)
+    val serverLabel = if (agentLabel != null) "${thread.serverName} ($agentLabel)" else thread.serverName
+    return "${relativeDate(thread.updatedAtEpochMillis)} • $serverLabel • $modelLabel"
+}
+
+private fun formatAgentLabel(
+    nickname: String?,
+    role: String?,
+    fallbackThreadId: String? = null,
+): String? {
+    val cleanNickname = nickname?.trim().orEmpty()
+    val cleanRole = role?.trim().orEmpty()
+    return when {
+        cleanNickname.isNotEmpty() && cleanRole.isNotEmpty() -> "$cleanNickname [$cleanRole]"
+        cleanNickname.isNotEmpty() -> cleanNickname
+        cleanRole.isNotEmpty() -> "[$cleanRole]"
+        !fallbackThreadId.isNullOrBlank() -> fallbackThreadId
+        else -> null
+    }
+}
+
+private fun threadNodeId(key: ThreadKey): String = "${key.serverId}:${key.threadId}"
+
+private data class SessionTreeRow(
+    val thread: ThreadState,
+    val depth: Int,
+    val hasChildren: Boolean,
+)
+
+private fun buildVisibleSessionTreeRows(
+    groupThreads: List<ThreadState>,
+    parentByKey: Map<ThreadKey, ThreadState>,
+    collapsedNodeIds: Set<String>,
+): List<SessionTreeRow> {
+    if (groupThreads.isEmpty()) {
+        return emptyList()
+    }
+
+    val threadsByKey = groupThreads.associateBy { thread -> thread.key }
+    val childrenByParentKey = LinkedHashMap<ThreadKey, MutableList<ThreadState>>()
+    groupThreads.forEach { thread ->
+        val parent = parentByKey[thread.key] ?: return@forEach
+        if (!threadsByKey.containsKey(parent.key)) {
+            return@forEach
+        }
+        childrenByParentKey.getOrPut(parent.key) { mutableListOf() }.add(thread)
+    }
+
+    val sortedChildrenByParentKey =
+        childrenByParentKey.mapValues { (_, children) ->
+            children.sortedByDescending { it.updatedAtEpochMillis }
+        }
+
+    val roots =
+        groupThreads.filter { thread ->
+            val parent = parentByKey[thread.key] ?: return@filter true
+            !threadsByKey.containsKey(parent.key)
+        }
+
+    val rows = mutableListOf<SessionTreeRow>()
+    val emitted = mutableSetOf<ThreadKey>()
+
+    fun appendThread(thread: ThreadState, depth: Int, path: MutableSet<ThreadKey>) {
+        if (!emitted.add(thread.key) || !path.add(thread.key)) {
+            return
+        }
+        val children = sortedChildrenByParentKey[thread.key].orEmpty()
+        rows += SessionTreeRow(thread = thread, depth = depth, hasChildren = children.isNotEmpty())
+        if (!collapsedNodeIds.contains(threadNodeId(thread.key))) {
+            children.forEach { child ->
+                appendThread(child, depth + 1, path)
+            }
+        }
+        path.remove(thread.key)
+    }
+
+    roots.forEach { root ->
+        appendThread(root, depth = 0, path = mutableSetOf())
+    }
+    groupThreads.forEach { thread ->
+        if (!emitted.contains(thread.key)) {
+            appendThread(thread, depth = 0, path = mutableSetOf())
+        }
+    }
+
+    return rows
+}
+
+private fun ancestorThreadKeys(
+    targetKey: ThreadKey,
+    parentByKey: Map<ThreadKey, ThreadState>,
+): List<ThreadKey> {
+    val ancestors = mutableListOf<ThreadKey>()
+    val visited = mutableSetOf<ThreadKey>()
+    var cursor: ThreadState? = parentByKey[targetKey]
+    while (cursor != null && visited.add(cursor.key)) {
+        ancestors += cursor.key
+        cursor = parentByKey[cursor.key]
+    }
+    return ancestors
+}
+
+internal data class ThreadLineageIndex(
+    val parentByKey: Map<ThreadKey, ThreadState>,
+    val siblingsByKey: Map<ThreadKey, List<ThreadState>>,
+    val childrenByParentKey: Map<ThreadKey, List<ThreadState>>,
+    val searchableTextByKey: Map<ThreadKey, String>,
+)
+
+internal fun buildThreadLineageIndex(allThreads: List<ThreadState>): ThreadLineageIndex {
+    val threadByKey =
+        allThreads.associateBy { thread ->
+            thread.key
+        }
+    val childrenByParentKey = LinkedHashMap<ThreadKey, MutableList<ThreadState>>()
+    val parentByKey = LinkedHashMap<ThreadKey, ThreadState>()
+
+    allThreads.forEach { thread ->
+        val parentId = thread.parentThreadId?.trim().orEmpty()
+        val resolvedParent =
+            if (parentId.isNotEmpty()) {
+                val parentKey = ThreadKey(serverId = thread.key.serverId, threadId = parentId)
+                threadByKey[parentKey]
+            } else {
+                null
+            } ?:
+                run {
+                    val rootId = thread.rootThreadId?.trim().orEmpty()
+                    if (rootId.isEmpty() || rootId == thread.key.threadId) {
+                        null
+                    } else {
+                        threadByKey[ThreadKey(serverId = thread.key.serverId, threadId = rootId)]
+                    }
+                }
+        if (resolvedParent == null) {
+            return@forEach
+        }
+        parentByKey[thread.key] = resolvedParent
+        childrenByParentKey.getOrPut(resolvedParent.key) { mutableListOf() }.add(thread)
+    }
+
+    val sortedChildrenByParentKey =
+        childrenByParentKey.mapValues { (_, children) ->
+            children.sortedByDescending { it.updatedAtEpochMillis }
+        }
+
+    val siblingsByKey = LinkedHashMap<ThreadKey, List<ThreadState>>()
+    sortedChildrenByParentKey.values.forEach { siblingsGroup ->
+        if (siblingsGroup.isEmpty()) {
+            return@forEach
+        }
+        siblingsGroup.forEachIndexed { index, thread ->
+            val siblings =
+                if (siblingsGroup.size <= 1) {
+                    emptyList()
+                } else {
+                    buildList(siblingsGroup.size - 1) {
+                        for (siblingIndex in siblingsGroup.indices) {
+                            if (siblingIndex != index) {
+                                add(siblingsGroup[siblingIndex])
+                            }
+                        }
+                    }
+                }
+            siblingsByKey[thread.key] = siblings
+        }
+    }
+
+    val searchableTextByKey =
+        allThreads.associate { thread ->
+            val parentPreview = parentByKey[thread.key]?.preview.orEmpty()
+            thread.key to
+                listOf(
+                    thread.preview,
+                    thread.cwd,
+                    thread.serverName,
+                    thread.modelProvider,
+                    parentPreview,
+                ).joinToString(separator = "\n")
+                    .lowercase(Locale.ROOT)
+        }
+
+    return ThreadLineageIndex(
+        parentByKey = parentByKey,
+        siblingsByKey = siblingsByKey,
+        childrenByParentKey = sortedChildrenByParentKey,
+        searchableTextByKey = searchableTextByKey,
+    )
 }
 
 private fun matchesSessionSearch(
     thread: ThreadState,
-    query: String,
+    normalizedQuery: String,
+    searchableTextByKey: Map<ThreadKey, String>,
 ): Boolean {
-    val normalizedQuery = query.lowercase(Locale.ROOT)
-    return thread.preview.lowercase(Locale.ROOT).contains(normalizedQuery) ||
-        thread.cwd.lowercase(Locale.ROOT).contains(normalizedQuery) ||
-        thread.serverName.lowercase(Locale.ROOT).contains(normalizedQuery)
+    if (normalizedQuery.isBlank()) {
+        return true
+    }
+    return searchableTextByKey[thread.key]?.contains(normalizedQuery) == true
 }
 
+private data class WorkspaceSessionGroup(
+    val id: String,
+    val serverName: String,
+    val workspacePath: String,
+    val workspaceTitle: String,
+    val latestUpdatedAtEpochMillis: Long,
+    val threads: List<ThreadState>,
+)
+
+private enum class WorkspaceSortMode(
+    val title: String,
+) {
+    MOST_RECENT("Most Recent"),
+    NAME("Name"),
+    DATE("Date"),
+    ;
+
+    companion object {
+        fun fromRaw(value: String?): WorkspaceSortMode =
+            entries.firstOrNull { it.name == value } ?: MOST_RECENT
+    }
+}
+
+private fun workspaceSortModeIcon(): ImageVector = Icons.Filled.SwapVert
+
+private data class WorkspaceGroupSection(
+    val id: String,
+    val title: String?,
+    val groups: List<WorkspaceSessionGroup>,
+)
+
+private fun groupSessionsByWorkspace(
+    threads: List<ThreadState>,
+    sortMode: WorkspaceSortMode,
+): List<WorkspaceSessionGroup> {
+    val grouped = LinkedHashMap<String, MutableList<ThreadState>>()
+    threads.forEach { thread ->
+        val workspacePath = normalizeFolderPath(thread.cwd)
+        val groupId = "${thread.key.serverId}:$workspacePath"
+        grouped.getOrPut(groupId) { mutableListOf() }.add(thread)
+    }
+    return grouped
+        .mapNotNull { (groupId, groupThreads) ->
+            val sortedThreads = groupThreads.sortedByDescending { it.updatedAtEpochMillis }
+            val first = sortedThreads.firstOrNull() ?: return@mapNotNull null
+            val workspacePath = normalizeFolderPath(first.cwd)
+            WorkspaceSessionGroup(
+                id = groupId,
+                serverName = first.serverName,
+                workspacePath = workspacePath,
+                workspaceTitle = cwdLeaf(workspacePath),
+                latestUpdatedAtEpochMillis = first.updatedAtEpochMillis,
+                threads = sortedThreads,
+            )
+        }.let { unsorted -> sortWorkspaceGroups(unsorted, sortMode) }
+}
+
+private fun sortWorkspaceGroups(
+    groups: List<WorkspaceSessionGroup>,
+    sortMode: WorkspaceSortMode,
+): List<WorkspaceSessionGroup> {
+    return groups.sortedWith { lhs, rhs ->
+        when (sortMode) {
+            WorkspaceSortMode.MOST_RECENT -> {
+                when {
+                    lhs.latestUpdatedAtEpochMillis != rhs.latestUpdatedAtEpochMillis ->
+                        rhs.latestUpdatedAtEpochMillis.compareTo(lhs.latestUpdatedAtEpochMillis)
+                    else -> lhs.workspaceTitle.lowercase(Locale.ROOT).compareTo(rhs.workspaceTitle.lowercase(Locale.ROOT))
+                }
+            }
+
+            WorkspaceSortMode.NAME -> {
+                val titleOrder = lhs.workspaceTitle.lowercase(Locale.ROOT).compareTo(rhs.workspaceTitle.lowercase(Locale.ROOT))
+                if (titleOrder != 0) {
+                    return@sortedWith titleOrder
+                }
+                val pathOrder = lhs.workspacePath.lowercase(Locale.ROOT).compareTo(rhs.workspacePath.lowercase(Locale.ROOT))
+                if (pathOrder != 0) {
+                    return@sortedWith pathOrder
+                }
+                val serverOrder = lhs.serverName.lowercase(Locale.ROOT).compareTo(rhs.serverName.lowercase(Locale.ROOT))
+                if (serverOrder != 0) {
+                    return@sortedWith serverOrder
+                }
+                rhs.latestUpdatedAtEpochMillis.compareTo(lhs.latestUpdatedAtEpochMillis)
+            }
+
+            WorkspaceSortMode.DATE -> {
+                when {
+                    lhs.latestUpdatedAtEpochMillis != rhs.latestUpdatedAtEpochMillis ->
+                        rhs.latestUpdatedAtEpochMillis.compareTo(lhs.latestUpdatedAtEpochMillis)
+                    else -> lhs.workspaceTitle.lowercase(Locale.ROOT).compareTo(rhs.workspaceTitle.lowercase(Locale.ROOT))
+                }
+            }
+        }
+    }
+}
+
+private fun buildWorkspaceSections(
+    groups: List<WorkspaceSessionGroup>,
+    sortMode: WorkspaceSortMode,
+): List<WorkspaceGroupSection> {
+    if (groups.isEmpty()) {
+        return emptyList()
+    }
+    if (sortMode != WorkspaceSortMode.DATE) {
+        return listOf(WorkspaceGroupSection(id = "all", title = null, groups = groups))
+    }
+
+    val nowDayStart = dayStartMillis(System.currentTimeMillis())
+    val groupsByDay = LinkedHashMap<Long, MutableList<WorkspaceSessionGroup>>()
+    groups.forEach { group ->
+        val dayStart = dayStartMillis(group.latestUpdatedAtEpochMillis)
+        groupsByDay.getOrPut(dayStart) { mutableListOf() }.add(group)
+    }
+
+    return groupsByDay.entries.map { (dayStart, dayGroups) ->
+        WorkspaceGroupSection(
+            id = "workspace-day-$dayStart",
+            title = workspaceDateSectionLabel(dayStart, nowDayStart),
+            groups = dayGroups,
+        )
+    }
+}
+
+private fun dayStartMillis(epochMillis: Long): Long {
+    val calendar = Calendar.getInstance()
+    calendar.timeInMillis = epochMillis
+    calendar.set(Calendar.HOUR_OF_DAY, 0)
+    calendar.set(Calendar.MINUTE, 0)
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+    return calendar.timeInMillis
+}
+
+private fun workspaceDateSectionLabel(
+    dayStartMillis: Long,
+    nowDayStartMillis: Long,
+): String {
+    val dayDelta = ((nowDayStartMillis - dayStartMillis) / DateUtils.DAY_IN_MILLIS).toInt().coerceAtLeast(0)
+    return when {
+        dayDelta == 0 -> "Today"
+        dayDelta == 1 -> "Yesterday"
+        dayDelta in 2..6 -> "$dayDelta days ago"
+        else -> SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(dayStartMillis))
+    }
+}
 @Composable
 private fun BrandLogo(
     size: androidx.compose.ui.unit.Dp,
@@ -775,6 +2067,40 @@ private fun ActiveTurnPulseDot(modifier: Modifier = Modifier) {
                 .clip(CircleShape)
                 .background(ShitterTheme.accent.copy(alpha = pulse.coerceIn(0.45f, 1f))),
     )
+}
+
+@Composable
+private fun TypingIndicator(modifier: Modifier = Modifier) {
+    var phase by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400L)
+            phase = (phase + 1) % 3
+        }
+    }
+
+    Row(
+        modifier = modifier.clearAndSetSemantics { },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(3) { index ->
+            val alpha by
+                animateFloatAsState(
+                    targetValue = if (phase == index) 1f else 0.3f,
+                    animationSpec = tween(durationMillis = 150),
+                    label = "typing_indicator_dot_alpha_$index",
+                )
+            Box(
+                modifier =
+                    Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(ShitterTheme.accent.copy(alpha = alpha)),
+            )
+        }
+    }
 }
 
 @Composable
@@ -814,6 +2140,9 @@ private fun ServerSourceBadge(
 @Composable
 private fun ConversationPanel(
     messages: List<ChatMessage>,
+    toolTargetLabelsById: Map<String, String>,
+    activeThreadKey: ThreadKey?,
+    conversationTextSizeStep: Int,
     draft: String,
     isSending: Boolean,
     models: List<ModelOption>,
@@ -824,6 +2153,7 @@ private fun ConversationPanel(
     currentCwd: String,
     activeThreadPreview: String,
     onDraftChange: (String) -> Unit,
+    onConversationTextSizeStepChanged: (Int) -> Unit,
     onFileSearch: (String, (Result<List<FuzzyFileSearchResult>>) -> Unit) -> Unit,
     onSelectModel: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
@@ -835,13 +2165,46 @@ private fun ConversationPanel(
     onListExperimentalFeatures: ((Result<List<ExperimentalFeature>>) -> Unit) -> Unit,
     onSetExperimentalFeatureEnabled: (String, Boolean, (Result<Unit>) -> Unit) -> Unit,
     onListSkills: (String?, Boolean, (Result<List<SkillMetadata>>) -> Unit) -> Unit,
-    onSend: (String) -> Unit,
+    onForkConversation: () -> Unit,
+    onEditMessage: (ChatMessage) -> Unit,
+    onForkFromMessage: (ChatMessage) -> Unit,
+    onSend: (String, List<SkillMentionInput>) -> Unit,
     onInterrupt: () -> Unit,
 ) {
+    DebugRecomposeCheckpoint(name = "ConversationPanel")
     val context = LocalContext.current
+    val markdownMarkwon = remember(context) { Markwon.create(context) }
+    val syntaxMarkwon = remember(context) { createSyntaxHighlightMarkwon(context) }
+    val textScale = remember(conversationTextSizeStep) { ConversationTextSizing.scaleForStep(conversationTextSizeStep) }
     var attachedImagePath by remember { mutableStateOf<String?>(null) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val toolTargetResolverVersion = remember(toolTargetLabelsById) { toolTargetLabelsById.hashCode() }
+    val toolTargetResolver = remember(toolTargetLabelsById) { { targetId: String -> toolTargetLabelsById[targetId] ?: targetId } }
+    val nearBottomThresholdPx = with(LocalContext.current.resources.displayMetrics) { (36 * density).toInt() }
+    var wasNearBottom by remember { mutableStateOf(true) }
+    val isNearBottom by remember(listState, nearBottomThresholdPx) {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            if (totalItems == 0) {
+                true
+            } else {
+                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+                if (lastVisible.index < totalItems - 1) {
+                    false
+                } else {
+                    val bottomGap = layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)
+                    bottomGap >= -nearBottomThresholdPx
+                }
+            }
+        }
+    }
+    var pinchBaseStep by remember { mutableStateOf<Int?>(null) }
+    var pinchAppliedDelta by remember { mutableIntStateOf(0) }
+    val bottomAnchorIndex = messages.size + if (isSending) 1 else 0
+
     val attachmentLauncher =
         rememberLauncherForActivityResult(
             contract = ActivityResultContracts.GetContent(),
@@ -873,27 +2236,115 @@ private fun ConversationPanel(
             }
         }
 
+    LaunchedEffect(isNearBottom) {
+        wasNearBottom = isNearBottom
+    }
+
+    LaunchedEffect(activeThreadKey) {
+        listState.scrollToItem(bottomAnchorIndex)
+        wasNearBottom = true
+    }
+
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+        if ((isNearBottom || wasNearBottom) && listState.layoutInfo.totalItemsCount > 0) {
+            listState.animateScrollToItem(bottomAnchorIndex)
         }
     }
 
     Column(
         modifier = Modifier.fillMaxSize(),
     ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        ) {
-            items(items = messages, key = { it.id }) { message ->
-                MessageRow(message)
+        Box(modifier = Modifier.weight(1f)) {
+            LazyColumn(
+                state = listState,
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(conversationTextSizeStep) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                pinchBaseStep = conversationTextSizeStep
+                                pinchAppliedDelta = 0
+                                var cumulativeScale = 1f
+                                var keepGoing: Boolean
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val activePointers = event.changes.count { it.pressed }
+                                    if (activePointers >= 2) {
+                                        val zoomChange = event.calculateZoom()
+                                        if (zoomChange.isFinite() && zoomChange > 0f) {
+                                            cumulativeScale *= zoomChange
+                                            val candidateDelta = ConversationTextSizing.pinchDeltaForScale(cumulativeScale)
+                                            if (candidateDelta != 0) {
+                                                if (pinchAppliedDelta == 0) {
+                                                    pinchAppliedDelta = candidateDelta
+                                                } else {
+                                                    val sameDirection =
+                                                        (pinchAppliedDelta > 0 && candidateDelta > 0) ||
+                                                            (pinchAppliedDelta < 0 && candidateDelta < 0)
+                                                    if (!sameDirection || kotlin.math.abs(candidateDelta) > kotlin.math.abs(pinchAppliedDelta)) {
+                                                        pinchAppliedDelta = candidateDelta
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    keepGoing = event.changes.any { it.pressed }
+                                } while (keepGoing)
+
+                                val baseline = pinchBaseStep ?: conversationTextSizeStep
+                                val nextStep = ConversationTextSizing.clampStep(baseline + pinchAppliedDelta)
+                                if (nextStep != conversationTextSizeStep) {
+                                    onConversationTextSizeStepChanged(nextStep)
+                                }
+                                pinchBaseStep = null
+                                pinchAppliedDelta = 0
+                            }
+                        },
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+            ) {
+                items(items = messages, key = { it.id }) { message ->
+                    MessageRow(
+                        message = message,
+                        textScale = textScale,
+                        markdownMarkwon = markdownMarkwon,
+                        syntaxMarkwon = syntaxMarkwon,
+                        toolTargetResolver = toolTargetResolver,
+                        toolTargetResolverVersion = toolTargetResolverVersion,
+                        messageActionsEnabled = !isSending,
+                        onEditMessage = onEditMessage,
+                        onForkFromMessage = onForkFromMessage,
+                    )
+                }
+                if (isSending) {
+                    item(key = "conversation-typing-indicator") {
+                        TypingIndicator(
+                            modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+                        )
+                    }
+                }
+                item(key = "conversation-bottom-anchor") {
+                    Spacer(modifier = Modifier.height(1.dp))
+                }
+            }
+
+            if (messages.isNotEmpty() && !isNearBottom) {
+                LatestScrollButton(
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 10.dp),
+                    onClick = {
+                        scope.launch {
+                            if (listState.layoutInfo.totalItemsCount > 0) {
+                                listState.animateScrollToItem(bottomAnchorIndex)
+                            }
+                        }
+                    },
+                )
             }
         }
 
         InputBar(
+            modifier = Modifier.imePadding(),
             draft = draft,
             attachedImagePath = attachedImagePath,
             attachmentError = attachmentError,
@@ -917,14 +2368,15 @@ private fun ConversationPanel(
             onListExperimentalFeatures = onListExperimentalFeatures,
             onSetExperimentalFeatureEnabled = onSetExperimentalFeatureEnabled,
             onListSkills = onListSkills,
+            onForkConversation = onForkConversation,
             onAttachImage = { attachmentLauncher.launch("image/*") },
             onCaptureImage = { cameraLauncher.launch(null) },
             onClearAttachment = {
                 attachedImagePath = null
                 attachmentError = null
             },
-            onSend = { text ->
-                onSend(encodeDraftWithLocalImageAttachment(text, attachedImagePath))
+            onSend = { text, skillMentions ->
+                onSend(encodeDraftWithLocalImageAttachment(text, attachedImagePath), skillMentions)
                 attachedImagePath = null
                 attachmentError = null
             },
@@ -934,36 +2386,176 @@ private fun ConversationPanel(
 }
 
 @Composable
-private fun MessageRow(message: ChatMessage) {
+private fun LatestScrollButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    var bob by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        bob = true
+    }
+    TextButton(
+        onClick = onClick,
+        modifier = modifier,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(99.dp),
+            color = ShitterTheme.surface.copy(alpha = 0.94f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border.copy(alpha = 0.9f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val transition = rememberInfiniteTransition(label = "latest_button_bob")
+                val offsetY by
+                    transition.animateFloat(
+                        initialValue = -1.5f,
+                        targetValue = 1.5f,
+                        animationSpec =
+                            infiniteRepeatable(
+                                animation = tween(durationMillis = 760),
+                                repeatMode = RepeatMode.Reverse,
+                            ),
+                        label = "latest_button_offset",
+                    )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = ShitterTheme.textPrimary,
+                    modifier = Modifier.size(16.dp).offset(y = if (bob) offsetY.dp else 0.dp),
+                )
+                Text(
+                    text = "Latest",
+                    color = ShitterTheme.textPrimary,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+private fun normalizeReasoningText(text: String): String =
+    text
+        .lineSequence()
+        .map { line ->
+            val trimmed = line.trim()
+            if (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4) {
+                trimmed.removePrefix("**").removeSuffix("**")
+            } else {
+                line
+            }
+        }.joinToString(separator = "\n")
+
+@Composable
+private fun MessageRow(
+    message: ChatMessage,
+    textScale: Float,
+    markdownMarkwon: Markwon,
+    syntaxMarkwon: Markwon,
+    toolTargetResolver: (String) -> String,
+    toolTargetResolverVersion: Int,
+    messageActionsEnabled: Boolean,
+    onEditMessage: (ChatMessage) -> Unit,
+    onForkFromMessage: (ChatMessage) -> Unit,
+) {
     when (message.role) {
         MessageRole.USER -> {
+            val supportsActions = message.isFromUserTurnBoundary && message.sourceTurnIndex != null
+            var menuExpanded by remember(message.id) { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (supportsActions) {
+                    Box {
+                        IconButton(
+                            enabled = messageActionsEnabled,
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Message actions",
+                                tint = if (messageActionsEnabled) ShitterTheme.textSecondary else ShitterTheme.textMuted,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                            containerColor = ShitterTheme.surfaceLight,
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Edit message", color = ShitterTheme.textPrimary) },
+                                enabled = messageActionsEnabled,
+                                onClick = {
+                                    menuExpanded = false
+                                    onEditMessage(message)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Fork from here", color = ShitterTheme.textPrimary) },
+                                enabled = messageActionsEnabled,
+                                onClick = {
+                                    menuExpanded = false
+                                    onForkFromMessage(message)
+                                },
+                            )
+                        }
+                    }
+                }
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = ShitterTheme.surfaceLight,
                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
-                    Text(
-                        text = message.text,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        color = ShitterTheme.textPrimary,
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = message.text,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            color = ShitterTheme.textPrimary,
+                            fontSize = 14.sp * textScale,
+                        )
+                    }
                 }
             }
         }
 
         MessageRole.ASSISTANT -> {
-            MessageMarkdownContent(
-                markdown = message.text,
+            val agentLabel = formatAgentLabel(message.agentNickname, message.agentRole)
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
-            )
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (agentLabel != null) {
+                    Text(
+                        text = agentLabel,
+                        color = ShitterTheme.textSecondary,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                MessageMarkdownContent(
+                    markdown = message.text,
+                    textScale = textScale,
+                    markdownMarkwon = markdownMarkwon,
+                    syntaxMarkwon = syntaxMarkwon,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
         MessageRole.SYSTEM -> {
-            SystemMessageCard(message = message)
+            SystemMessageCard(
+                message = message,
+                textScale = textScale,
+                markdownMarkwon = markdownMarkwon,
+                syntaxMarkwon = syntaxMarkwon,
+                toolTargetResolver = toolTargetResolver,
+                toolTargetResolverVersion = toolTargetResolverVersion,
+            )
         }
 
         MessageRole.REASONING -> {
@@ -978,12 +2570,15 @@ private fun MessageRow(message: ChatMessage) {
                     tint = ShitterTheme.textSecondary,
                     modifier = Modifier.size(16.dp).padding(top = 2.dp),
                 )
-                Text(
-                    text = message.text,
-                    color = ShitterTheme.textSecondary,
-                    fontStyle = FontStyle.Italic,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                SelectionContainer {
+                    Text(
+                        text = normalizeReasoningText(message.text),
+                        color = ShitterTheme.textSecondary,
+                        fontStyle = FontStyle.Italic,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 13.sp * textScale,
+                    )
+                }
             }
         }
     }
@@ -992,6 +2587,9 @@ private fun MessageRow(message: ChatMessage) {
 @Composable
 private fun MessageMarkdownContent(
     markdown: String,
+    textScale: Float,
+    markdownMarkwon: Markwon,
+    syntaxMarkwon: Markwon,
     modifier: Modifier = Modifier,
     textColor: Color = ShitterTheme.textBody,
 ) {
@@ -1002,8 +2600,20 @@ private fun MessageMarkdownContent(
     ) {
         blocks.forEach { block ->
             when (block) {
-                is MarkdownBlock.Text -> InlineMediaMarkdown(markdown = block.markdown, textColor = textColor)
-                is MarkdownBlock.Code -> CodeBlockCard(language = block.language, code = block.code)
+                is MarkdownBlock.Text ->
+                    InlineMediaMarkdown(
+                        markdown = block.markdown,
+                        textScale = textScale,
+                        markdownMarkwon = markdownMarkwon,
+                        textColor = textColor,
+                    )
+                is MarkdownBlock.Code ->
+                    CodeBlockCard(
+                        language = block.language,
+                        code = block.code,
+                        textScale = textScale,
+                        syntaxMarkwon = syntaxMarkwon,
+                    )
             }
         }
     }
@@ -1012,38 +2622,38 @@ private fun MessageMarkdownContent(
 @Composable
 private fun InlineMediaMarkdown(
     markdown: String,
+    textScale: Float,
+    markdownMarkwon: Markwon,
     textColor: Color,
 ) {
     val segments = remember(markdown) { extractInlineSegments(markdown) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         segments.forEach { segment ->
             when (segment) {
-                is InlineSegment.Text -> AssistantMarkdownText(markdown = segment.value, textColor = textColor)
+                is InlineSegment.Text ->
+                    AssistantMarkdownText(
+                        markdown = segment.value,
+                        textScale = textScale,
+                        markwon = markdownMarkwon,
+                        textColor = textColor,
+                    )
                 is InlineSegment.ImageBytes -> {
-                    val bitmap =
-                        remember(segment.bytes) {
-                            BitmapFactory.decodeByteArray(segment.bytes, 0, segment.bytes.size)
+                    val bitmap by
+                        produceState<Bitmap?>(initialValue = null, key1 = segment.bytes) {
+                            value =
+                                withContext(Dispatchers.IO) {
+                                    BitmapFactory.decodeByteArray(segment.bytes, 0, segment.bytes.size)
+                                }
                         }
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Inline image",
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Fit,
-                        )
-                    }
+                    InlineBitmapImage(bitmap = bitmap, contentDescription = "Inline image")
                 }
 
                 is InlineSegment.LocalImagePath -> {
-                    val bitmap = remember(segment.path) { BitmapFactory.decodeFile(segment.path) }
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Local image",
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Fit,
-                        )
-                    }
+                    val bitmap by
+                        produceState<Bitmap?>(initialValue = null, key1 = segment.path) {
+                            value = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(segment.path) }
+                        }
+                    InlineBitmapImage(bitmap = bitmap, contentDescription = "Local image")
                 }
             }
         }
@@ -1051,20 +2661,36 @@ private fun InlineMediaMarkdown(
 }
 
 @Composable
+private fun InlineBitmapImage(
+    bitmap: Bitmap?,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+) {
+    if (bitmap == null) {
+        return
+    }
+    Image(
+        bitmap = bitmap.asImageBitmap(),
+        contentDescription = contentDescription,
+        modifier = modifier.fillMaxWidth().heightIn(max = 320.dp).clip(RoundedCornerShape(8.dp)),
+        contentScale = ContentScale.Fit,
+    )
+}
+
+@Composable
 private fun AssistantMarkdownText(
     markdown: String,
+    textScale: Float,
+    markwon: Markwon,
     textColor: Color,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val markwon = remember(context) { Markwon.create(context) }
-
     AndroidView(
         modifier = modifier,
-        factory = {
-            TextView(it).apply {
-                typeface = Typeface.MONOSPACE
-                textSize = 14f
+        factory = { context ->
+            TextView(context).apply {
+                typeface = context.monospaceTypeface()
+                textSize = 14f * textScale
                 setTextColor(textColor.toArgb())
                 setLineSpacing(0f, 1.2f)
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -1078,9 +2704,24 @@ private fun AssistantMarkdownText(
 private fun CodeBlockCard(
     language: String,
     code: String,
+    textScale: Float,
+    syntaxMarkwon: Markwon,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
+    val markdown =
+        remember(language, code) {
+            buildString {
+                append("```")
+                append(language.trim().ifEmpty { "text" })
+                append("\n")
+                append(code)
+                if (!code.endsWith('\n')) {
+                    append("\n")
+                }
+                append("```")
+            }
+        }
     var copied by remember(code) { mutableStateOf(false) }
     val horizontalScroll = rememberScrollState()
 
@@ -1144,11 +2785,139 @@ private fun CodeBlockCard(
                         .horizontalScroll(horizontalScroll)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
+                AndroidView(
+                    factory = { context ->
+                        TextView(context).apply {
+                            typeface = context.monospaceTypeface()
+                            textSize = 12f * textScale
+                            setLineSpacing(0f, 1.2f)
+                            setTextColor(ShitterTheme.textBody.toArgb())
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            setHorizontallyScrolling(true)
+                            setTextIsSelectable(true)
+                        }
+                    },
+                    update = { syntaxMarkwon.setMarkdown(it, markdown) },
+                )
+            }
+        }
+    }
+}
+
+private fun createSyntaxHighlightMarkwon(context: Context): Markwon {
+    val builder = Markwon.builder(context)
+    createPrism4jLocator()?.let { locator ->
+        val prism4j = Prism4j(locator)
+        builder.usePlugin(SyntaxHighlightPlugin.create(prism4j, Prism4jThemeDarkula.create()))
+    }
+    return builder.build()
+}
+
+private fun createPrism4jLocator(): GrammarLocator? {
+    val candidates =
+        listOf(
+            "io.latitudes.shitter.android.ui.Prism4jGrammarLocator",
+            "io.noties.prism4j.bundler.Prism4jGrammarLocator",
+            "io.noties.prism4j.GrammarLocatorDef",
+            "GrammarLocatorDef",
+        )
+    for (candidate in candidates) {
+        val locator =
+            runCatching {
+                Class.forName(candidate).getDeclaredConstructor().newInstance()
+            }.getOrNull()
+        if (locator is GrammarLocator) {
+            return locator
+        }
+    }
+    return null
+}
+
+@Composable
+private fun SystemMessageCard(
+    message: ChatMessage,
+    textScale: Float,
+    markdownMarkwon: Markwon,
+    syntaxMarkwon: Markwon,
+    toolTargetResolver: (String) -> String,
+    toolTargetResolverVersion: Int,
+) {
+    val parseResult =
+        remember(message.text, toolTargetResolverVersion) {
+            ToolCallMessageParser.parse(
+                message = message,
+                targetLabelResolver = toolTargetResolver,
+            )
+        }
+    when (parseResult) {
+        is ToolCallParseResult.Recognized ->
+            StructuredToolCallCard(
+                messageId = message.id,
+                model = parseResult.model,
+                textScale = textScale,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+        ToolCallParseResult.Unrecognized ->
+            GenericSystemMessageCard(
+                message = message,
+                textScale = textScale,
+                markdownMarkwon = markdownMarkwon,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+    }
+}
+
+@Composable
+private fun GenericSystemMessageCard(
+    message: ChatMessage,
+    textScale: Float,
+    markdownMarkwon: Markwon,
+    syntaxMarkwon: Markwon,
+) {
+    val (title, body) = remember(message.text) { extractSystemTitleAndBody(message.text) }
+    val displayTitle = title ?: "System"
+    val markdown = if (title == null) message.text else body
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = ShitterTheme.surface.copy(alpha = 0.85f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = ShitterTheme.accent,
+                    modifier = Modifier.size(16.dp),
+                )
                 Text(
-                    text = code,
-                    color = ShitterTheme.textBody,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
+                    text = displayTitle.uppercase(Locale.US),
+                    color = ShitterTheme.accent,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 11.sp * textScale,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            if (markdown.isNotBlank()) {
+                MessageMarkdownContent(
+                    markdown = markdown,
+                    textScale = textScale,
+                    markdownMarkwon = markdownMarkwon,
+                    syntaxMarkwon = syntaxMarkwon,
+                    modifier = Modifier.fillMaxWidth(),
+                    textColor = ShitterTheme.textSystem,
                 )
             }
         }
@@ -1156,12 +2925,18 @@ private fun CodeBlockCard(
 }
 
 @Composable
-private fun SystemMessageCard(message: ChatMessage) {
-    val (title, body) = remember(message.text) { extractSystemTitleAndBody(message.text) }
-    val toolCall = remember(title) { isToolCallTitle(title) }
-    val theme = remember(title) { systemCardTheme(title) }
-    val summary = remember(title, body, toolCall) { compactSystemSummary(title, body, toolCall) }
-    var expanded by remember(message.id) { mutableStateOf(!toolCall) }
+private fun StructuredToolCallCard(
+    messageId: String,
+    model: ToolCallCardModel,
+    textScale: Float,
+    syntaxMarkwon: Markwon,
+) {
+    var expanded by remember(messageId, model.defaultExpanded) { mutableStateOf(model.defaultExpanded) }
+    LaunchedEffect(model.status) {
+        if (model.status == ToolCallStatus.FAILED) {
+            expanded = true
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth().animateContentSize(),
@@ -1171,54 +2946,61 @@ private fun SystemMessageCard(message: ChatMessage) {
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .let { base ->
-                            if (toolCall) {
-                                base.clickable { expanded = !expanded }
-                            } else {
-                                base
-                            }
-                        },
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Box(
-                    modifier =
-                        Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(theme.accent),
+                Icon(
+                    imageVector = toolCallKindIcon(model.kind),
+                    contentDescription = null,
+                    tint = toolCallKindAccent(model.kind),
+                    modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = summary,
+                    text = model.summary,
                     color = ShitterTheme.textSecondary,
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (toolCall) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Expand",
-                        tint = ShitterTheme.textMuted,
-                        modifier = Modifier.size(16.dp),
-                    )
+                ToolCallStatusChip(status = model.status)
+                if (!model.duration.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = ShitterTheme.surfaceLight.copy(alpha = 0.72f),
+                    ) {
+                        Text(
+                            text = model.duration,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = ShitterTheme.textMuted,
+                    modifier = Modifier.size(16.dp),
+                )
             }
 
-            if (!toolCall || expanded) {
-                val markdown = if (toolCall) body else message.text
-                if (markdown.isNotBlank()) {
-                    MessageMarkdownContent(
-                        markdown = markdown,
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                        textColor = ShitterTheme.textSystem,
-                    )
+            if (expanded) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    model.sections.forEach { section ->
+                        ToolCallSectionView(
+                            section = section,
+                            textScale = textScale,
+                            syntaxMarkwon = syntaxMarkwon,
+                        )
+                    }
                 }
             }
         }
@@ -1226,8 +3008,239 @@ private fun SystemMessageCard(message: ChatMessage) {
 }
 
 @Composable
+private fun ToolCallStatusChip(status: ToolCallStatus) {
+    val (background, foreground) =
+        when (status) {
+            ToolCallStatus.COMPLETED -> ShitterTheme.success.copy(alpha = 0.24f) to ShitterTheme.success
+            ToolCallStatus.IN_PROGRESS -> ShitterTheme.warning.copy(alpha = 0.24f) to ShitterTheme.warning
+            ToolCallStatus.FAILED -> ShitterTheme.danger.copy(alpha = 0.24f) to ShitterTheme.danger
+            ToolCallStatus.UNKNOWN -> ShitterTheme.surfaceLight.copy(alpha = 0.72f) to ShitterTheme.textSecondary
+        }
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = background,
+    ) {
+        Text(
+            text = status.label,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            color = foreground,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun ToolCallSectionView(
+    section: ToolCallSection,
+    textScale: Float,
+    syntaxMarkwon: Markwon,
+) {
+    when (section) {
+        is ToolCallSection.KeyValue -> {
+            if (section.entries.isEmpty()) return
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = section.label.uppercase(Locale.US),
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                            color = ShitterTheme.surface.copy(alpha = 0.6f),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        section.entries.forEach { entry ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = "${entry.key}:",
+                                    color = ShitterTheme.textSecondary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                                Text(
+                                    text = entry.value,
+                                    color = ShitterTheme.textSystem,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        is ToolCallSection.Code -> {
+            ToolCallCodeLikeSection(
+                label = section.label,
+                language = section.language,
+                content = section.content,
+                textScale = textScale,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+        }
+
+        is ToolCallSection.Json -> {
+            ToolCallCodeLikeSection(
+                label = section.label,
+                language = "json",
+                content = section.content,
+                textScale = textScale,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+        }
+
+        is ToolCallSection.Diff -> {
+            ToolCallCodeLikeSection(
+                label = section.label,
+                language = "diff",
+                content = section.content,
+                textScale = textScale,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+        }
+
+        is ToolCallSection.Text -> {
+            ToolCallCodeLikeSection(
+                label = section.label,
+                language = "text",
+                content = section.content,
+                textScale = textScale,
+                syntaxMarkwon = syntaxMarkwon,
+            )
+        }
+
+        is ToolCallSection.ListSection -> {
+            if (section.items.isEmpty()) return
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = section.label.uppercase(Locale.US),
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        section.items.forEach { item ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("•", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    text = item,
+                                    color = ShitterTheme.textSystem,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        is ToolCallSection.Progress -> {
+            if (section.items.isEmpty()) return
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = section.label.uppercase(Locale.US),
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        section.items.forEachIndexed { index, item ->
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Box(
+                                    modifier =
+                                        Modifier
+                                            .padding(top = 5.dp)
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (index == section.items.lastIndex) ShitterTheme.warning else ShitterTheme.textMuted,
+                                            ),
+                                )
+                                Text(
+                                    text = item,
+                                    color = ShitterTheme.textSystem,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallCodeLikeSection(
+    label: String,
+    language: String,
+    content: String,
+    textScale: Float,
+    syntaxMarkwon: Markwon,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = label.uppercase(Locale.US),
+            color = ShitterTheme.textSecondary,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        CodeBlockCard(language = language, code = content, textScale = textScale, syntaxMarkwon = syntaxMarkwon)
+    }
+}
+
+private fun toolCallKindIcon(kind: ToolCallKind) =
+    when (kind) {
+        ToolCallKind.COMMAND_EXECUTION -> Icons.Default.Menu
+        ToolCallKind.COMMAND_OUTPUT -> Icons.Default.Menu
+        ToolCallKind.FILE_CHANGE -> Icons.Default.Folder
+        ToolCallKind.FILE_DIFF -> Icons.Default.Folder
+        ToolCallKind.MCP_TOOL_CALL -> Icons.Default.Settings
+        ToolCallKind.MCP_TOOL_PROGRESS -> Icons.Default.Settings
+        ToolCallKind.WEB_SEARCH -> Icons.Default.ArrowUpward
+        ToolCallKind.COLLABORATION -> Icons.Default.Psychology
+        ToolCallKind.IMAGE_VIEW -> Icons.Default.Image
+    }
+
+private fun toolCallKindAccent(kind: ToolCallKind) =
+    when (kind) {
+        ToolCallKind.COMMAND_EXECUTION, ToolCallKind.COMMAND_OUTPUT -> ShitterTheme.toolCallCommand
+        ToolCallKind.FILE_CHANGE -> ShitterTheme.toolCallFileChange
+        ToolCallKind.FILE_DIFF -> ShitterTheme.toolCallFileDiff
+        ToolCallKind.MCP_TOOL_CALL -> ShitterTheme.toolCallMcpCall
+        ToolCallKind.MCP_TOOL_PROGRESS -> ShitterTheme.toolCallMcpProgress
+        ToolCallKind.WEB_SEARCH -> ShitterTheme.toolCallWebSearch
+        ToolCallKind.COLLABORATION -> ShitterTheme.toolCallCollaboration
+        ToolCallKind.IMAGE_VIEW -> ShitterTheme.toolCallImage
+    }
+
+@Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun InputBar(
+    modifier: Modifier = Modifier,
     draft: String,
     attachedImagePath: String?,
     attachmentError: String?,
@@ -1251,12 +3264,14 @@ private fun InputBar(
     onListExperimentalFeatures: ((Result<List<ExperimentalFeature>>) -> Unit) -> Unit,
     onSetExperimentalFeatureEnabled: (String, Boolean, (Result<Unit>) -> Unit) -> Unit,
     onListSkills: (String?, Boolean, (Result<List<SkillMetadata>>) -> Unit) -> Unit,
+    onForkConversation: () -> Unit,
     onAttachImage: () -> Unit,
     onCaptureImage: () -> Unit,
     onClearAttachment: () -> Unit,
-    onSend: (String) -> Unit,
+    onSend: (String, List<SkillMentionInput>) -> Unit,
     onInterrupt: () -> Unit,
 ) {
+    DebugRecomposeCheckpoint(name = "InputBar")
     var composerValue by
         remember {
             mutableStateOf(
@@ -1266,12 +3281,15 @@ private fun InputBar(
                 ),
             )
         }
+    var lastCommittedDraft by remember { mutableStateOf(draft) }
     var showSlashPopup by remember { mutableStateOf(false) }
     var activeSlashToken by remember { mutableStateOf<ComposerSlashQueryContext?>(null) }
     var slashSuggestions by remember { mutableStateOf<List<ComposerSlashCommand>>(emptyList()) }
 
     var showFilePopup by remember { mutableStateOf(false) }
     var activeAtToken by remember { mutableStateOf<ComposerTokenContext?>(null) }
+    var showSkillPopup by remember { mutableStateOf(false) }
+    var activeDollarToken by remember { mutableStateOf<ComposerTokenContext?>(null) }
     var fileSearchLoading by remember { mutableStateOf(false) }
     var fileSearchError by remember { mutableStateOf<String?>(null) }
     var fileSuggestions by remember { mutableStateOf<List<FuzzyFileSearchResult>>(emptyList()) }
@@ -1283,14 +3301,28 @@ private fun InputBar(
     var showExperimentalSheet by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var renameCurrentTitle by remember { mutableStateOf("") }
     var renameDraft by remember { mutableStateOf("") }
     var slashErrorMessage by remember { mutableStateOf<String?>(null) }
     var experimentalFeatures by remember { mutableStateOf<List<ExperimentalFeature>>(emptyList()) }
     var experimentalFeaturesLoading by remember { mutableStateOf(false) }
     var skills by remember { mutableStateOf<List<SkillMetadata>>(emptyList()) }
     var skillsLoading by remember { mutableStateOf(false) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
+    var mentionSkillPathsByName by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var hasAttemptedSkillMentionLoad by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    fun commitDraftIfNeeded(nextDraft: String) {
+        if (nextDraft == lastCommittedDraft) {
+            return
+        }
+        onDraftChange(nextDraft)
+        lastCommittedDraft = nextDraft
+    }
 
     fun clearFileSearchState() {
         fileSearchJob?.cancel()
@@ -1307,6 +3339,8 @@ private fun InputBar(
         slashSuggestions = emptyList()
         showFilePopup = false
         activeAtToken = null
+        showSkillPopup = false
+        activeDollarToken = null
         clearFileSearchState()
     }
 
@@ -1342,6 +3376,19 @@ private fun InputBar(
             }
     }
 
+    fun loadSkillsForMentions() {
+        skillsLoading = true
+        onListSkills(currentCwd, false) { result ->
+            skillsLoading = false
+            result.onSuccess { loaded ->
+                val sortedSkills = loaded.sortedBy { it.name.lowercase(Locale.ROOT) }
+                skills = sortedSkills
+                val validPaths = sortedSkills.mapTo(HashSet()) { it.path }
+                mentionSkillPathsByName = mentionSkillPathsByName.filterValues { path -> validPaths.contains(path) }
+            }
+        }
+    }
+
     fun refreshComposerPopups(nextValue: TextFieldValue) {
         val atToken =
             currentPrefixedToken(
@@ -1354,6 +3401,8 @@ private fun InputBar(
             showSlashPopup = false
             activeSlashToken = null
             slashSuggestions = emptyList()
+            showSkillPopup = false
+            activeDollarToken = null
             showFilePopup = true
             if (activeAtToken != atToken) {
                 activeAtToken = atToken
@@ -1365,6 +3414,31 @@ private fun InputBar(
         activeAtToken = null
         showFilePopup = false
         clearFileSearchState()
+
+        val dollarToken =
+            currentPrefixedToken(
+                text = nextValue.text,
+                cursor = nextValue.selection.start,
+                prefix = '$',
+                allowEmpty = true,
+            )
+        if (dollarToken != null && isMentionQueryValid(dollarToken.value)) {
+            showSlashPopup = false
+            activeSlashToken = null
+            slashSuggestions = emptyList()
+            showSkillPopup = true
+            if (activeDollarToken != dollarToken) {
+                activeDollarToken = dollarToken
+            }
+            if (!hasAttemptedSkillMentionLoad && !skillsLoading) {
+                hasAttemptedSkillMentionLoad = true
+                loadSkillsForMentions()
+            }
+            return
+        }
+
+        showSkillPopup = false
+        activeDollarToken = null
 
         val slashToken =
             currentSlashQueryContext(
@@ -1396,15 +3470,20 @@ private fun InputBar(
         }
     }
 
-    fun loadSkills(forceReload: Boolean = false) {
+    fun loadSkills(forceReload: Boolean = false, showErrors: Boolean = true) {
         skillsLoading = true
         onListSkills(currentCwd, forceReload) { result ->
             skillsLoading = false
             result.onFailure { error ->
-                slashErrorMessage = error.message ?: "Failed to load skills"
+                if (showErrors) {
+                    slashErrorMessage = error.message ?: "Failed to load skills"
+                }
             }
             result.onSuccess { loaded ->
-                skills = loaded.sortedBy { it.name.lowercase(Locale.ROOT) }
+                val sortedSkills = loaded.sortedBy { it.name.lowercase(Locale.ROOT) }
+                skills = sortedSkills
+                val validPaths = sortedSkills.mapTo(HashSet()) { it.path }
+                mentionSkillPathsByName = mentionSkillPathsByName.filterValues { path -> validPaths.contains(path) }
             }
         }
     }
@@ -1449,13 +3528,18 @@ private fun InputBar(
                         }
                     }
                 } else {
-                    renameDraft = activeThreadPreview
+                    renameCurrentTitle = activeThreadPreview.ifBlank { "Untitled thread" }
+                    renameDraft = ""
                     showRenameDialog = true
                 }
             }
 
             ComposerSlashCommand.NEW -> {
                 onOpenNewSessionPicker()
+            }
+
+            ComposerSlashCommand.FORK -> {
+                onForkConversation()
             }
 
             ComposerSlashCommand.RESUME -> {
@@ -1466,7 +3550,7 @@ private fun InputBar(
 
     fun applySlashSuggestion(command: ComposerSlashCommand) {
         composerValue = TextFieldValue(text = "", selection = TextRange(0))
-        onDraftChange("")
+        commitDraftIfNeeded("")
         hideComposerPopups()
         executeSlashCommand(command, args = null)
     }
@@ -1488,18 +3572,92 @@ private fun InputBar(
             )
         val nextCursor = token.range.start + replacement.length
         composerValue = TextFieldValue(text = updatedText, selection = TextRange(nextCursor))
-        onDraftChange(updatedText)
+        commitDraftIfNeeded(updatedText)
         showFilePopup = false
         activeAtToken = null
         clearFileSearchState()
     }
 
+    fun applySkillSuggestion(skill: SkillMetadata) {
+        val token = activeDollarToken ?: return
+        val replacement = "\$${skill.name} "
+        val updatedText =
+            composerValue.text.replaceRange(
+                startIndex = token.range.start,
+                endIndex = token.range.end,
+                replacement = replacement,
+            )
+        val nextCursor = token.range.start + replacement.length
+        composerValue = TextFieldValue(text = updatedText, selection = TextRange(nextCursor))
+        commitDraftIfNeeded(updatedText)
+        mentionSkillPathsByName =
+            mentionSkillPathsByName + mapOf(skill.name.lowercase(Locale.ROOT) to skill.path)
+        showSkillPopup = false
+        activeDollarToken = null
+    }
+
+    fun collectSkillMentionsForSubmission(text: String): List<SkillMentionInput> {
+        if (skills.isEmpty()) {
+            return emptyList()
+        }
+        val mentionNames = extractMentionNames(text)
+        if (mentionNames.isEmpty()) {
+            return emptyList()
+        }
+
+        val skillsByName = skills.groupBy { it.name.lowercase(Locale.ROOT) }
+        val skillsByPath = skills.groupBy { it.path }
+        val seenPaths = HashSet<String>()
+        val resolved = ArrayList<SkillMentionInput>()
+        for (name in mentionNames) {
+            val normalizedName = name.lowercase(Locale.ROOT)
+            val selectedPath = mentionSkillPathsByName[normalizedName]
+            if (!selectedPath.isNullOrBlank()) {
+                val selectedSkill = skillsByPath[selectedPath]?.firstOrNull()
+                if (selectedSkill != null) {
+                    if (seenPaths.add(selectedPath)) {
+                        resolved += SkillMentionInput(name = selectedSkill.name, path = selectedPath)
+                    }
+                    continue
+                }
+                mentionSkillPathsByName = mentionSkillPathsByName - normalizedName
+            }
+
+            val candidates = skillsByName[normalizedName] ?: continue
+            if (candidates.size != 1) {
+                continue
+            }
+            val match = candidates.first()
+            if (seenPaths.add(match.path)) {
+                resolved += SkillMentionInput(name = match.name, path = match.path)
+            }
+        }
+        return resolved
+    }
+
+    val skillSuggestions: List<SkillMetadata> =
+        remember(activeDollarToken, skills) {
+            val token = activeDollarToken ?: return@remember emptyList()
+            filterSkillSuggestions(skills, token.value)
+        }
+
     LaunchedEffect(draft) {
-        if (draft != composerValue.text) {
+        if (draft != lastCommittedDraft) {
+            lastCommittedDraft = draft
+        }
+        if (draft != composerValue.text && draft == lastCommittedDraft) {
             val cursor = composerValue.selection.start.coerceIn(0, draft.length)
             val synced = TextFieldValue(text = draft, selection = TextRange(cursor))
             composerValue = synced
             refreshComposerPopups(synced)
+        }
+    }
+
+    LaunchedEffect(composerValue.text) {
+        val pendingDraft = composerValue.text
+        delay(180L)
+        if (pendingDraft == composerValue.text) {
+            commitDraftIfNeeded(pendingDraft)
         }
     }
 
@@ -1785,18 +3943,32 @@ private fun InputBar(
 
     if (showRenameDialog) {
         AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
+            onDismissRequest = {
+                showRenameDialog = false
+                renameCurrentTitle = ""
+                renameDraft = ""
+            },
             title = { Text("Rename Thread") },
             text = {
-                OutlinedTextField(
-                    value = renameDraft,
-                    onValueChange = { renameDraft = it },
-                    label = { Text("Thread name") },
-                    singleLine = true,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = renameCurrentTitle,
+                        color = ShitterTheme.textSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = renameDraft,
+                        onValueChange = { renameDraft = it },
+                        label = { Text("New thread title") },
+                        placeholder = { Text("Enter new thread title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
+                    enabled = renameDraft.trim().isNotEmpty(),
                     onClick = {
                         val nextName = renameDraft.trim()
                         if (nextName.isEmpty()) {
@@ -1808,6 +3980,8 @@ private fun InputBar(
                             }
                             result.onSuccess {
                                 showRenameDialog = false
+                                renameCurrentTitle = ""
+                                renameDraft = ""
                             }
                         }
                     },
@@ -1816,7 +3990,13 @@ private fun InputBar(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
+                TextButton(
+                    onClick = {
+                        showRenameDialog = false
+                        renameCurrentTitle = ""
+                        renameDraft = ""
+                    },
+                ) {
                     Text("Cancel")
                 }
             },
@@ -1836,41 +4016,42 @@ private fun InputBar(
         )
     }
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = ShitterTheme.surface,
+    Column(
+        modifier = modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 16.dp, top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
             if (attachedImagePath != null) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = ShitterTheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    color = ShitterTheme.surfaceLight,
                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                    modifier = Modifier.padding(bottom = 2.dp)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 7.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Image,
                             contentDescription = null,
-                            tint = ShitterTheme.textSecondary,
-                            modifier = Modifier.size(14.dp),
+                            tint = ShitterTheme.accent,
+                            modifier = Modifier.size(16.dp),
                         )
                         Text(
                             text = attachedImagePath.substringAfterLast('/'),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            color = ShitterTheme.textSecondary,
+                            color = ShitterTheme.textPrimary,
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(onClick = onClearAttachment, enabled = !isSending) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(14.dp))
+                        IconButton(
+                            onClick = onClearAttachment,
+                            enabled = !isSending,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(14.dp), tint = ShitterTheme.textSecondary)
                         }
                     }
                 }
@@ -1881,14 +4062,15 @@ private fun InputBar(
                     text = attachmentError,
                     color = ShitterTheme.danger,
                     style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
 
             if (showSlashPopup) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = ShitterTheme.surface.copy(alpha = 0.95f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Column {
@@ -1898,13 +4080,13 @@ private fun InputBar(
                                     Modifier
                                         .fillMaxWidth()
                                         .clickable { applySlashSuggestion(command) }
-                                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
                                     text = "/${command.rawValue}",
-                                    color = Color(0xFF6EA676),
+                                    color = ShitterTheme.success,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                                 Text(
@@ -1917,7 +4099,7 @@ private fun InputBar(
                                 )
                             }
                             if (index < slashSuggestions.lastIndex) {
-                                HorizontalDivider(color = ShitterTheme.border)
+                                HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
                             }
                         }
                     }
@@ -1927,8 +4109,8 @@ private fun InputBar(
             if (showFilePopup) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = ShitterTheme.surface.copy(alpha = 0.95f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     when {
@@ -1937,7 +4119,7 @@ private fun InputBar(
                                 text = "Searching files...",
                                 color = ShitterTheme.textSecondary,
                                 style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                             )
                         }
 
@@ -1946,7 +4128,7 @@ private fun InputBar(
                                 text = fileSearchError.orEmpty(),
                                 color = ShitterTheme.danger,
                                 style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                             )
                         }
 
@@ -1955,7 +4137,7 @@ private fun InputBar(
                                 text = "No matches",
                                 color = ShitterTheme.textSecondary,
                                 style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                             )
                         }
 
@@ -1968,15 +4150,15 @@ private fun InputBar(
                                             Modifier
                                                 .fillMaxWidth()
                                                 .clickable { applyFileSuggestion(suggestion) }
-                                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Folder,
                                             contentDescription = null,
                                             tint = ShitterTheme.textSecondary,
-                                            modifier = Modifier.size(14.dp),
+                                            modifier = Modifier.size(16.dp),
                                         )
                                         Text(
                                             text = suggestion.path,
@@ -1988,7 +4170,7 @@ private fun InputBar(
                                         )
                                     }
                                     if (index < visibleSuggestions.lastIndex) {
-                                        HorizontalDivider(color = ShitterTheme.border)
+                                        HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
                                     }
                                 }
                             }
@@ -1997,56 +4179,207 @@ private fun InputBar(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(onClick = onAttachImage, enabled = !isSending) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "Attach image", modifier = Modifier.size(16.dp))
-                }
-                OutlinedButton(onClick = onCaptureImage, enabled = !isSending) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = "Capture image", modifier = Modifier.size(16.dp))
-                }
+            if (showSkillPopup) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                ) {
+                    when {
+                        skillsLoading && skillSuggestions.isEmpty() -> {
+                            Text(
+                                text = "Loading skills...",
+                                color = ShitterTheme.textSecondary,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            )
+                        }
 
-                OutlinedTextField(
-                    value = composerValue,
-                    onValueChange = { nextValue ->
-                        composerValue = nextValue
-                        onDraftChange(nextValue.text)
-                        refreshComposerPopups(nextValue)
-                    },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message shitter...") },
-                    minLines = 1,
-                    maxLines = 5,
-                )
+                        skillSuggestions.isEmpty() -> {
+                            Text(
+                                text = "No skills found",
+                                color = ShitterTheme.textSecondary,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            )
+                        }
 
-                Button(
-                    onClick = {
-                        val trimmed = composerValue.text.trim()
-                        if (attachedImagePath == null) {
-                            val invocation = parseSlashCommandInvocation(trimmed)
-                            if (invocation != null) {
-                                composerValue = TextFieldValue(text = "", selection = TextRange(0))
-                                onDraftChange("")
-                                hideComposerPopups()
-                                executeSlashCommand(invocation.command, invocation.args)
-                                return@Button
+                        else -> {
+                            val visibleSuggestions = skillSuggestions.take(8)
+                            Column {
+                                visibleSuggestions.forEachIndexed { index, skill ->
+                                    Row(
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clickable { applySkillSuggestion(skill) }
+                                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "\$${skill.name}",
+                                            color = ShitterTheme.success,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Text(
+                                            text = skill.description,
+                                            color = ShitterTheme.textSecondary,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                    if (index < visibleSuggestions.lastIndex) {
+                                        HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                                    }
+                                }
                             }
                         }
-                        onSend(composerValue.text)
-                        hideComposerPopups()
-                    },
-                    enabled = (composerValue.text.isNotBlank() || attachedImagePath != null) && !isSending,
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(16.dp))
-                }
-
-                OutlinedButton(onClick = onInterrupt, enabled = isSending) {
-                    Icon(Icons.Default.Stop, contentDescription = "Interrupt", modifier = Modifier.size(16.dp))
+                    }
                 }
             }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(26.dp),
+            color = ShitterTheme.surfaceLight,
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        ) {
+            val actionButtonSize = 36.dp
+            val actionIconSize = 18.dp
+            Row(
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(actionButtonSize)
+                            .clip(CircleShape)
+                            .background(ShitterTheme.surface)
+                            .clickable(enabled = !isSending) { showAttachmentMenu = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Attachments",
+                            modifier = Modifier.size(actionIconSize),
+                            tint = ShitterTheme.textPrimary
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showAttachmentMenu,
+                        onDismissRequest = { showAttachmentMenu = false },
+                        containerColor = ShitterTheme.surfaceLight,
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Upload File", color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium) },
+                            onClick = {
+                                showAttachmentMenu = false
+                                onAttachImage()
+                            },
+                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Camera", color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium) },
+                            onClick = {
+                                showAttachmentMenu = false
+                                onCaptureImage()
+                            },
+                            leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 4.dp, horizontal = 4.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (composerValue.text.isEmpty()) {
+                        Text(
+                            text = "Message shitter...",
+                            color = ShitterTheme.textMuted,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    BasicTextField(
+                        value = composerValue,
+                        onValueChange = { nextValue ->
+                            composerValue = nextValue
+                            refreshComposerPopups(nextValue)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = ShitterTheme.textPrimary),
+                        cursorBrush = SolidColor(ShitterTheme.accent),
+                        maxLines = 5,
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                if (isSending) {
+                    Box(
+                        modifier = Modifier
+                            .size(actionButtonSize)
+                            .clip(CircleShape)
+                            .background(ShitterTheme.surface)
+                            .clickable { onInterrupt() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Stop,
+                            contentDescription = "Interrupt",
+                            modifier = Modifier.size(actionIconSize),
+                            tint = ShitterTheme.danger
+                        )
+                    }
+                } else {
+                    val canSend = (composerValue.text.isNotBlank() || attachedImagePath != null)
+                    Box(
+                        modifier = Modifier
+                            .size(actionButtonSize)
+                            .clip(CircleShape)
+                            .background(if (canSend) ShitterTheme.accent else Color.Transparent)
+                            .clickable(enabled = canSend) {
+                                val trimmed = composerValue.text.trim()
+                                if (attachedImagePath == null) {
+                                    val invocation = parseSlashCommandInvocation(trimmed)
+                                    if (invocation != null) {
+                                        composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                        commitDraftIfNeeded("")
+                                        hideComposerPopups()
+                                        focusManager.clearFocus(force = true)
+                                        keyboardController?.hide()
+                                        executeSlashCommand(invocation.command, invocation.args)
+                                        return@clickable
+                                    }
+                                }
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                commitDraftIfNeeded(composerValue.text)
+                                val skillMentions = collectSkillMentionsForSubmission(composerValue.text)
+                                onSend(composerValue.text, skillMentions)
+                                hideComposerPopups()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            modifier = Modifier.size(actionIconSize),
+                            tint = if (canSend) ShitterTheme.surface else ShitterTheme.textMuted
+                        )
+                    }
+                }
+        }
         }
     }
 }
@@ -2065,6 +4398,7 @@ private enum class ComposerSlashCommand(
     REVIEW(rawValue = "review", description = "review my current changes and find issues"),
     RENAME(rawValue = "rename", description = "rename the current thread"),
     NEW(rawValue = "new", description = "start a new chat during a conversation"),
+    FORK(rawValue = "fork", description = "fork the current conversation into a new session"),
     RESUME(rawValue = "resume", description = "resume a saved chat"),
 
     ;
@@ -2160,6 +4494,72 @@ private fun fuzzyScore(
         candidateIndex += 1
     }
     return if (queryIndex == normalizedQuery.length) score else null
+}
+
+private fun filterSkillSuggestions(
+    skills: List<SkillMetadata>,
+    query: String,
+): List<SkillMetadata> {
+    if (skills.isEmpty()) {
+        return emptyList()
+    }
+    if (query.isBlank()) {
+        return skills.sortedBy { it.name.lowercase(Locale.ROOT) }
+    }
+
+    return skills
+        .mapNotNull { skill ->
+            val scoreFromName = fuzzyScore(candidate = skill.name, query = query)
+            val scoreFromDescription = fuzzyScore(candidate = skill.description, query = query)
+            val score = maxOf(scoreFromName ?: Int.MIN_VALUE, scoreFromDescription ?: Int.MIN_VALUE)
+            if (score == Int.MIN_VALUE) {
+                null
+            } else {
+                skill to score
+            }
+        }
+        .sortedWith(
+            compareByDescending<Pair<SkillMetadata, Int>> { it.second }
+                .thenBy { it.first.name.lowercase(Locale.ROOT) },
+        )
+        .map { it.first }
+}
+
+private fun isMentionNameChar(char: Char): Boolean = char.isLetterOrDigit() || char == '_' || char == '-'
+
+private fun isMentionQueryValid(query: String): Boolean = query.all(::isMentionNameChar)
+
+private fun extractMentionNames(text: String): List<String> {
+    if (text.isEmpty()) {
+        return emptyList()
+    }
+
+    val mentions = ArrayList<String>()
+    var index = 0
+    while (index < text.length) {
+        if (text[index] != '$') {
+            index += 1
+            continue
+        }
+        if (index > 0 && isMentionNameChar(text[index - 1])) {
+            index += 1
+            continue
+        }
+
+        val nameStart = index + 1
+        if (nameStart >= text.length || !isMentionNameChar(text[nameStart])) {
+            index += 1
+            continue
+        }
+
+        var nameEnd = nameStart + 1
+        while (nameEnd < text.length && isMentionNameChar(text[nameEnd])) {
+            nameEnd += 1
+        }
+        mentions += text.substring(nameStart, nameEnd)
+        index = nameEnd
+    }
+    return mentions
 }
 
 private fun parseSlashCommandInvocation(text: String): ComposerSlashInvocation? {
@@ -2273,10 +4673,6 @@ private fun tokenRangeAroundCursor(
     }
     return TextRange(start, end)
 }
-
-private data class SystemCardTheme(
-    val accent: Color,
-)
 
 private sealed interface MarkdownBlock {
     data class Text(
@@ -2461,116 +4857,6 @@ private fun extractSystemTitleAndBody(text: String): Pair<String?, String> {
     return title to body
 }
 
-private fun isToolCallTitle(title: String?): Boolean {
-    val lower = title?.lowercase().orEmpty()
-    return lower.contains("command") ||
-        lower.contains("file") ||
-        lower.contains("mcp") ||
-        lower.contains("web") ||
-        lower.contains("collab") ||
-        lower.contains("image")
-}
-
-private fun compactSystemSummary(
-    title: String?,
-    body: String,
-    toolCall: Boolean,
-): String {
-    if (!toolCall) {
-        return title ?: "System"
-    }
-
-    val lower = title?.lowercase().orEmpty()
-    val lines = body.lines().map { it.trim() }
-
-    if (lower.contains("command")) {
-        val commandStart = lines.indexOfFirst { it.startsWith("Command:") }
-        if (commandStart >= 0 && commandStart + 2 < lines.size) {
-            val raw = lines[commandStart + 2]
-            val command =
-                raw
-                    .replace("/bin/zsh -lc '", "")
-                    .replace("/bin/bash -lc '", "")
-                    .removeSuffix("'")
-                    .trim()
-            val status =
-                lines
-                    .firstOrNull { it.startsWith("Status:") }
-                    ?.removePrefix("Status:")
-                    ?.trim()
-                    .orEmpty()
-            val duration =
-                lines
-                    .firstOrNull { it.startsWith("Duration:") }
-                    ?.removePrefix("Duration:")
-                    ?.trim()
-                    .orEmpty()
-            val statusSuffix =
-                when {
-                    status == "completed" -> " ✓"
-                    status.isNotEmpty() -> " ($status)"
-                    else -> ""
-                }
-            val durationSuffix = if (duration.isNotEmpty()) " $duration" else ""
-            return "$command$statusSuffix$durationSuffix".trim()
-        }
-    }
-
-    if (lower.contains("file")) {
-        val paths = lines.filter { it.startsWith("Path: ") }.map { it.removePrefix("Path: ").trim() }
-        if (paths.isNotEmpty()) {
-            val first = paths.first().substringAfterLast('/').ifBlank { paths.first() }
-            if (paths.size > 1) {
-                return "$first +${paths.size - 1} files"
-            }
-            return first
-        }
-    }
-
-    if (lower.contains("mcp")) {
-        val tool = lines.firstOrNull { it.startsWith("Tool: ") }?.removePrefix("Tool: ")?.trim()
-        val status = lines.firstOrNull { it.startsWith("Status: ") }?.removePrefix("Status: ")?.trim()
-        if (!tool.isNullOrBlank()) {
-            if (status == "completed") {
-                return "$tool ✓"
-            }
-            if (!status.isNullOrBlank()) {
-                return "$tool ($status)"
-            }
-            return tool
-        }
-    }
-
-    if (lower.contains("web")) {
-        val query = lines.firstOrNull { it.startsWith("Query: ") }?.removePrefix("Query: ")?.trim()
-        if (!query.isNullOrBlank()) {
-            return query
-        }
-    }
-
-    if (lower.contains("image")) {
-        val path = lines.firstOrNull { it.startsWith("Path: ") }?.removePrefix("Path: ")?.trim()
-        if (!path.isNullOrBlank()) {
-            return path.substringAfterLast('/').ifBlank { path }
-        }
-    }
-
-    return title ?: "Tool Call"
-}
-
-private fun systemCardTheme(title: String?): SystemCardTheme {
-    val lower = title?.lowercase().orEmpty()
-    return when {
-        lower.contains("command") -> SystemCardTheme(accent = Color(0xFFC7B072))
-        lower.contains("file") -> SystemCardTheme(accent = Color(0xFF7CAFD9))
-        lower.contains("mcp") -> SystemCardTheme(accent = Color(0xFFC797D8))
-        lower.contains("web") -> SystemCardTheme(accent = Color(0xFF88C6C7))
-        lower.contains("collab") -> SystemCardTheme(accent = Color(0xFF9BCF8E))
-        lower.contains("image") -> SystemCardTheme(accent = Color(0xFFE3A66F))
-        else -> SystemCardTheme(accent = ShitterTheme.accent)
-    }
-}
-
 private fun encodeDraftWithLocalImageAttachment(
     draft: String,
     localImagePath: String?,
@@ -2639,6 +4925,7 @@ private fun DirectoryPickerSheet(
     selectedServerId: String?,
     path: String,
     entries: List<String>,
+    recentDirectories: List<RecentDirectoryUiState>,
     isLoading: Boolean,
     error: String?,
     searchQuery: String,
@@ -2649,12 +4936,132 @@ private fun DirectoryPickerSheet(
     onShowHiddenDirectoriesChange: (Boolean) -> Unit,
     onNavigateUp: () -> Unit,
     onNavigateInto: (String) -> Unit,
+    onNavigateToPath: (String) -> Unit,
     onSelect: () -> Unit,
+    onSelectRecent: (String) -> Unit,
+    onRemoveRecentDirectory: (String) -> Unit,
+    onClearRecentDirectories: () -> Unit,
+    onRetry: () -> Unit,
 ) {
-    var serverMenuExpanded by remember { mutableStateOf(false) }
+    DebugRecomposeCheckpoint(name = "DirectoryPickerSheet")
+    val configuration = LocalConfiguration.current
+    val useLargeScreenDialog =
+        configuration.screenWidthDp >= 900 || configuration.smallestScreenWidthDp >= 600
+
+    BackHandler(enabled = true) { onDismiss() }
+
+    if (useLargeScreenDialog) {
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.9f),
+                    color = ShitterTheme.surface,
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                ) {
+                    DirectoryPickerSheetContent(
+                        connectedServers = connectedServers,
+                        selectedServerId = selectedServerId,
+                        path = path,
+                        entries = entries,
+                        recentDirectories = recentDirectories,
+                        isLoading = isLoading,
+                        error = error,
+                        searchQuery = searchQuery,
+                        showHiddenDirectories = showHiddenDirectories,
+                        onDismiss = onDismiss,
+                        onServerSelected = onServerSelected,
+                        onSearchQueryChange = onSearchQueryChange,
+                        onShowHiddenDirectoriesChange = onShowHiddenDirectoriesChange,
+                        onNavigateUp = onNavigateUp,
+                        onNavigateInto = onNavigateInto,
+                        onNavigateToPath = onNavigateToPath,
+                        onSelect = onSelect,
+                        onSelectRecent = onSelectRecent,
+                        onRemoveRecentDirectory = onRemoveRecentDirectory,
+                        onClearRecentDirectories = onClearRecentDirectories,
+                        onRetry = onRetry,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        DirectoryPickerSheetContent(
+            connectedServers = connectedServers,
+            selectedServerId = selectedServerId,
+            path = path,
+            entries = entries,
+            recentDirectories = recentDirectories,
+            isLoading = isLoading,
+            error = error,
+            searchQuery = searchQuery,
+            showHiddenDirectories = showHiddenDirectories,
+            onDismiss = onDismiss,
+            onServerSelected = onServerSelected,
+            onSearchQueryChange = onSearchQueryChange,
+            onShowHiddenDirectoriesChange = onShowHiddenDirectoriesChange,
+            onNavigateUp = onNavigateUp,
+            onNavigateInto = onNavigateInto,
+            onNavigateToPath = onNavigateToPath,
+            onSelect = onSelect,
+            onSelectRecent = onSelectRecent,
+            onRemoveRecentDirectory = onRemoveRecentDirectory,
+            onClearRecentDirectories = onClearRecentDirectories,
+            onRetry = onRetry,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.92f)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun DirectoryPickerSheetContent(
+    connectedServers: List<ServerConfig>,
+    selectedServerId: String?,
+    path: String,
+    entries: List<String>,
+    recentDirectories: List<RecentDirectoryUiState>,
+    isLoading: Boolean,
+    error: String?,
+    searchQuery: String,
+    showHiddenDirectories: Boolean,
+    onDismiss: () -> Unit,
+    onServerSelected: (String) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onShowHiddenDirectoriesChange: (Boolean) -> Unit,
+    onNavigateUp: () -> Unit,
+    onNavigateInto: (String) -> Unit,
+    onNavigateToPath: (String) -> Unit,
+    onSelect: () -> Unit,
+    onSelectRecent: (String) -> Unit,
+    onRemoveRecentDirectory: (String) -> Unit,
+    onClearRecentDirectories: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var serverMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var recentsMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var showClearRecentsConfirmation by rememberSaveable { mutableStateOf(false) }
     val selectedServer = connectedServers.firstOrNull { it.id == selectedServerId }
-    val selectedServerLabel =
-        selectedServer?.let { "${it.name} * ${serverSourceLabel(it.source)}" } ?: "Select server"
+    val selectedServerLabel = selectedServer?.let { "${it.name} • ${serverSourceLabel(it.source)}" } ?: stringResource(R.string.directory_picker_select_server)
+    val selectedPath = path.ifBlank { "/" }
     val trimmedQuery = searchQuery.trim()
     val visibleEntries =
         remember(entries, trimmedQuery, showHiddenDirectories) {
@@ -2667,133 +5074,331 @@ private fun DirectoryPickerSheet(
         }
     val emptyMessage =
         if (trimmedQuery.isEmpty()) {
-            "No subdirectories"
+            stringResource(R.string.directory_picker_no_subdirectories)
         } else {
-            "No matches for \"$trimmedQuery\""
+            stringResource(R.string.directory_picker_no_matches, trimmedQuery)
+        }
+    val showRecentDirectories = trimmedQuery.isEmpty() && recentDirectories.isNotEmpty()
+    val canSelect = selectedServer != null && selectedPath.isNotBlank() && !isLoading
+    val canGoUp = selectedServer != null && selectedPath != "/"
+    val continueRecent = remember(recentDirectories, trimmedQuery) { recentDirectories.firstOrNull()?.takeIf { trimmedQuery.isEmpty() } }
+    val selectedPathLabel = remember(selectedPath) { middleEllipsize(selectedPath, maxChars = 56) }
+    val pathSegments = remember(selectedPath) { directoryPathSegments(selectedPath) }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(stringResource(R.string.directory_picker_title), style = MaterialTheme.typography.titleMedium)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.weight(1f),
+                color = ShitterTheme.surface.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(20.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                Text(
+                    text = stringResource(R.string.directory_picker_connected_server, selectedServerLabel),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = ShitterTheme.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Box {
+                TextButton(
+                    onClick = { serverMenuExpanded = true },
+                    enabled = connectedServers.isNotEmpty(),
+                ) {
+                    Text(stringResource(R.string.directory_picker_change_server))
+                }
+                DropdownMenu(
+                    expanded = serverMenuExpanded,
+                    onDismissRequest = { serverMenuExpanded = false },
+                ) {
+                    connectedServers.forEach { server ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "${server.name} • ${serverSourceLabel(server.source)}",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            onClick = {
+                                serverMenuExpanded = false
+                                onServerSelected(server.id)
+                            },
+                        )
+                    }
+                }
+            }
         }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.directory_picker_search_folders)) },
+            singleLine = true,
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Choose Directory", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Server", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
-                Box {
-                    OutlinedButton(
-                        onClick = { serverMenuExpanded = true },
-                        enabled = connectedServers.isNotEmpty(),
-                    ) {
-                        Text(
-                            selectedServerLabel,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(14.dp))
-                    }
-                    DropdownMenu(
-                        expanded = serverMenuExpanded,
-                        onDismissRequest = { serverMenuExpanded = false },
-                    ) {
-                        connectedServers.forEach { server ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "${server.name} * ${serverSourceLabel(server.source)}",
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                onClick = {
-                                    serverMenuExpanded = false
-                                    onServerSelected(server.id)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-            Text(path.ifBlank { "/" }, color = ShitterTheme.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-
-            val canSelect = selectedServer != null && path.isNotBlank() && !isLoading
-            val canGoUp = selectedServer != null && path.isNotBlank()
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onNavigateUp, enabled = canGoUp) {
-                    Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Up")
-                }
-                Button(onClick = onSelect, enabled = canSelect) {
-                    Text("Select")
-                }
-                TextButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Cancel")
-                }
-            }
-
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search folders") },
-                singleLine = true,
+            Checkbox(
+                checked = showHiddenDirectories,
+                onCheckedChange = { checked ->
+                    onShowHiddenDirectoriesChange(checked)
+                },
             )
+            Text(
+                text = stringResource(R.string.directory_picker_show_hidden_folders),
+                color = ShitterTheme.textSecondary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = onNavigateUp,
+                enabled = canGoUp,
             ) {
-                Checkbox(
-                    checked = showHiddenDirectories,
-                    onCheckedChange = { checked ->
-                        onShowHiddenDirectoriesChange(checked)
-                    },
-                )
-                Text("Show hidden folders", color = ShitterTheme.textSecondary)
+                Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(stringResource(R.string.directory_picker_up_one_level))
             }
+            pathSegments.forEach { segment ->
+                Surface(
+                    modifier = Modifier.clickable { onNavigateToPath(segment.path) },
+                    color = if (segment.path == selectedPath) ShitterTheme.surfaceLight else ShitterTheme.surface.copy(alpha = 0.65f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (segment.path == selectedPath) ShitterTheme.accent else ShitterTheme.border),
+                ) {
+                    Text(
+                        text = segment.label,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
 
+        Surface(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            color = ShitterTheme.surface.copy(alpha = 0.4f),
+            shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        ) {
             when {
                 isLoading -> {
-                    Text("Loading...", color = ShitterTheme.textMuted)
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.directory_picker_loading),
+                            color = ShitterTheme.textMuted,
+                        )
+                    }
                 }
 
                 error != null -> {
-                    Text(error, color = ShitterTheme.danger)
-                }
-
-                visibleEntries.isEmpty() -> {
-                    Text(emptyMessage, color = ShitterTheme.textMuted)
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.directory_picker_load_error),
+                            color = ShitterTheme.danger,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = error,
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = onRetry) {
+                                Text(stringResource(R.string.directory_picker_retry))
+                            }
+                            TextButton(onClick = { serverMenuExpanded = true }) {
+                                Text(stringResource(R.string.directory_picker_change_server))
+                            }
+                        }
+                    }
                 }
 
                 else -> {
                     LazyColumn(
-                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f),
+                        modifier = Modifier.fillMaxSize().padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(visibleEntries, key = { it }) { entry ->
-                            Surface(
-                                modifier = Modifier.fillMaxWidth().clickable { onNavigateInto(entry) },
-                                color = ShitterTheme.surface.copy(alpha = 0.6f),
-                                shape = RoundedCornerShape(8.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        continueRecent?.let { recent ->
+                            item(key = "continue-recent") {
+                                Button(
+                                    onClick = { onSelectRecent(recent.path) },
+                                    modifier = Modifier.fillMaxWidth(),
                                 ) {
-                                    Icon(Icons.Default.Folder, contentDescription = null, tint = ShitterTheme.textSecondary)
-                                    Text(entry, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        text = stringResource(R.string.directory_picker_continue_in_folder, cwdLeaf(recent.path)),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+
+                        if (showRecentDirectories) {
+                            item(key = "recents-header") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.directory_picker_recent_directories),
+                                        color = ShitterTheme.textSecondary,
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
+                                    Box {
+                                        IconButton(onClick = { recentsMenuExpanded = true }) {
+                                            Icon(Icons.Default.MoreVert, contentDescription = null, tint = ShitterTheme.textSecondary)
+                                        }
+                                        DropdownMenu(
+                                            expanded = recentsMenuExpanded,
+                                            onDismissRequest = { recentsMenuExpanded = false },
+                                        ) {
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.directory_picker_clear_recent_directories)) },
+                                                onClick = {
+                                                    recentsMenuExpanded = false
+                                                    showClearRecentsConfirmation = true
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            items(recentDirectories, key = { "recent-${it.path}" }) { recent ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().clickable { onSelectRecent(recent.path) },
+                                    color = ShitterTheme.surfaceLight.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Folder,
+                                            contentDescription = null,
+                                            tint = ShitterTheme.textSecondary,
+                                        )
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            Text(
+                                                recent.path,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                            val relativeDate =
+                                                DateUtils
+                                                    .getRelativeTimeSpanString(
+                                                        recent.lastUsedAtEpochMillis,
+                                                        System.currentTimeMillis(),
+                                                        DateUtils.MINUTE_IN_MILLIS,
+                                                    ).toString()
+                                            Text(
+                                                "$relativeDate • ${recent.useCount} uses",
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = ShitterTheme.textSecondary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        }
+                                        IconButton(onClick = { onRemoveRecentDirectory(recent.path) }) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = stringResource(R.string.directory_picker_remove_recent),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (canGoUp) {
+                            item(key = "up") {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().clickable(onClick = onNavigateUp),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = ShitterTheme.textSecondary)
+                                        Text(
+                                            text = stringResource(R.string.directory_picker_up_one_level),
+                                            color = ShitterTheme.textSecondary,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (visibleEntries.isEmpty()) {
+                            item(key = "empty") {
+                                Text(
+                                    text = emptyMessage,
+                                    color = ShitterTheme.textMuted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 12.dp),
+                                )
+                            }
+                        } else {
+                            items(visibleEntries, key = { it }) { entry ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().clickable { onNavigateInto(entry) },
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(Icons.Default.Folder, contentDescription = null, tint = ShitterTheme.textSecondary)
+                                        Text(entry, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
                         }
@@ -2801,7 +5406,100 @@ private fun DirectoryPickerSheet(
                 }
             }
         }
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (selectedPath.isNotBlank()) {
+                Text(
+                    text = selectedPathLabel,
+                    color = ShitterTheme.textMuted,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                )
+            } else if (!canSelect) {
+                Text(
+                    text = stringResource(R.string.directory_picker_choose_folder_helper),
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.directory_picker_cancel))
+                }
+                TextButton(
+                    onClick = onSelect,
+                    enabled = canSelect,
+                ) {
+                    Text(stringResource(R.string.directory_picker_select_folder))
+                }
+            }
+        }
     }
+
+    if (showClearRecentsConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearRecentsConfirmation = false },
+            title = { Text(stringResource(R.string.directory_picker_clear_recent_title)) },
+            text = { Text(stringResource(R.string.directory_picker_clear_recent_message)) },
+            dismissButton = {
+                TextButton(onClick = { showClearRecentsConfirmation = false }) {
+                    Text(stringResource(R.string.directory_picker_cancel))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearRecentsConfirmation = false
+                        onClearRecentDirectories()
+                    },
+                ) {
+                    Text(stringResource(R.string.directory_picker_clear))
+                }
+            },
+        )
+    }
+}
+
+private data class DirectoryPathSegment(
+    val label: String,
+    val path: String,
+)
+
+private fun directoryPathSegments(path: String): List<DirectoryPathSegment> {
+    val normalized = path.trim().ifEmpty { "/" }
+    if (normalized == "/") {
+        return listOf(DirectoryPathSegment(label = "/", path = "/"))
+    }
+    val segments = mutableListOf(DirectoryPathSegment(label = "/", path = "/"))
+    var runningPath = ""
+    normalized
+        .trim('/')
+        .split('/')
+        .filter { it.isNotBlank() }
+        .forEach { segment ->
+            runningPath = if (runningPath.isEmpty()) "/$segment" else "$runningPath/$segment"
+            segments += DirectoryPathSegment(label = segment, path = runningPath)
+        }
+    return segments
+}
+
+private fun middleEllipsize(
+    value: String,
+    maxChars: Int,
+): String {
+    if (maxChars < 5 || value.length <= maxChars) {
+        return value
+    }
+    val headCount = (maxChars - 1) / 2
+    val tailCount = maxChars - 1 - headCount
+    return "${value.take(headCount)}…${value.takeLast(tailCount)}"
 }
 
 private enum class ManualField {
@@ -2879,6 +5577,13 @@ private fun DiscoverySheet(
                                 )
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (state.isLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = ShitterTheme.textMuted,
+                                    )
+                                }
                                 TextButton(onClick = onRefresh) {
                                     Text("Refresh")
                                 }
@@ -3249,8 +5954,20 @@ private fun DiscoverySheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("Connect Server", style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = onRefresh) {
-                    Text("Refresh")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (state.isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = ShitterTheme.textMuted,
+                        )
+                    }
+                    TextButton(onClick = onRefresh) {
+                        Text("Refresh")
+                    }
                 }
             }
 
@@ -3479,75 +6196,178 @@ private fun SettingsSheet(
     connectedServers: List<ServerConfig>,
     onDismiss: () -> Unit,
     onOpenAccount: () -> Unit,
+    onCopyBundledLogs: () -> Unit,
     onOpenDiscovery: () -> Unit,
     onRemoveServer: (String) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("Settings", style = MaterialTheme.typography.titleMedium)
+    val configuration = LocalConfiguration.current
+    val useLargeScreenDialog =
+        configuration.screenWidthDp >= 900 || configuration.smallestScreenWidthDp >= 600
 
-            Text("Authentication", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
-            Surface(
-                modifier = Modifier.fillMaxWidth().clickable { onOpenAccount() },
-                color = ShitterTheme.surface.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+    if (useLargeScreenDialog) {
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(24.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                Surface(
+                    modifier = Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.9f),
+                    color = ShitterTheme.surface,
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Account", color = ShitterTheme.textPrimary)
-                        Text(accountState.summaryTitle, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
-                    }
-                    Text("Open", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+                    SettingsSheetContent(
+                        accountState = accountState,
+                        connectedServers = connectedServers,
+                        onDismiss = onDismiss,
+                        onOpenAccount = onOpenAccount,
+                        onCopyBundledLogs = onCopyBundledLogs,
+                        onOpenDiscovery = onOpenDiscovery,
+                        onRemoveServer = onRemoveServer,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
+                    )
                 }
             }
+        }
+        return
+    }
 
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        SettingsSheetContent(
+            accountState = accountState,
+            connectedServers = connectedServers,
+            onDismiss = null,
+            onOpenAccount = onOpenAccount,
+            onCopyBundledLogs = onCopyBundledLogs,
+            onOpenDiscovery = onOpenDiscovery,
+            onRemoveServer = onRemoveServer,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun SettingsSheetContent(
+    accountState: AccountState,
+    connectedServers: List<ServerConfig>,
+    onDismiss: (() -> Unit)?,
+    onOpenAccount: () -> Unit,
+    onCopyBundledLogs: () -> Unit,
+    onOpenDiscovery: () -> Unit,
+    onRemoveServer: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (onDismiss == null) {
+            Text("Settings", style = MaterialTheme.typography.titleMedium)
+        } else {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Servers", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
-                TextButton(onClick = onOpenDiscovery) {
-                    Text("Add Server")
+                Text("Settings", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onDismiss) {
+                    Text("Close", color = ShitterTheme.danger)
                 }
             }
+        }
 
-            if (connectedServers.isEmpty()) {
-                Text("No servers connected", color = ShitterTheme.textMuted)
-            } else {
-                connectedServers.forEach { server ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = ShitterTheme.surface.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        OutlinedButton(
+            onClick = onCopyBundledLogs,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Bundled Debug")
+        }
+
+        Text("Authentication", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+        Surface(
+            modifier = Modifier.fillMaxWidth().clickable { onOpenAccount() },
+            color = ShitterTheme.surface.copy(alpha = 0.6f),
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Account", color = ShitterTheme.textPrimary)
+                    Text(accountState.summaryTitle, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                }
+                Text("Open", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+
+        Text("Typography", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = ShitterTheme.surface.copy(alpha = 0.6f),
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text("Custom Font", color = ShitterTheme.textPrimary)
+                Text(
+                    "Using Berkeley Mono for app typography.",
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Servers", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+            TextButton(onClick = onOpenDiscovery) {
+                Text("Add Server")
+            }
+        }
+
+        if (connectedServers.isEmpty()) {
+            Text("No servers connected", color = ShitterTheme.textMuted)
+        } else {
+            connectedServers.forEach { server ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(server.name, color = ShitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    "${server.host}:${server.port} * ${serverSourceLabel(server.source)}",
-                                    color = ShitterTheme.textSecondary,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            TextButton(onClick = { onRemoveServer(server.id) }) {
-                                Text("Remove", color = ShitterTheme.danger)
-                            }
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(server.name, color = ShitterTheme.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${server.host}:${server.port} * ${serverSourceLabel(server.source)}",
+                                color = ShitterTheme.textSecondary,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        TextButton(onClick = { onRemoveServer(server.id) }) {
+                            Text("Remove", color = ShitterTheme.danger)
                         }
                     }
                 }
@@ -3560,6 +6380,7 @@ private fun SettingsSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun AccountSheet(
     accountState: AccountState,
+    activeServerSource: ServerSource?,
     apiKeyDraft: String,
     isWorking: Boolean,
     onDismiss: () -> Unit,
@@ -3568,6 +6389,7 @@ private fun AccountSheet(
     onLoginWithApiKey: () -> Unit,
     onLogout: () -> Unit,
     onCancelLogin: () -> Unit,
+    onCopyBundledLogs: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
 
@@ -3602,6 +6424,8 @@ private fun AccountSheet(
                         if (subtitle != null) {
                             Text(subtitle, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
                         }
+                        val sourceLabel = activeServerSource?.let { serverSourceLabel(it) } ?: "none"
+                        Text("Server: $sourceLabel", color = ShitterTheme.textMuted, style = MaterialTheme.typography.labelLarge)
                     }
                     if (accountState.status == AuthStatus.API_KEY || accountState.status == AuthStatus.CHATGPT) {
                         TextButton(onClick = onLogout, enabled = !isWorking) {
@@ -3664,6 +6488,13 @@ private fun AccountSheet(
             if (accountState.lastError != null) {
                 Text(accountState.lastError, color = ShitterTheme.danger, style = MaterialTheme.typography.labelLarge)
             }
+
+            OutlinedButton(
+                onClick = onCopyBundledLogs,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Copy Bundled Logs")
+            }
         }
     }
 }
@@ -3680,7 +6511,7 @@ private fun relativeDate(timestamp: Long): String {
 private fun accountStatusColor(status: AuthStatus): Color =
     when (status) {
         AuthStatus.CHATGPT -> ShitterTheme.accent
-        AuthStatus.API_KEY -> Color(0xFF00AAFF)
+        AuthStatus.API_KEY -> ShitterTheme.info
         AuthStatus.NOT_LOGGED_IN -> ShitterTheme.textMuted
         AuthStatus.UNKNOWN -> ShitterTheme.textMuted
     }
@@ -3688,6 +6519,7 @@ private fun accountStatusColor(status: AuthStatus): Color =
 private fun serverSourceLabel(source: ServerSource): String =
     when (source) {
         ServerSource.LOCAL -> "local"
+        ServerSource.BUNDLED -> "bundled"
         ServerSource.BONJOUR -> "bonjour"
         ServerSource.SSH -> "ssh"
         ServerSource.TAILSCALE -> "tailscale"
@@ -3698,6 +6530,7 @@ private fun serverSourceLabel(source: ServerSource): String =
 private fun serverSourceAccentColor(source: ServerSource): Color =
     when (source) {
         ServerSource.LOCAL -> ShitterTheme.accent
+        ServerSource.BUNDLED -> ShitterTheme.accent
         ServerSource.BONJOUR -> ShitterTheme.accent
         ServerSource.SSH -> ShitterTheme.accent
         ServerSource.TAILSCALE -> ShitterTheme.accent
@@ -3706,16 +6539,30 @@ private fun serverSourceAccentColor(source: ServerSource): Color =
     }
 
 private fun cwdLeaf(path: String): String {
-    val trimmed = path.trim().trimEnd('/')
-    if (trimmed.isEmpty() || trimmed == "/") {
+    val trimmed = normalizeFolderPath(path)
+    if (trimmed == "/") {
         return "/"
     }
     return trimmed.substringAfterLast('/')
 }
 
+private fun normalizeFolderPath(path: String): String {
+    val trimmed = path.trim()
+    if (trimmed.isEmpty()) {
+        return "/"
+    }
+
+    var normalized = trimmed.replace(Regex("/+"), "/")
+    while (normalized.length > 1 && normalized.endsWith("/")) {
+        normalized = normalized.dropLast(1)
+    }
+    return if (normalized.isEmpty()) "/" else normalized
+}
+
 private fun discoverySourceLabel(source: DiscoverySource): String =
     when (source) {
         DiscoverySource.LOCAL -> "local"
+        DiscoverySource.BUNDLED -> "bundled"
         DiscoverySource.BONJOUR -> "bonjour"
         DiscoverySource.SSH -> "ssh"
         DiscoverySource.TAILSCALE -> "tailscale"

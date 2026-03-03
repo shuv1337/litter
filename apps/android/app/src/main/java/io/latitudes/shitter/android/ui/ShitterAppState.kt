@@ -1,5 +1,8 @@
 package io.latitudes.shitter.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import io.latitudes.shitter.android.core.bridge.CodexRuntimeStartupPolicy
@@ -7,6 +10,7 @@ import io.latitudes.shitter.android.core.network.DiscoveredServer
 import io.latitudes.shitter.android.core.network.DiscoverySource
 import io.latitudes.shitter.android.core.network.ServerDiscoveryService
 import io.latitudes.shitter.android.state.AccountState
+import io.latitudes.shitter.android.state.ApprovalDecision
 import io.latitudes.shitter.android.state.AppState
 import io.latitudes.shitter.android.state.AuthStatus
 import io.latitudes.shitter.android.state.ChatMessage
@@ -14,11 +18,13 @@ import io.latitudes.shitter.android.state.ExperimentalFeature
 import io.latitudes.shitter.android.state.FuzzyFileSearchResult
 import io.latitudes.shitter.android.state.ModelOption
 import io.latitudes.shitter.android.state.ModelSelection
+import io.latitudes.shitter.android.state.PendingApproval
 import io.latitudes.shitter.android.state.SavedSshCredential
 import io.latitudes.shitter.android.state.ServerConfig
 import io.latitudes.shitter.android.state.ServerConnectionStatus
 import io.latitudes.shitter.android.state.ServerManager
 import io.latitudes.shitter.android.state.ServerSource
+import io.latitudes.shitter.android.state.SkillMentionInput
 import io.latitudes.shitter.android.state.SkillMetadata
 import io.latitudes.shitter.android.state.SshAuthMethod
 import io.latitudes.shitter.android.state.SshCredentialStore
@@ -42,15 +48,25 @@ import kotlinx.coroutines.flow.update
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicInteger
 
+private const val UI_PREFERENCES_NAME = "shitter_ui_prefs"
+private const val CONVERSATION_TEXT_SIZE_STEP_KEY = "conversation_text_size_step"
+
 data class DirectoryPickerUiState(
     val isVisible: Boolean = false,
     val selectedServerId: String? = null,
     val currentPath: String = "",
     val entries: List<String> = emptyList(),
+    val recentDirectories: List<RecentDirectoryUiState> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val showHiddenDirectories: Boolean = false,
+)
+
+data class RecentDirectoryUiState(
+    val path: String,
+    val lastUsedAtEpochMillis: Long,
+    val useCount: Int,
 )
 
 data class UiDiscoveredServer(
@@ -102,8 +118,14 @@ data class UiShellState(
     val sandboxMode: String = "workspace-write",
     val sessions: List<ThreadState> = emptyList(),
     val sessionSearchQuery: String = "",
+    val sessionServerFilterId: String? = null,
+    val sessionShowOnlyForks: Boolean = false,
+    val sessionWorkspaceSortModeRaw: String = "MOST_RECENT",
+    val collapsedSessionFolders: Set<String> = emptySet(),
     val activeThreadKey: ThreadKey? = null,
     val messages: List<ChatMessage> = emptyList(),
+    val toolTargetLabelsById: Map<String, String> = emptyMap(),
+    val conversationTextSizeStep: Int = ConversationTextSizing.DEFAULT_STEP,
     val draft: String = "",
     val isSending: Boolean = false,
     val currentCwd: String = "/",
@@ -113,6 +135,7 @@ data class UiShellState(
     val showAccount: Boolean = false,
     val accountOpenedFromSettings: Boolean = false,
     val accountState: AccountState = AccountState(),
+    val activePendingApproval: PendingApproval? = null,
     val apiKeyDraft: String = "",
     val isAuthWorking: Boolean = false,
     val sshLogin: SshLoginUiState = SshLoginUiState(),
@@ -136,7 +159,19 @@ interface ShitterAppState : Closeable {
 
     fun updateSessionSearchQuery(value: String)
 
+    fun updateSessionServerFilter(serverId: String?)
+
+    fun updateSessionShowOnlyForks(value: Boolean)
+
+    fun updateSessionWorkspaceSortMode(rawValue: String)
+
+    fun clearSessionFilters()
+
+    fun toggleSessionFolder(folderPath: String)
+
     fun updateDraft(value: String)
+
+    fun updateConversationTextSizeStep(step: Int)
 
     fun refreshSessions()
 
@@ -154,15 +189,30 @@ interface ShitterAppState : Closeable {
 
     fun navigateDirectoryUp()
 
+    fun navigateDirectoryToPath(path: String)
+
+    fun reloadDirectoryPicker()
+
     fun confirmStartSessionFromPicker()
 
-    fun sendDraft()
+    fun startSessionFromRecent(path: String)
+
+    fun removeRecentDirectory(path: String)
+
+    fun clearRecentDirectories()
+
+    fun sendDraft(skillMentions: List<SkillMentionInput> = emptyList())
 
     fun interrupt()
 
     fun updateComposerPermissions(
         approvalPolicy: String,
         sandboxMode: String,
+    )
+
+    fun respondToPendingApproval(
+        approvalId: String,
+        decision: ApprovalDecision,
     )
 
     fun startReview(
@@ -172,6 +222,30 @@ interface ShitterAppState : Closeable {
     fun renameActiveThread(
         name: String,
         onComplete: (Result<Unit>) -> Unit,
+    )
+
+    fun renameSession(
+        threadKey: ThreadKey,
+        name: String,
+        onComplete: (Result<Unit>) -> Unit,
+    )
+
+    fun editMessage(
+        message: ChatMessage,
+    )
+
+    fun forkConversation()
+
+    fun forkSession(
+        threadKey: ThreadKey,
+    )
+
+    fun forkConversationFromMessage(
+        message: ChatMessage,
+    )
+
+    fun archiveSession(
+        threadKey: ThreadKey,
     )
 
     fun listExperimentalFeatures(
@@ -207,6 +281,8 @@ interface ShitterAppState : Closeable {
     fun logoutAccount()
 
     fun cancelLogin()
+
+    fun copyBundledLogs()
 
     fun openDiscovery()
 
@@ -251,16 +327,33 @@ interface ShitterAppState : Closeable {
 }
 
 class DefaultShitterAppState(
+    private val appContext: Context,
     private val serverManager: ServerManager,
     private val discoveryService: ServerDiscoveryService = ServerDiscoveryService(),
     private val sshSessionManager: SshSessionManager = SshSessionManager(),
     private val sshCredentialStore: SshCredentialStore? = null,
+    private val recentDirectoryStore: RecentDirectoryStore? = null,
 ) : ShitterAppState {
-    private val _uiState = MutableStateFlow(UiShellState())
+    private val uiPreferences by lazy {
+        appContext.getSharedPreferences(UI_PREFERENCES_NAME, Context.MODE_PRIVATE)
+    }
+    private val _uiState =
+        MutableStateFlow(
+            UiShellState(
+                conversationTextSizeStep =
+                    ConversationTextSizing.clampStep(
+                        uiPreferences.getInt(
+                            CONVERSATION_TEXT_SIZE_STEP_KEY,
+                            ConversationTextSizing.DEFAULT_STEP,
+                        ),
+                    ),
+            ),
+        )
     override val uiState: StateFlow<UiShellState> = _uiState.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val directoryPickerRequestVersion = AtomicInteger(0)
+    private val discoveryScanVersion = AtomicInteger(0)
 
     private val observerHandle: Closeable =
         serverManager.observe { backend ->
@@ -325,19 +418,88 @@ class DefaultShitterAppState(
         _uiState.update { it.copy(sessionSearchQuery = value) }
     }
 
+    override fun updateSessionServerFilter(serverId: String?) {
+        _uiState.update { current ->
+            if (current.sessionServerFilterId == serverId) {
+                current
+            } else {
+                current.copy(sessionServerFilterId = serverId)
+            }
+        }
+    }
+
+    override fun updateSessionShowOnlyForks(value: Boolean) {
+        _uiState.update { current ->
+            if (current.sessionShowOnlyForks == value) {
+                current
+            } else {
+                current.copy(sessionShowOnlyForks = value)
+            }
+        }
+    }
+
+    override fun updateSessionWorkspaceSortMode(rawValue: String) {
+        _uiState.update { current ->
+            if (current.sessionWorkspaceSortModeRaw == rawValue) {
+                current
+            } else {
+                current.copy(sessionWorkspaceSortModeRaw = rawValue)
+            }
+        }
+    }
+
+    override fun clearSessionFilters() {
+        _uiState.update { current ->
+            if (current.sessionServerFilterId == null && !current.sessionShowOnlyForks) {
+                current
+            } else {
+                current.copy(
+                    sessionServerFilterId = null,
+                    sessionShowOnlyForks = false,
+                )
+            }
+        }
+    }
+
+    override fun toggleSessionFolder(folderPath: String) {
+        val normalizedFolderPath = folderPath.trim()
+        if (normalizedFolderPath.isEmpty()) {
+            return
+        }
+        _uiState.update { current ->
+            val nextCollapsedFolders =
+                if (current.collapsedSessionFolders.contains(normalizedFolderPath)) {
+                    current.collapsedSessionFolders - normalizedFolderPath
+                } else {
+                    current.collapsedSessionFolders + normalizedFolderPath
+                }
+            current.copy(collapsedSessionFolders = nextCollapsedFolders)
+        }
+    }
+
     override fun updateDraft(value: String) {
         _uiState.update { it.copy(draft = value) }
+    }
+
+    override fun updateConversationTextSizeStep(step: Int) {
+        val clamped = ConversationTextSizing.clampStep(step)
+        _uiState.update { current ->
+            if (current.conversationTextSizeStep == clamped) {
+                current
+            } else {
+                current.copy(conversationTextSizeStep = clamped)
+            }
+        }
+        uiPreferences
+            .edit()
+            .putInt(CONVERSATION_TEXT_SIZE_STEP_KEY, clamped)
+            .apply()
     }
 
     override fun refreshSessions() {
         serverManager.refreshSessions { result ->
             result.onFailure { error ->
                 setUiError(error.message ?: "Failed to refresh sessions")
-            }
-        }
-        serverManager.syncActiveThreadFromServer { result ->
-            result.onFailure { error ->
-                setUiError(error.message ?: "Failed to sync active thread")
             }
         }
     }
@@ -363,6 +525,7 @@ class DefaultShitterAppState(
                         selectedServerId = selectedServerId,
                         currentPath = "",
                         entries = emptyList(),
+                        recentDirectories = loadRecentDirectoriesForServer(selectedServerId),
                         isLoading = true,
                         errorMessage = null,
                         searchQuery = "",
@@ -382,6 +545,7 @@ class DefaultShitterAppState(
                         isVisible = false,
                         selectedServerId = null,
                         errorMessage = null,
+                        recentDirectories = emptyList(),
                         isLoading = false,
                         searchQuery = "",
                         showHiddenDirectories = false,
@@ -395,7 +559,6 @@ class DefaultShitterAppState(
         if (!picker.isVisible || picker.selectedServerId == serverId) {
             return
         }
-        clearDirectorySearchIfNeeded()
         _uiState.update {
             it.copy(
                 directoryPicker =
@@ -403,8 +566,10 @@ class DefaultShitterAppState(
                         selectedServerId = serverId,
                         currentPath = "",
                         entries = emptyList(),
+                        recentDirectories = loadRecentDirectoriesForServer(serverId),
                         isLoading = true,
                         errorMessage = null,
+                        searchQuery = "",
                     ),
             )
         }
@@ -428,7 +593,6 @@ class DefaultShitterAppState(
     }
 
     override fun navigateDirectoryInto(entry: String) {
-        clearDirectorySearchIfNeeded()
         val picker = _uiState.value.directoryPicker
         val serverId = picker.selectedServerId
         if (serverId.isNullOrBlank()) {
@@ -446,7 +610,6 @@ class DefaultShitterAppState(
     }
 
     override fun navigateDirectoryUp() {
-        clearDirectorySearchIfNeeded()
         val picker = _uiState.value.directoryPicker
         val serverId = picker.selectedServerId
         if (serverId.isNullOrBlank()) {
@@ -463,6 +626,27 @@ class DefaultShitterAppState(
         loadDirectory(path = up, serverId = serverId)
     }
 
+    override fun navigateDirectoryToPath(path: String) {
+        val picker = _uiState.value.directoryPicker
+        val serverId = picker.selectedServerId
+        if (serverId.isNullOrBlank()) {
+            setUiError("No server selected for directory picker")
+            return
+        }
+        val normalizedPath = path.trim().ifEmpty { "/" }
+        loadDirectory(path = normalizedPath, serverId = serverId)
+    }
+
+    override fun reloadDirectoryPicker() {
+        val picker = _uiState.value.directoryPicker
+        val serverId = picker.selectedServerId
+        if (serverId.isNullOrBlank()) {
+            return
+        }
+        val targetPath = picker.currentPath.ifBlank { "/" }
+        loadDirectory(path = targetPath, serverId = serverId)
+    }
+
     override fun confirmStartSessionFromPicker() {
         val snapshot = _uiState.value
         val serverId = snapshot.directoryPicker.selectedServerId
@@ -475,7 +659,66 @@ class DefaultShitterAppState(
             setUiError("Directory listing is still loading")
             return
         }
-        val cwd = pickerPath
+        startSessionFromDirectory(
+            serverId = serverId,
+            cwd = pickerPath,
+            snapshot = snapshot,
+        )
+    }
+
+    override fun startSessionFromRecent(path: String) {
+        val snapshot = _uiState.value
+        val serverId = snapshot.directoryPicker.selectedServerId
+        if (serverId.isNullOrBlank()) {
+            setUiError("No server selected for new session")
+            return
+        }
+        val cwd = path.trim()
+        if (cwd.isEmpty()) {
+            return
+        }
+        startSessionFromDirectory(
+            serverId = serverId,
+            cwd = cwd,
+            snapshot = snapshot,
+        )
+    }
+
+    override fun removeRecentDirectory(path: String) {
+        val serverId = _uiState.value.directoryPicker.selectedServerId
+        if (serverId.isNullOrBlank()) {
+            return
+        }
+        val updatedRecents =
+            recentDirectoryStore
+                ?.remove(serverId = serverId, path = path)
+                ?.map { it.toUiState() }
+                .orEmpty()
+        _uiState.update { current ->
+            current.copy(
+                directoryPicker = current.directoryPicker.copy(recentDirectories = updatedRecents),
+            )
+        }
+    }
+
+    override fun clearRecentDirectories() {
+        val serverId = _uiState.value.directoryPicker.selectedServerId
+        if (serverId.isNullOrBlank()) {
+            return
+        }
+        recentDirectoryStore?.clear(serverId)
+        _uiState.update { current ->
+            current.copy(
+                directoryPicker = current.directoryPicker.copy(recentDirectories = emptyList()),
+            )
+        }
+    }
+
+    private fun startSessionFromDirectory(
+        serverId: String,
+        cwd: String,
+        snapshot: UiShellState,
+    ) {
         val modelSelection =
             ModelSelection(
                 modelId = snapshot.selectedModelId,
@@ -490,6 +733,11 @@ class DefaultShitterAppState(
                 setUiError(error.message ?: "Failed to start session")
             }
             result.onSuccess {
+                val updatedRecents =
+                    recentDirectoryStore
+                        ?.record(serverId = serverId, path = cwd)
+                        ?.map { it.toUiState() }
+                        .orEmpty()
                 directoryPickerRequestVersion.incrementAndGet()
                 _uiState.update {
                     it.copy(
@@ -500,6 +748,7 @@ class DefaultShitterAppState(
                                 isVisible = false,
                                 selectedServerId = null,
                                 errorMessage = null,
+                                recentDirectories = updatedRecents,
                                 searchQuery = "",
                                 showHiddenDirectories = false,
                             ),
@@ -510,7 +759,7 @@ class DefaultShitterAppState(
         }
     }
 
-    override fun sendDraft() {
+    override fun sendDraft(skillMentions: List<SkillMentionInput>) {
         val snapshot = _uiState.value
         val prompt = snapshot.draft.trim()
         if (prompt.isEmpty() || snapshot.isSending) {
@@ -529,6 +778,7 @@ class DefaultShitterAppState(
             text = prompt,
             cwd = snapshot.currentCwd,
             modelSelection = modelSelection,
+            skillMentions = skillMentions,
         ) { result ->
             result.onFailure { error ->
                 setUiError(error.message ?: "Failed to send message")
@@ -562,6 +812,13 @@ class DefaultShitterAppState(
         )
     }
 
+    override fun respondToPendingApproval(
+        approvalId: String,
+        decision: ApprovalDecision,
+    ) {
+        serverManager.respondToPendingApproval(approvalId = approvalId, decision = decision)
+    }
+
     override fun startReview(onComplete: (Result<Unit>) -> Unit) {
         serverManager.startReviewOnActiveThread { result ->
             result.onFailure { error ->
@@ -580,6 +837,68 @@ class DefaultShitterAppState(
                 setUiError(error.message ?: "Failed to rename thread")
             }
             onComplete(result)
+        }
+    }
+
+    override fun renameSession(
+        threadKey: ThreadKey,
+        name: String,
+        onComplete: (Result<Unit>) -> Unit,
+    ) {
+        serverManager.renameThread(threadKey, name) { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to rename thread")
+            }
+            onComplete(result)
+        }
+    }
+
+    override fun editMessage(message: ChatMessage) {
+        serverManager.editMessage(message.id) { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to edit message")
+            }
+            result.onSuccess {
+                _uiState.update { it.copy(draft = message.text) }
+            }
+        }
+    }
+
+    override fun forkConversation() {
+        serverManager.forkConversation { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to fork conversation")
+            }
+            result.onSuccess {
+                _uiState.update { it.copy(isSidebarOpen = false, sessionSearchQuery = "") }
+            }
+        }
+    }
+
+    override fun forkSession(threadKey: ThreadKey) {
+        serverManager.forkThread(threadKey) { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to fork conversation")
+            }
+            result.onSuccess {
+                _uiState.update { it.copy(isSidebarOpen = false, sessionSearchQuery = "") }
+            }
+        }
+    }
+
+    override fun forkConversationFromMessage(message: ChatMessage) {
+        serverManager.forkConversationFromMessage(message.id) { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to fork conversation")
+            }
+        }
+    }
+
+    override fun archiveSession(threadKey: ThreadKey) {
+        serverManager.archiveThread(threadKey) { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to delete session")
+            }
         }
     }
 
@@ -695,6 +1014,19 @@ class DefaultShitterAppState(
         }
     }
 
+    override fun copyBundledLogs() {
+        serverManager.readBundledLogs { result ->
+            result.onFailure { error ->
+                setUiError(error.message ?: "Failed to read bundled logs")
+            }
+            result.onSuccess { logs ->
+                val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Bundled Codex Logs", logs))
+                setUiError("Bundled logs copied to clipboard. Paste them here and I can debug quickly.")
+            }
+        }
+    }
+
     override fun openDiscovery() {
         _uiState.update {
             it.copy(
@@ -711,6 +1043,7 @@ class DefaultShitterAppState(
     }
 
     override fun dismissDiscovery() {
+        discoveryScanVersion.incrementAndGet()
         _uiState.update {
             it.copy(
                 discovery = it.discovery.copy(isVisible = false, errorMessage = null),
@@ -720,6 +1053,7 @@ class DefaultShitterAppState(
     }
 
     override fun refreshDiscovery() {
+        val currentVersion = discoveryScanVersion.incrementAndGet()
         _uiState.update {
             it.copy(
                 discovery =
@@ -727,15 +1061,44 @@ class DefaultShitterAppState(
                         isVisible = true,
                         isLoading = true,
                         errorMessage = null,
+                        servers = emptyList(),
                     ),
             )
         }
 
         scope.launch {
-            val result = runCatching { discoveryService.discover() }
+            val hideOnDeviceServer = !CodexRuntimeStartupPolicy.onDeviceBridgeEnabled()
+
+            fun mapServers(servers: List<DiscoveredServer>): List<UiDiscoveredServer> =
+                servers
+                    .map { discovered -> discovered.toUi() }
+                    .filterNot { server ->
+                        hideOnDeviceServer &&
+                            (server.source == DiscoverySource.LOCAL || server.id == "local")
+                    }
+
+            val result =
+                runCatching {
+                    discoveryService.discoverProgressive { servers ->
+                        _uiState.update { state ->
+                            if (!state.discovery.isVisible || currentVersion != discoveryScanVersion.get()) {
+                                return@update state
+                            }
+                            state.copy(
+                                discovery =
+                                    state.discovery.copy(
+                                        isLoading = true,
+                                        errorMessage = null,
+                                        servers = mapServers(servers),
+                                    ),
+                            )
+                        }
+                    }
+                }
+
             result.onFailure { error ->
                 _uiState.update {
-                    if (!it.discovery.isVisible) {
+                    if (!it.discovery.isVisible || currentVersion != discoveryScanVersion.get()) {
                         return@update it
                     }
                     it.copy(
@@ -749,24 +1112,16 @@ class DefaultShitterAppState(
                 }
             }
             result.onSuccess { servers ->
-                val hideOnDeviceServer = !CodexRuntimeStartupPolicy.onDeviceBridgeEnabled()
                 _uiState.update {
-                    if (!it.discovery.isVisible) {
+                    if (!it.discovery.isVisible || currentVersion != discoveryScanVersion.get()) {
                         return@update it
                     }
-                    val discoveredServers =
-                        servers
-                            .map { discovered -> discovered.toUi() }
-                            .filterNot { server ->
-                                hideOnDeviceServer &&
-                                    (server.source == DiscoverySource.LOCAL || server.id == "local")
-                            }
                     it.copy(
                         discovery =
                             it.discovery.copy(
                                 isLoading = false,
                                 errorMessage = null,
-                                servers = discoveredServers,
+                                servers = mapServers(servers),
                             ),
                     )
                 }
@@ -1148,7 +1503,6 @@ class DefaultShitterAppState(
     private suspend fun runForegroundRefreshLoop() {
         while (scope.isActive) {
             serverManager.refreshSessions()
-            serverManager.syncActiveThreadFromServer()
             delay(8_000)
         }
     }
@@ -1177,6 +1531,12 @@ class DefaultShitterAppState(
             )
         }
     }
+
+    private fun loadRecentDirectoriesForServer(serverId: String): List<RecentDirectoryUiState> =
+        recentDirectoryStore
+            ?.listForServer(serverId = serverId)
+            ?.map { it.toUiState() }
+            .orEmpty()
 
     private fun loadDirectory(
         path: String,
@@ -1275,19 +1635,6 @@ class DefaultShitterAppState(
         return picker.isVisible && picker.selectedServerId == serverId
     }
 
-    private fun clearDirectorySearchIfNeeded() {
-        _uiState.update { current ->
-            val picker = current.directoryPicker
-            if (picker.searchQuery.isEmpty()) {
-                current
-            } else {
-                current.copy(
-                    directoryPicker = picker.copy(searchQuery = ""),
-                )
-            }
-        }
-    }
-
     private fun mergeBackendState(backend: AppState) {
         val activeThread = backend.activeThread
         val activeServerId = backend.activeServerId ?: backend.activeThreadKey?.serverId ?: backend.servers.firstOrNull()?.id
@@ -1311,6 +1658,7 @@ class DefaultShitterAppState(
                             selectedServerId = null,
                             currentPath = "",
                             entries = emptyList(),
+                            recentDirectories = emptyList(),
                             isLoading = false,
                             errorMessage = null,
                             searchQuery = "",
@@ -1323,6 +1671,7 @@ class DefaultShitterAppState(
                             selectedServerId = resolvedServerId,
                             currentPath = "",
                             entries = emptyList(),
+                            recentDirectories = loadRecentDirectoriesForServer(resolvedServerId),
                             isLoading = true,
                             errorMessage = null,
                             searchQuery = "",
@@ -1342,9 +1691,11 @@ class DefaultShitterAppState(
                 sessions = backend.threads,
                 activeThreadKey = backend.activeThreadKey,
                 messages = activeThread?.messages ?: emptyList(),
+                toolTargetLabelsById = backend.toolTargetLabelsById,
                 isSending = activeThread?.status == ThreadStatus.THINKING,
                 currentCwd = backend.currentCwd,
                 accountState = accountState,
+                activePendingApproval = backend.activePendingApproval,
                 showSettings = current.showSettings,
                 showAccount = current.showAccount,
                 accountOpenedFromSettings = current.accountOpenedFromSettings,
@@ -1450,12 +1801,20 @@ class DefaultShitterAppState(
     private fun DiscoverySource.toStateSource(): ServerSource =
         when (this) {
             DiscoverySource.LOCAL -> ServerSource.LOCAL
+            DiscoverySource.BUNDLED -> ServerSource.BUNDLED
             DiscoverySource.BONJOUR -> ServerSource.BONJOUR
             DiscoverySource.SSH -> ServerSource.SSH
             DiscoverySource.TAILSCALE -> ServerSource.TAILSCALE
             DiscoverySource.MANUAL -> ServerSource.MANUAL
             DiscoverySource.LAN -> ServerSource.REMOTE
         }
+
+    private fun RecentDirectoryEntry.toUiState(): RecentDirectoryUiState =
+        RecentDirectoryUiState(
+            path = path,
+            lastUsedAtEpochMillis = lastUsedAtEpochMillis,
+            useCount = useCount,
+        )
 }
 
 @Composable
@@ -1466,13 +1825,16 @@ fun rememberShitterAppState(
     val discoveryService = androidx.compose.runtime.remember(appContext) { ServerDiscoveryService(appContext) }
     val sshSessionManager = androidx.compose.runtime.remember { SshSessionManager() }
     val sshCredentialStore = androidx.compose.runtime.remember(appContext) { SshCredentialStore(appContext) }
+    val recentDirectoryStore = androidx.compose.runtime.remember(appContext) { RecentDirectoryStore(appContext) }
     val appState =
-        androidx.compose.runtime.remember(serverManager, discoveryService, sshSessionManager, sshCredentialStore) {
+        androidx.compose.runtime.remember(serverManager, discoveryService, sshSessionManager, sshCredentialStore, recentDirectoryStore) {
             DefaultShitterAppState(
+                appContext = appContext,
                 serverManager = serverManager,
                 discoveryService = discoveryService,
                 sshSessionManager = sshSessionManager,
                 sshCredentialStore = sshCredentialStore,
+                recentDirectoryStore = recentDirectoryStore,
             )
         }
     androidx.compose.runtime.DisposableEffect(appState) {

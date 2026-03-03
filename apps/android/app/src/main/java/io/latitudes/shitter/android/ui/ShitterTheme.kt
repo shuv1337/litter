@@ -1,18 +1,26 @@
 package io.latitudes.shitter.android.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.sp
+import io.latitudes.shitter.android.R
 
 object ShitterTheme {
     val accent = Color(0xFFB0B0B0)
+    val accentStrong = Color(0xFF00FF9C)
+    val onAccentStrong = Color.Black
     val textPrimary = Color.White
     val textSecondary = Color(0xFF888888)
     val textMuted = Color(0xFF555555)
@@ -23,6 +31,28 @@ object ShitterTheme {
     val border = Color(0xFF333333)
     val divider = Color(0xFF1E1E1E)
     val danger = Color(0xFFFF5555)
+    val success = Color(0xFF6EA676)
+    val warning = Color(0xFFE2A644)
+    val info = Color(0xFF7CAFD9)
+    val violet = Color(0xFFC797D8)
+    val amber = Color(0xFFD3A85E)
+    val teal = Color(0xFF88C6C7)
+    val olive = Color(0xFF9BCF8E)
+    val sand = Color(0xFFE3A66F)
+
+    val statusConnecting = warning
+    val statusReady = accentStrong
+    val statusError = danger
+    val statusDisconnected = textMuted
+
+    val toolCallCommand = Color(0xFFC7B072)
+    val toolCallFileChange = info
+    val toolCallFileDiff = Color(0xFF6FA9D8)
+    val toolCallMcpCall = violet
+    val toolCallMcpProgress = amber
+    val toolCallWebSearch = teal
+    val toolCallCollaboration = olive
+    val toolCallImage = sand
 
     val backgroundBrush: Brush =
         Brush.linearGradient(
@@ -34,6 +64,14 @@ object ShitterTheme {
                 ),
         )
 }
+
+private val Mono =
+    FontFamily(
+        Font(R.font.berkeley_mono_regular, weight = FontWeight.Normal, style = FontStyle.Normal),
+        Font(R.font.berkeley_mono_oblique, weight = FontWeight.Normal, style = FontStyle.Italic),
+        Font(R.font.berkeley_mono_bold, weight = FontWeight.Bold, style = FontStyle.Normal),
+        Font(R.font.berkeley_mono_bold_oblique, weight = FontWeight.Bold, style = FontStyle.Italic),
+    )
 
 private val ShitterColorScheme =
     darkColorScheme(
@@ -52,29 +90,65 @@ private val ShitterColorScheme =
 
 private val ShitterTypography =
     Typography(
-        headlineSmall =
+        titleLarge =
             TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = Mono,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 20.sp,
             ),
         titleMedium =
             TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = Mono,
                 fontWeight = FontWeight.Medium,
+                fontSize = 16.sp,
+            ),
+        titleSmall =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+            ),
+        headlineSmall =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 20.sp,
+            ),
+        bodyLarge =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.Normal,
                 fontSize = 16.sp,
             ),
         bodyMedium =
             TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = Mono,
                 fontWeight = FontWeight.Normal,
                 fontSize = 14.sp,
             ),
+        bodySmall =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.Normal,
+                fontSize = 12.sp,
+            ),
         labelLarge =
             TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = Mono,
                 fontWeight = FontWeight.Medium,
                 fontSize = 12.sp,
+            ),
+        labelMedium =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.Medium,
+                fontSize = 11.sp,
+            ),
+        labelSmall =
+            TextStyle(
+                fontFamily = Mono,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.sp,
             ),
     )
 
@@ -85,4 +159,18 @@ fun ShitterAppTheme(content: @Composable () -> Unit) {
         typography = ShitterTypography,
         content = content,
     )
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF000000)
+@Composable
+private fun ShitterThemePreview() {
+    ShitterAppTheme {
+        Surface(color = Color.Black) {
+            Text(
+                text = "Shitter Theme",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+    }
 }

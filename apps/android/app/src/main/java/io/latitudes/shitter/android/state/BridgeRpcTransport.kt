@@ -23,10 +23,12 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class BridgeRpcTransport(
     private val url: String,
     private val onNotification: (method: String, params: JSONObject?) -> Unit,
+    private val onServerRequest: ((requestId: String, method: String, params: JSONObject?) -> ServerRequestHandlingResult)? = null,
 ) : Closeable {
     private val requestCounter = AtomicInteger(1)
     private val connectionEpochCounter = AtomicInteger(0)
     private val pending = ConcurrentHashMap<String, PendingRequest>()
+    private val pendingServerRequestIds = ConcurrentHashMap<String, Any>()
     private val outputLock = Any()
     private val lifecycleLock = Any()
     private val random = SecureRandom()
@@ -129,6 +131,13 @@ internal class BridgeRpcTransport(
     override fun close() {
         runCatching { sendFrame(0x8, ByteArray(0)) }
         markDisconnected(IOException("WebSocket disconnected"), expectedEpoch = null)
+    }
+
+    fun respondToServerRequest(
+        requestId: String,
+        result: JSONObject = JSONObject(),
+    ) {
+        sendServerResponse(requestId = requestId, result = result)
     }
 
     private fun ensureInitialized(timeoutSeconds: Long) {
@@ -237,6 +246,7 @@ internal class BridgeRpcTransport(
             connected = false
             initializedEpoch = 0
             readerThread = null
+            pendingServerRequestIds.clear()
 
             socketToClose = socket
             socket = null
@@ -254,6 +264,7 @@ internal class BridgeRpcTransport(
         connected = false
         initializedEpoch = 0
         readerThread = null
+        pendingServerRequestIds.clear()
         val sock = socket
         socket = null
         input = null
@@ -269,6 +280,11 @@ internal class BridgeRpcTransport(
                     .put("name", "Shitter Android")
                     .put("version", "1.0")
                     .put("title", JSONObject.NULL),
+            )
+            .put(
+                "capabilities",
+                JSONObject()
+                    .put("experimentalApi", true),
             )
 
     private fun performHandshake(
@@ -513,13 +529,43 @@ internal class BridgeRpcTransport(
 
     private fun handleServerRequest(envelope: JSONObject) {
         val idValue = envelope.opt("id") ?: return
+        val requestId = idValue.toString()
+        pendingServerRequestIds[requestId] = idValue
         val method = envelope.optString("method")
-        val result = when (method) {
-            "item/commandExecution/requestApproval",
-            "item/fileChange/requestApproval" -> JSONObject().put("decision", "accept")
-            else -> JSONObject()
+        val params = envelope.opt("params")
+        val paramsObject = when (params) {
+            null, JSONObject.NULL -> null
+            is JSONObject -> params
+            else -> JSONObject().put("value", params)
         }
+        val handling = onServerRequest?.invoke(requestId, method, paramsObject) ?: ServerRequestHandlingResult.Unhandled
 
+        when (handling) {
+            is ServerRequestHandlingResult.Immediate -> {
+                sendServerResponse(
+                    requestId = requestId,
+                    result = handling.result,
+                )
+            }
+
+            ServerRequestHandlingResult.Deferred -> {
+                // Response will be sent later via respondToServerRequest.
+            }
+
+            ServerRequestHandlingResult.Unhandled -> {
+                sendServerResponse(
+                    requestId = requestId,
+                    result = JSONObject(),
+                )
+            }
+        }
+    }
+
+    private fun sendServerResponse(
+        requestId: String,
+        result: JSONObject,
+    ) {
+        val idValue = pendingServerRequestIds.remove(requestId) ?: requestId
         val response = JSONObject()
             .put("jsonrpc", "2.0")
             .put("id", idValue)
@@ -561,6 +607,16 @@ internal class BridgeRpcTransport(
     private companion object {
         private const val INITIALIZE_METHOD = "initialize"
     }
+}
+
+internal sealed interface ServerRequestHandlingResult {
+    data class Immediate(
+        val result: JSONObject,
+    ) : ServerRequestHandlingResult
+
+    data object Deferred : ServerRequestHandlingResult
+
+    data object Unhandled : ServerRequestHandlingResult
 }
 
 internal object BridgeTransportReliabilityPolicy {

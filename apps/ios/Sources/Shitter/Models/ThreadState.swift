@@ -1,13 +1,14 @@
 import Foundation
 
-struct ThreadKey: Hashable {
+struct ThreadKey: Hashable, Sendable {
     let serverId: String
     let threadId: String
 }
 
 @MainActor
 final class ThreadState: ObservableObject, Identifiable {
-    let key: ThreadKey
+    nonisolated let id: ThreadKey
+    nonisolated var key: ThreadKey { id }
     let serverId: String
     let threadId: String
     var serverName: String
@@ -17,17 +18,39 @@ final class ThreadState: ObservableObject, Identifiable {
     @Published var status: ConversationStatus = .ready
     @Published var preview: String = ""
     @Published var cwd: String = ""
+    @Published var modelProvider: String = ""
+    @Published var parentThreadId: String?
+    @Published var rootThreadId: String?
+    @Published var agentNickname: String?
+    @Published var agentRole: String?
     @Published var updatedAt: Date = Date()
-
-    var id: ThreadKey { key }
 
     var hasTurnActive: Bool {
         if case .thinking = status { return true }
         return false
     }
 
+    var isFork: Bool {
+        parentThreadId?.isEmpty == false
+    }
+
+    var agentDisplayLabel: String? {
+        let nickname = agentNickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let role = agentRole?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !nickname.isEmpty && !role.isEmpty {
+            return "\(nickname) [\(role)]"
+        }
+        if !nickname.isEmpty {
+            return nickname
+        }
+        if !role.isEmpty {
+            return "[\(role)]"
+        }
+        return nil
+    }
+
     init(serverId: String, threadId: String, serverName: String, serverSource: ServerSource) {
-        self.key = ThreadKey(serverId: serverId, threadId: threadId)
+        self.id = ThreadKey(serverId: serverId, threadId: threadId)
         self.serverId = serverId
         self.threadId = threadId
         self.serverName = serverName

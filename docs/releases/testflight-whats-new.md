@@ -1,0 +1,5 @@
+- iOS: Reapplied and stabilized conversation UX after PR merge, including pinch-to-zoom text sizing, animated "Latest" jump-to-bottom, improved scroll behavior, and more reliable network discovery scanning. (@dnakov)
+- Cross-platform UI: Bundled Berkeley Mono on iOS and Android and wired it into app styling. (@dnakov)
+- Android: Added bundled Codex server + node proxy flow for on-device usage, plus settings-sheet regression fix and CI archive-tool fallback (`ar` vs `bsdtar`). (@Dixith-dev)
+- App polish and integration cleanups across iOS/Android in the PR-11 merge train (state/UI refinements, identifier cleanup, and follow-up fixes). (@makyinmars)
+- Release process: Enforced non-empty TestFlight changelog notes in upload tooling/checklist. (@dnakov)

@@ -6,15 +6,20 @@ enum MessageRole: Equatable {
     case system
 }
 
-struct ChatMessage: Identifiable {
+struct ChatMessage: Identifiable, Equatable {
     let id = UUID()
     let role: MessageRole
     var text: String
     var images: [ChatImage] = []
+    var sourceTurnId: String? = nil
+    var sourceTurnIndex: Int? = nil
+    var isFromUserTurnBoundary: Bool = false
+    var agentNickname: String? = nil
+    var agentRole: String? = nil
     let timestamp = Date()
 }
 
-struct ChatImage: Identifiable {
+struct ChatImage: Identifiable, Equatable {
     let id = UUID()
     let data: Data
 }

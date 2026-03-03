@@ -18,7 +18,7 @@ struct BrandLogo: View {
                 .accessibilityHidden(true)
         } else {
             Text("shitter")
-                .font(.system(size: size * 0.32, weight: .bold, design: .monospaced))
+                .font(ShitterFont.monospaced(size: size * 0.32, weight: .bold))
                 .foregroundColor(ShitterTheme.accent)
         }
     }

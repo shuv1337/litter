@@ -1,8 +1,20 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.kapt")
     id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
+    id("com.github.triplet.play")
 }
+
+fun projectPropOrEnv(name: String): String? =
+    (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+
+val uploadStoreFile = projectPropOrEnv("LITTER_UPLOAD_STORE_FILE")
+val uploadStorePassword = projectPropOrEnv("LITTER_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = projectPropOrEnv("LITTER_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword = projectPropOrEnv("LITTER_UPLOAD_KEY_PASSWORD")
+val hasUploadSigning = listOf(uploadStoreFile, uploadStorePassword, uploadKeyAlias, uploadKeyPassword).all { !it.isNullOrBlank() }
 
 android {
     namespace = "io.latitudes.shitter.android"
@@ -12,7 +24,7 @@ android {
         applicationId = "io.latitudes.shitter.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = 5
         versionName = "0.1.0"
     }
 
@@ -36,6 +48,17 @@ android {
         }
     }
 
+    if (hasUploadSigning) {
+        signingConfigs {
+            create("upload") {
+                storeFile = file(uploadStoreFile!!)
+                storePassword = uploadStorePassword
+                keyAlias = uploadKeyAlias
+                keyPassword = uploadKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -43,6 +66,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasUploadSigning) {
+                signingConfig = signingConfigs.getByName("upload")
+            }
         }
     }
 
@@ -58,6 +84,23 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // Ensure native libs are extracted to a filesystem path so they can be executed.
+            useLegacyPackaging = true
+        }
+    }
+}
+
+play {
+    defaultToAppBundles.set(true)
+    track.set(projectPropOrEnv("LITTER_PLAY_TRACK") ?: "internal")
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
+    val serviceAccountPath = projectPropOrEnv("LITTER_PLAY_SERVICE_ACCOUNT_JSON")
+    if (!serviceAccountPath.isNullOrBlank()) {
+        serviceAccountCredentials.set(file(serviceAccountPath))
     }
 }
 
@@ -78,9 +121,21 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:syntax-highlight:4.6.2") {
+        exclude(group = "org.jetbrains", module = "annotations-java5")
+    }
+    implementation("io.noties:prism4j:2.0.0") {
+        exclude(group = "org.jetbrains", module = "annotations-java5")
+    }
+    kapt("io.noties:prism4j-bundler:2.0.0")
     implementation("com.github.mwiede:jsch:0.2.22")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+}
+
+val downloadBundledAssets by tasks.registering(Exec::class) {
+    workingDir = rootProject.projectDir
+    commandLine("bash", "scripts/download-bundled-assets.sh")
 }

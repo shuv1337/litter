@@ -1,14 +1,24 @@
 # shitter
 
 <p align="center">
-  <img src="docs/logo.png?v=2" alt="shitter logo" width="180" />
+  <img src="apps/ios/Sources/Shitter/Resources/brand_logo.png" alt="shitter logo" width="180" />
 </p>
 
 `shitter` is a native iOS + Android client for Codex.
 
+## Screenshots (iPhone 17 Pro)
+
+| Dark (Default) | Light |
+|---|---|
+| ![Dark default](docs/screenshots/iphone17pro/01-dark-default.png) | ![Light mode](docs/screenshots/iphone17pro/02-light.png) |
+
+| Accessibility XXL Text | Dark + High Contrast |
+|---|---|
+| ![Accessibility content size XXXL](docs/screenshots/iphone17pro/03-accessibility-xxxl.png) | ![Dark with high contrast](docs/screenshots/iphone17pro/04-dark-high-contrast.png) |
+
 ## Repository layout
 
-- `apps/ios`: iOS app (schemes: `ShitterRemote` and `Shitter`)
+- `apps/ios`: iOS app (`ShitterRemote` and `Shitter` schemes)
 - `apps/android`: Android app
   - `app`: Compose UI shell, app state, server manager, SSH/auth flows
   - `core/bridge`: native bridge bootstrapping and core RPC client
@@ -19,7 +29,7 @@
 - `patches/codex`: local Codex patch set
 - `tools/scripts`: cross-platform helper scripts
 
-iOS schemes:
+iOS supports:
 
 - `ShitterRemote`: remote-only mode (default scheme; no bundled on-device Rust server)
 - `Shitter`: includes the on-device Rust bridge (`codex_bridge.xcframework`)
@@ -36,13 +46,59 @@ Bootstrap them locally before building:
 
 - Xcode.app (full install, not only CLT)
 - Rust + iOS targets:
+
   ```bash
   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
   ```
+
 - `xcodegen` (for regenerating `Shitter.xcodeproj`):
+
   ```bash
   brew install xcodegen
   ```
+
+## Connect Your Mac to Shitter Over SSH
+
+Use this flow to make Codex sessions from your Mac visible in the iOS/Android app.
+
+1) Enable SSH on the Mac.
+
+- Preferred (UI): `System Settings` -> `General` -> `Sharing` -> enable `Remote Login`.
+- CLI option:
+  ```bash
+  sudo systemsetup -setremotelogin on
+  sudo systemsetup -getremotelogin
+  ```
+- If you get `setremotelogin: Turning Remote Login on or off requires Full Disk Access privileges`, grant Full Disk Access to your terminal app in:
+  `System Settings` -> `Privacy & Security` -> `Full Disk Access`, then fully restart terminal and retry.
+
+2) Verify SSH and Codex binaries from a non-interactive SSH shell.
+
+```bash
+ssh <mac-user>@<mac-host-or-ip> 'echo ok'
+ssh <mac-user>@<mac-host-or-ip> 'command -v codex || command -v codex-app-server'
+```
+
+If the second command prints nothing, install Codex and/or fix shell PATH startup files (`.zprofile`, `.zshrc`, `.profile`).
+
+3) Connect from the Shitter app.
+
+- Keep phone and Mac on the same LAN (or same Tailnet if using Tailscale).
+- In Discovery:
+  - If host shows `codex running`, tap to connect directly.
+  - If host shows `SSH`, tap and enter SSH credentials; Shitter will start remote server via SSH and connect.
+
+4) Fallback: run app-server manually on Mac and add server manually in app.
+
+```bash
+codex app-server --listen ws://0.0.0.0:8390
+```
+
+Then in app choose `Add Server` and enter `<mac-ip>` + `8390`.
+
+5) Session visibility note.
+
+Thread/session listing is `cwd`-scoped. If expected sessions are missing, choose the same working directory used when those sessions were created.
 
 ## Codex source (submodule + patch)
 
@@ -86,6 +142,11 @@ Open in Xcode:
 open apps/ios/Shitter.xcodeproj
 ```
 
+Schemes:
+
+- `ShitterRemote` (default): no on-device Rust bridge
+- `Shitter`: uses bundled `codex_bridge.xcframework`
+
 CLI build example:
 
 ```bash
@@ -98,7 +159,19 @@ Prerequisites:
 
 - Java 17
 - Android SDK + build tools for API 35
-- Gradle 8.x (or wrapper, once added)
+- Gradle 8.x (or use `apps/android/gradlew`)
+
+Open in Android Studio (macOS):
+
+```bash
+open -a "Android Studio" apps/android
+```
+
+Rebuild and reopen Android project:
+
+```bash
+./apps/android/scripts/rebuild-and-reopen.sh
+```
 
 Build Android flavors:
 
@@ -141,14 +214,14 @@ asc auth login \
   --network
 ```
 
-2) Bootstrap TestFlight defaults (internal group, optional review contact metadata):
+1) Bootstrap TestFlight defaults (internal group, optional review contact metadata):
 
 ```bash
 APP_BUNDLE_ID=<BUNDLE_ID> \
 ./apps/ios/scripts/testflight-setup.sh
 ```
 
-3) Build and upload to TestFlight:
+1) Build and upload to TestFlight:
 
 ```bash
 APP_BUNDLE_ID=<BUNDLE_ID> \
@@ -162,6 +235,7 @@ MARKETING_VERSION=1.0.0 \
 ```
 
 Notes:
+
 - `testflight-upload.sh` auto-increments build number from the latest App Store Connect build.
 - It archives, exports an IPA, uploads via `asc builds upload`, and assigns the build to `Internal Testers` by default.
 - Override `SCHEME` to `ShitterRemote` if you are shipping the remote-only target.

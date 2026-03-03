@@ -1,18 +1,95 @@
 import Foundation
 import Combine
 
+struct SkillMentionSelection: Equatable {
+    let name: String
+    let path: String
+}
+
+enum AgentLabelFormatter {
+    static func format(
+        nickname: String?,
+        role: String?,
+        fallbackIdentifier: String? = nil
+    ) -> String? {
+        let cleanNickname = sanitized(nickname)
+        let cleanRole = sanitized(role)
+        switch (cleanNickname, cleanRole) {
+        case let (nickname?, role?):
+            return "\(nickname) [\(role)]"
+        case let (nickname?, nil):
+            return nickname
+        case let (nil, role?):
+            return "[\(role)]"
+        default:
+            return sanitized(fallbackIdentifier)
+        }
+    }
+
+    static func sanitized(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func looksLikeDisplayLabel(_ raw: String?) -> Bool {
+        guard let value = sanitized(raw),
+              value.hasSuffix("]"),
+              let openBracket = value.lastIndex(of: "[") else {
+            return false
+        }
+        let nickname = value[..<openBracket].trimmingCharacters(in: .whitespacesAndNewlines)
+        let roleStart = value.index(after: openBracket)
+        let roleEnd = value.index(before: value.endIndex)
+        let role = value[roleStart..<roleEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        return !nickname.isEmpty && !role.isEmpty
+    }
+}
+
 @MainActor
 final class ServerManager: ObservableObject {
     @Published var connections: [String: ServerConnection] = [:]
     @Published var threads: [ThreadKey: ThreadState] = [:]
     @Published var activeThreadKey: ThreadKey?
     @Published var pendingApprovals: [PendingApproval] = []
+    @Published var composerPrefillRequest: ComposerPrefillRequest?
+    @Published private(set) var agentDirectoryVersion: Int = 0
 
+    private var connectionSubscriptions: [String: AnyCancellable] = [:]
     private let savedServersKey = "codex_saved_servers"
     private var threadSubscriptions: [ThreadKey: AnyCancellable] = [:]
     private var liveItemMessageIndices: [ThreadKey: [String: Int]] = [:]
     private var liveTurnDiffMessageIndices: [ThreadKey: [String: Int]] = [:]
     private var serversUsingItemNotifications: Set<String> = []
+    private var threadTurnCounts: [ThreadKey: Int] = [:]
+    private var agentDirectory = AgentDirectory()
+
+    private struct AgentDirectoryEntry: Equatable {
+        var nickname: String?
+        var role: String?
+        var threadId: String?
+        var agentId: String?
+
+        func merged(over existing: AgentDirectoryEntry?) -> AgentDirectoryEntry {
+            AgentDirectoryEntry(
+                nickname: nickname ?? existing?.nickname,
+                role: role ?? existing?.role,
+                threadId: threadId ?? existing?.threadId,
+                agentId: agentId ?? existing?.agentId
+            )
+        }
+    }
+
+    private struct AgentDirectory {
+        var byThreadId: [String: AgentDirectoryEntry] = [:]
+        var byAgentId: [String: AgentDirectoryEntry] = [:]
+
+        mutating func removeServer(_ serverId: String) {
+            let prefix = "\(serverId):"
+            byThreadId = byThreadId.filter { !$0.key.hasPrefix(prefix) }
+            byAgentId = byAgentId.filter { !$0.key.hasPrefix(prefix) }
+        }
+    }
 
     enum ApprovalKind: String, Codable {
         case commandExecution
@@ -39,12 +116,27 @@ final class ServerManager: ObservableObject {
         let cwd: String?
         let reason: String?
         let grantRoot: String?
+        let requesterAgentNickname: String?
+        let requesterAgentRole: String?
         let createdAt: Date
+    }
+
+    struct ComposerPrefillRequest: Identifiable, Equatable {
+        let id = UUID()
+        let text: String
     }
 
     /// Call after inserting a new ThreadState into `threads` to forward its changes.
     private func observeThread(_ thread: ThreadState) {
         threadSubscriptions[thread.key] = thread.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    /// Forward nested connection changes so views observing ServerManager refresh when
+    /// connection-owned published values (auth/models/oauth) change.
+    private func observeConnection(_ connection: ServerConnection, serverId: String) {
+        connectionSubscriptions[serverId] = connection.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
@@ -67,6 +159,82 @@ final class ServerManager: ObservableObject {
 
     var hasAnyConnection: Bool {
         connections.values.contains { $0.isConnected }
+    }
+
+    private func debugAgentDirectoryLog(_ message: @autoclosure () -> String) {
+        _ = message
+    }
+
+    private func logTargetResolution(targetId: String, resolvedLabel: String?, reason: String) {
+        let label = resolvedLabel ?? "<nil>"
+        debugAgentDirectoryLog("targetId=\(targetId) resolvedLabel=\(label) \(reason)")
+    }
+
+    private func agentDirectoryServerScope(_ serverId: String?) -> String? {
+        sanitizedLineageId(serverId) ?? sanitizedLineageId(activeThreadKey?.serverId)
+    }
+
+    private func agentDirectoryScopedKey(serverId: String, id: String) -> String {
+        "\(serverId):\(id)"
+    }
+
+    func resolvedAgentTargetLabel(for target: String, serverId: String? = nil) -> String? {
+        if AgentLabelFormatter.looksLikeDisplayLabel(target),
+           let label = AgentLabelFormatter.sanitized(target) {
+            logTargetResolution(
+                targetId: label,
+                resolvedLabel: label,
+                reason: "resolved-via=preformatted-target"
+            )
+            return label
+        }
+        guard let normalizedTarget = sanitizedLineageId(target) else {
+            logTargetResolution(
+                targetId: target,
+                resolvedLabel: nil,
+                reason: "unresolved reason=empty-target"
+            )
+            return nil
+        }
+        let serverScope = agentDirectoryServerScope(serverId)
+        if let entry = mergedAgentDirectoryEntry(serverId: serverScope, threadId: normalizedTarget, agentId: normalizedTarget) {
+            let label = AgentLabelFormatter.format(
+                nickname: entry.nickname,
+                role: entry.role,
+                fallbackIdentifier: entry.threadId ?? entry.agentId ?? normalizedTarget
+            )
+            logTargetResolution(
+                targetId: normalizedTarget,
+                resolvedLabel: label,
+                reason: "resolved-via=agent-directory"
+            )
+            return label
+        }
+        let threadMatch: ThreadState?
+        if let serverScope {
+            threadMatch = threads.values.first(where: { $0.serverId == serverScope && $0.threadId == normalizedTarget })
+        } else {
+            threadMatch = threads.values.first(where: { $0.threadId == normalizedTarget })
+        }
+        if let thread = threadMatch {
+            let label = AgentLabelFormatter.format(
+                nickname: thread.agentNickname,
+                role: thread.agentRole,
+                fallbackIdentifier: normalizedTarget
+            )
+            logTargetResolution(
+                targetId: normalizedTarget,
+                resolvedLabel: label,
+                reason: "resolved-via=thread-state"
+            )
+            return label
+        }
+        logTargetResolution(
+            targetId: normalizedTarget,
+            resolvedLabel: nil,
+            reason: "unresolved reason=no-agent-directory-or-thread-match serverScope=\(serverScope ?? "<nil>")"
+        )
+        return nil
     }
 
     // MARK: - Server Lifecycle
@@ -94,6 +262,7 @@ final class ServerManager: ObservableObject {
     }
 
     private func configureConnectionCallbacks(_ conn: ServerConnection, serverId: String) {
+        observeConnection(conn, serverId: serverId)
         conn.onNotification = { [weak self] method, data in
             self?.handleNotification(serverId: serverId, method: method, data: data)
         }
@@ -114,13 +283,21 @@ final class ServerManager: ObservableObject {
     func removeServer(id: String) {
         connections[id]?.disconnect()
         connections.removeValue(forKey: id)
+        connectionSubscriptions.removeValue(forKey: id)
         removePendingApprovals(forServerId: id)
         for key in threads.keys where key.serverId == id {
             threadSubscriptions.removeValue(forKey: key)
             liveItemMessageIndices.removeValue(forKey: key)
             liveTurnDiffMessageIndices.removeValue(forKey: key)
+            threadTurnCounts.removeValue(forKey: key)
         }
         serversUsingItemNotifications.remove(id)
+        let directoryEntryCount = agentDirectory.byThreadId.count + agentDirectory.byAgentId.count
+        agentDirectory.removeServer(id)
+        let updatedDirectoryEntryCount = agentDirectory.byThreadId.count + agentDirectory.byAgentId.count
+        if updatedDirectoryEntryCount != directoryEntryCount {
+            agentDirectoryVersion = agentDirectoryVersion &+ 1
+        }
         threads = threads.filter { $0.key.serverId != id }
         if activeThreadKey?.serverId == id {
             activeThreadKey = nil
@@ -170,8 +347,21 @@ final class ServerManager: ObservableObject {
                 serverSource: conn.server.source
             )
             state.cwd = cwd
+            state.modelProvider = resp.modelProvider ?? resp.model
+            state.parentThreadId = sanitizedLineageId(resp.thread.parentThreadId)
+            state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
+            state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
+            state.agentRole = sanitizedLineageId(resp.thread.agentRole)
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: threadId,
+                agentId: resp.thread.agentId,
+                nickname: state.agentNickname,
+                role: state.agentRole
+            )
             state.updatedAt = Date()
             threads[key] = state
+            threadTurnCounts[key] = 0
             liveItemMessageIndices[key] = nil
             liveTurnDiffMessageIndices[key] = nil
             observeThread(state)
@@ -207,10 +397,28 @@ final class ServerManager: ObservableObject {
                 approvalPolicy: approvalPolicy,
                 sandboxMode: sandboxMode
             )
-            state.messages = restoredMessages(from: resp.thread.turns)
+            state.messages = restoredMessages(
+                from: resp.thread.turns,
+                serverId: serverId,
+                defaultAgentNickname: resp.thread.agentNickname,
+                defaultAgentRole: resp.thread.agentRole
+            )
+            threadTurnCounts[key] = resp.thread.turns.count
             liveItemMessageIndices[key] = nil
             liveTurnDiffMessageIndices[key] = nil
             state.cwd = cwd
+            state.modelProvider = resp.modelProvider ?? resp.model
+            state.parentThreadId = sanitizedLineageId(resp.thread.parentThreadId)
+            state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
+            state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
+            state.agentRole = sanitizedLineageId(resp.thread.agentRole)
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: threadId,
+                agentId: resp.thread.agentId,
+                nickname: state.agentNickname,
+                role: state.agentRole
+            )
             state.status = .ready
             state.updatedAt = Date()
             activeThreadKey = key
@@ -238,6 +446,162 @@ final class ServerManager: ObservableObject {
         } else {
             activeThreadKey = key
         }
+    }
+
+    func forkThread(
+        _ sourceKey: ThreadKey,
+        cwd: String? = nil,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws -> ThreadKey {
+        guard let sourceThread = threads[sourceKey] else {
+            throw NSError(domain: "Shitter", code: 1010, userInfo: [NSLocalizedDescriptionKey: "Source thread not found"])
+        }
+        guard !sourceThread.hasTurnActive else {
+            throw NSError(domain: "Shitter", code: 1011, userInfo: [NSLocalizedDescriptionKey: "Wait for the active turn to finish before forking"])
+        }
+        guard let conn = connections[sourceKey.serverId] else {
+            throw NSError(domain: "Shitter", code: 1012, userInfo: [NSLocalizedDescriptionKey: "No active server connection for this thread"])
+        }
+
+        let preferredCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forkCwd = (preferredCwd?.isEmpty == false) ? preferredCwd : sourceThread.cwd
+        let response = try await conn.forkThread(
+            threadId: sourceKey.threadId,
+            cwd: forkCwd,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+        let forkKey = ThreadKey(serverId: sourceKey.serverId, threadId: response.thread.id)
+        let forkedState = threads[forkKey] ?? ThreadState(
+            serverId: sourceKey.serverId,
+            threadId: response.thread.id,
+            serverName: conn.server.name,
+            serverSource: conn.server.source
+        )
+        forkedState.messages = restoredMessages(
+            from: response.thread.turns,
+            serverId: sourceKey.serverId,
+            defaultAgentNickname: response.thread.agentNickname,
+            defaultAgentRole: response.thread.agentRole
+        )
+        threadTurnCounts[forkKey] = response.thread.turns.count
+        liveItemMessageIndices[forkKey] = nil
+        liveTurnDiffMessageIndices[forkKey] = nil
+        forkedState.cwd = response.cwd
+        forkedState.preview = sourceThread.preview
+        forkedState.modelProvider = response.modelProvider ?? response.model
+        forkedState.parentThreadId = sanitizedLineageId(response.thread.parentThreadId) ?? sourceKey.threadId
+        forkedState.rootThreadId = sanitizedLineageId(response.thread.rootThreadId)
+            ?? sourceThread.rootThreadId
+            ?? sourceThread.parentThreadId
+            ?? sourceKey.threadId
+        forkedState.agentNickname = sanitizedLineageId(response.thread.agentNickname)
+        forkedState.agentRole = sanitizedLineageId(response.thread.agentRole)
+        upsertAgentDirectory(
+            serverId: sourceKey.serverId,
+            threadId: response.thread.id,
+            agentId: response.thread.agentId,
+            nickname: forkedState.agentNickname,
+            role: forkedState.agentRole
+        )
+        forkedState.status = .ready
+        forkedState.updatedAt = Date()
+        threads[forkKey] = forkedState
+        observeThread(forkedState)
+        activeThreadKey = forkKey
+        return forkKey
+    }
+
+    func forkActiveThread(
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws -> ThreadKey {
+        guard let key = activeThreadKey,
+              let thread = threads[key] else {
+            throw NSError(domain: "Shitter", code: 1013, userInfo: [NSLocalizedDescriptionKey: "No active thread to fork"])
+        }
+        return try await forkThread(
+            key,
+            cwd: thread.cwd,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+    }
+
+    func forkFromMessage(
+        _ message: ChatMessage,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws -> ThreadKey {
+        guard let sourceKey = activeThreadKey,
+              let sourceThread = threads[sourceKey] else {
+            throw NSError(domain: "Shitter", code: 1014, userInfo: [NSLocalizedDescriptionKey: "No active thread to fork"])
+        }
+        guard !sourceThread.hasTurnActive else {
+            throw NSError(domain: "Shitter", code: 1015, userInfo: [NSLocalizedDescriptionKey: "Wait for the active turn to finish before forking"])
+        }
+        guard message.role == .user, message.isFromUserTurnBoundary else {
+            throw NSError(domain: "Shitter", code: 1016, userInfo: [NSLocalizedDescriptionKey: "Fork from here is only supported for user messages"])
+        }
+
+        let rollbackDepth = try rollbackDepthForMessage(message, in: sourceKey)
+        let forkKey = try await forkThread(
+            sourceKey,
+            cwd: sourceThread.cwd,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+        guard rollbackDepth > 0 else { return forkKey }
+        guard let forkConn = connections[forkKey.serverId],
+              let forkThreadState = threads[forkKey] else {
+            throw NSError(domain: "Shitter", code: 1017, userInfo: [NSLocalizedDescriptionKey: "Forked thread unavailable"])
+        }
+
+        let rollbackResponse = try await forkConn.rollbackThread(threadId: forkKey.threadId, numTurns: rollbackDepth)
+        forkThreadState.messages = restoredMessages(
+            from: rollbackResponse.thread.turns,
+            serverId: forkKey.serverId,
+            defaultAgentNickname: rollbackResponse.thread.agentNickname ?? forkThreadState.agentNickname,
+            defaultAgentRole: rollbackResponse.thread.agentRole ?? forkThreadState.agentRole
+        )
+        threadTurnCounts[forkKey] = rollbackResponse.thread.turns.count
+        forkThreadState.status = .ready
+        forkThreadState.updatedAt = Date()
+        liveItemMessageIndices[forkKey] = nil
+        liveTurnDiffMessageIndices[forkKey] = nil
+        return forkKey
+    }
+
+    func editMessage(_ message: ChatMessage) async throws {
+        guard let key = activeThreadKey,
+              let thread = threads[key],
+              let conn = connections[key.serverId] else {
+            throw NSError(domain: "Shitter", code: 1018, userInfo: [NSLocalizedDescriptionKey: "No active thread to edit"])
+        }
+        guard !thread.hasTurnActive else {
+            throw NSError(domain: "Shitter", code: 1019, userInfo: [NSLocalizedDescriptionKey: "Wait for the active turn to finish before editing"])
+        }
+        guard message.role == .user, message.isFromUserTurnBoundary else {
+            throw NSError(domain: "Shitter", code: 1020, userInfo: [NSLocalizedDescriptionKey: "Only user messages can be edited"])
+        }
+
+        let rollbackDepth = try rollbackDepthForMessage(message, in: key)
+        if rollbackDepth > 0 {
+            let response = try await conn.rollbackThread(threadId: key.threadId, numTurns: rollbackDepth)
+            thread.messages = restoredMessages(
+                from: response.thread.turns,
+                serverId: key.serverId,
+                defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
+                defaultAgentRole: response.thread.agentRole ?? thread.agentRole
+            )
+            threadTurnCounts[key] = response.thread.turns.count
+            thread.status = .ready
+            thread.updatedAt = Date()
+            liveItemMessageIndices[key] = nil
+            liveTurnDiffMessageIndices[key] = nil
+        }
+        composerPrefillRequest = ComposerPrefillRequest(text: message.text)
     }
 
     // MARK: - Approvals
@@ -273,67 +637,83 @@ final class ServerManager: ObservableObject {
         switch method {
         case "item/commandExecution/requestApproval":
             let command = commandString(from: params)
+            let threadId = extractString(params, keys: ["threadId", "thread_id", "conversationId", "conversation_id"])
+            let requester = resolveAgentIdentity(serverId: serverId, threadId: threadId, params: params)
             pending = PendingApproval(
                 id: requestId,
                 requestId: requestId,
                 serverId: serverId,
                 method: method,
                 kind: .commandExecution,
-                threadId: extractString(params, keys: ["threadId", "thread_id", "conversationId", "conversation_id"]),
+                threadId: threadId,
                 turnId: extractString(params, keys: ["turnId", "turn_id"]),
                 itemId: extractString(params, keys: ["itemId", "item_id", "callId", "call_id", "cmdId", "cmd_id"]),
                 command: command?.isEmpty == true ? nil : command,
                 cwd: extractString(params, keys: ["cwd"]),
                 reason: extractString(params, keys: ["reason"]),
                 grantRoot: nil,
+                requesterAgentNickname: requester.nickname,
+                requesterAgentRole: requester.role,
                 createdAt: Date()
             )
         case "item/fileChange/requestApproval":
+            let threadId = extractString(params, keys: ["threadId", "thread_id", "conversationId", "conversation_id"])
+            let requester = resolveAgentIdentity(serverId: serverId, threadId: threadId, params: params)
             pending = PendingApproval(
                 id: requestId,
                 requestId: requestId,
                 serverId: serverId,
                 method: method,
                 kind: .fileChange,
-                threadId: extractString(params, keys: ["threadId", "thread_id", "conversationId", "conversation_id"]),
+                threadId: threadId,
                 turnId: extractString(params, keys: ["turnId", "turn_id"]),
                 itemId: extractString(params, keys: ["itemId", "item_id", "callId", "call_id", "patchId", "patch_id"]),
                 command: nil,
                 cwd: nil,
                 reason: extractString(params, keys: ["reason"]),
                 grantRoot: extractString(params, keys: ["grantRoot", "grant_root"]),
+                requesterAgentNickname: requester.nickname,
+                requesterAgentRole: requester.role,
                 createdAt: Date()
             )
         case "execCommandApproval":
+            let threadId = extractString(params, keys: ["conversationId", "threadId"])
+            let requester = resolveAgentIdentity(serverId: serverId, threadId: threadId, params: params)
             pending = PendingApproval(
                 id: requestId,
                 requestId: requestId,
                 serverId: serverId,
                 method: method,
                 kind: .commandExecution,
-                threadId: extractString(params, keys: ["conversationId", "threadId"]),
+                threadId: threadId,
                 turnId: nil,
                 itemId: extractString(params, keys: ["approvalId", "callId", "cmdId"]),
                 command: commandString(from: params),
                 cwd: extractString(params, keys: ["cwd"]),
                 reason: extractString(params, keys: ["reason"]),
                 grantRoot: nil,
+                requesterAgentNickname: requester.nickname,
+                requesterAgentRole: requester.role,
                 createdAt: Date()
             )
         case "applyPatchApproval":
+            let threadId = extractString(params, keys: ["conversationId", "threadId"])
+            let requester = resolveAgentIdentity(serverId: serverId, threadId: threadId, params: params)
             pending = PendingApproval(
                 id: requestId,
                 requestId: requestId,
                 serverId: serverId,
                 method: method,
                 kind: .fileChange,
-                threadId: extractString(params, keys: ["conversationId", "threadId"]),
+                threadId: threadId,
                 turnId: nil,
                 itemId: extractString(params, keys: ["callId", "patchId"]),
                 command: nil,
                 cwd: nil,
                 reason: extractString(params, keys: ["reason"]),
                 grantRoot: extractString(params, keys: ["grantRoot"]),
+                requesterAgentNickname: requester.nickname,
+                requesterAgentRole: requester.role,
                 createdAt: Date()
             )
         default:
@@ -376,6 +756,7 @@ final class ServerManager: ObservableObject {
 
     func send(
         _ text: String,
+        skillMentions: [SkillMentionSelection] = [],
         cwd: String,
         model: String? = nil,
         effort: String? = nil,
@@ -395,11 +776,20 @@ final class ServerManager: ObservableObject {
             }
         }
         guard let key, let thread = threads[key], let conn = connections[key.serverId] else { return }
-        thread.messages.append(ChatMessage(role: .user, text: text))
+        thread.messages.append(ChatMessage(role: .user, text: text, isFromUserTurnBoundary: true))
         thread.status = .thinking
         thread.updatedAt = Date()
         do {
-            try await conn.sendTurn(threadId: key.threadId, text: text, model: model, effort: effort)
+            let skillInputs = skillMentions.map { mention in
+                UserInput(type: "skill", path: mention.path, name: mention.name)
+            }
+            try await conn.sendTurn(
+                threadId: key.threadId,
+                text: text,
+                model: model,
+                effort: effort,
+                additionalInput: skillInputs
+            )
         } catch {
             thread.status = .error(error.localizedDescription)
         }
@@ -435,6 +825,35 @@ final class ServerManager: ObservableObject {
         thread.updatedAt = Date()
     }
 
+    func renameThread(_ key: ThreadKey, to newName: String) async throws {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(domain: "Shitter", code: 1030, userInfo: [NSLocalizedDescriptionKey: "Thread name cannot be empty"])
+        }
+        guard let thread = threads[key],
+              let conn = connections[key.serverId] else {
+            throw NSError(domain: "Shitter", code: 1031, userInfo: [NSLocalizedDescriptionKey: "Thread unavailable"])
+        }
+        try await conn.setThreadName(threadId: key.threadId, name: trimmed)
+        thread.preview = trimmed
+        thread.updatedAt = Date()
+    }
+
+    func archiveThread(_ key: ThreadKey) async throws {
+        guard let conn = connections[key.serverId] else {
+            throw NSError(domain: "Shitter", code: 1032, userInfo: [NSLocalizedDescriptionKey: "Server unavailable"])
+        }
+        try await conn.archiveThread(threadId: key.threadId)
+        threads.removeValue(forKey: key)
+        threadSubscriptions.removeValue(forKey: key)
+        threadTurnCounts.removeValue(forKey: key)
+        liveItemMessageIndices.removeValue(forKey: key)
+        liveTurnDiffMessageIndices.removeValue(forKey: key)
+        if activeThreadKey == key {
+            activeThreadKey = sortedThreads.first?.key
+        }
+    }
+
     func interrupt() async {
         guard let key = activeThreadKey, let conn = connections[key.serverId] else { return }
         await conn.interrupt(threadId: key.threadId)
@@ -462,6 +881,18 @@ final class ServerManager: ObservableObject {
                 if let existing = threads[key] {
                     existing.preview = summary.preview
                     existing.cwd = summary.cwd
+                    existing.modelProvider = summary.modelProvider
+                    existing.parentThreadId = sanitizedLineageId(summary.parentThreadId) ?? existing.parentThreadId
+                    existing.rootThreadId = sanitizedLineageId(summary.rootThreadId) ?? existing.rootThreadId
+                    existing.agentNickname = sanitizedLineageId(summary.agentNickname) ?? existing.agentNickname
+                    existing.agentRole = sanitizedLineageId(summary.agentRole) ?? existing.agentRole
+                    upsertAgentDirectory(
+                        serverId: serverId,
+                        threadId: summary.id,
+                        agentId: summary.agentId,
+                        nickname: existing.agentNickname,
+                        role: existing.agentRole
+                    )
                     existing.updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
                 } else {
                     let state = ThreadState(
@@ -472,8 +903,21 @@ final class ServerManager: ObservableObject {
                     )
                     state.preview = summary.preview
                     state.cwd = summary.cwd
+                    state.modelProvider = summary.modelProvider
+                    state.parentThreadId = sanitizedLineageId(summary.parentThreadId)
+                    state.rootThreadId = sanitizedLineageId(summary.rootThreadId)
+                    state.agentNickname = sanitizedLineageId(summary.agentNickname)
+                    state.agentRole = sanitizedLineageId(summary.agentRole)
+                    upsertAgentDirectory(
+                        serverId: serverId,
+                        threadId: summary.id,
+                        agentId: summary.agentId,
+                        nickname: state.agentNickname,
+                        role: state.agentRole
+                    )
                     state.updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
                     threads[key] = state
+                    threadTurnCounts[key] = threadTurnCounts[key] ?? 0
                     observeThread(state)
                 }
             }
@@ -487,6 +931,9 @@ final class ServerManager: ObservableObject {
         case "account/login/completed", "account/updated":
             connections[serverId]?.handleAccountNotification(method: method, data: data)
 
+        case "sessionConfigured":
+            handleSessionConfiguredNotification(serverId: serverId, data: data)
+
         case "turn/started":
             if let threadId = extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
@@ -494,17 +941,146 @@ final class ServerManager: ObservableObject {
             }
 
         case "item/agentMessage/delta":
-            struct DeltaParams: Decodable { let delta: String; let threadId: String? }
+            struct DeltaParams: Decodable {
+                let delta: String
+                let threadId: String?
+                let agentId: String?
+                let agentNickname: String?
+                let agentRole: String?
+
+                private enum CodingKeys: String, CodingKey {
+                    case delta
+                    case id
+                    case source
+                    case threadId
+                    case threadIdSnake = "thread_id"
+                    case agentId
+                    case agentIdSnake = "agent_id"
+                    case agentNickname
+                    case agentNicknameSnake = "agent_nickname"
+                    case nickname
+                    case name
+                    case agentRole
+                    case agentRoleSnake = "agent_role"
+                    case agentType
+                    case agentTypeSnake = "agent_type"
+                    case role
+                    case type
+                }
+
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let sourceAny = try? container.decodeIfPresent(AnyCodable.self, forKey: .source)
+                    delta = (try? container.decode(String.self, forKey: .delta)) ?? ""
+                    threadId = Self.decodeString(container, forKey: .threadId)
+                        ?? Self.decodeString(container, forKey: .threadIdSnake)
+                        ?? Self.extractSourceField(sourceAny?.value, keys: ["thread_id", "threadId"])
+
+                    let directAgentId = Self.decodeString(container, forKey: .agentId)
+                        ?? Self.decodeString(container, forKey: .agentIdSnake)
+                        ?? Self.decodeString(container, forKey: .id)
+                    agentId = directAgentId
+                        ?? Self.extractSourceField(sourceAny?.value, keys: ["agent_id", "agentId", "id"])
+
+                    let directNickname = Self.decodeString(container, forKey: .agentNickname)
+                        ?? Self.decodeString(container, forKey: .agentNicknameSnake)
+                        ?? Self.decodeString(container, forKey: .nickname)
+                        ?? Self.decodeString(container, forKey: .name)
+                    agentNickname = directNickname
+                        ?? Self.extractSourceField(sourceAny?.value, keys: ["agent_nickname", "agentNickname", "nickname", "name"])
+
+                    let roleFromPrimary = try? container.decodeIfPresent(String.self, forKey: .agentRole)
+                    let roleFromSnake = try? container.decodeIfPresent(String.self, forKey: .agentRoleSnake)
+                    let roleFromType = try? container.decodeIfPresent(String.self, forKey: .agentType)
+                    let roleFromTypeSnake = try? container.decodeIfPresent(String.self, forKey: .agentTypeSnake)
+                    let roleFromGeneric = try? container.decodeIfPresent(String.self, forKey: .role)
+                    let typeFromGeneric = try? container.decodeIfPresent(String.self, forKey: .type)
+                    let directRole = roleFromPrimary ?? roleFromSnake ?? roleFromType ?? roleFromTypeSnake ?? roleFromGeneric ?? typeFromGeneric
+                    agentRole = directRole
+                        ?? Self.extractSourceField(sourceAny?.value, keys: ["agent_role", "agentRole", "agent_type", "agentType", "role", "type"])
+                }
+
+                private static func decodeString(
+                    _ container: KeyedDecodingContainer<CodingKeys>,
+                    forKey key: CodingKeys
+                ) -> String? {
+                    if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+                        return value
+                    }
+                    if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+                        return String(value)
+                    }
+                    if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+                        return String(value)
+                    }
+                    return nil
+                }
+
+                private static func extractSourceField(_ source: Any?, keys: [String]) -> String? {
+                    guard let sourceDict = source as? [String: Any] else { return nil }
+                    let subAgent = (sourceDict["subAgent"] as? [String: Any]) ?? (sourceDict["sub_agent"] as? [String: Any])
+                    guard let subAgent else { return nil }
+                    let threadSpawn = (subAgent["thread_spawn"] as? [String: Any]) ?? (subAgent["threadSpawn"] as? [String: Any])
+
+                    func extract(from dict: [String: Any]?) -> String? {
+                        guard let dict else { return nil }
+                        for key in keys {
+                            if let value = dict[key] as? String {
+                                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !trimmed.isEmpty {
+                                    return trimmed
+                                }
+                            } else if let value = dict[key] as? NSNumber {
+                                return value.stringValue
+                            }
+                        }
+                        return nil
+                    }
+
+                    return extract(from: threadSpawn) ?? extract(from: subAgent)
+                }
+            }
             struct DeltaNotif: Decodable { let params: DeltaParams }
             guard let notif = try? JSONDecoder().decode(DeltaNotif.self, from: data),
                   !notif.params.delta.isEmpty else { return }
-            let key = resolveThreadKey(serverId: serverId, threadId: notif.params.threadId)
+            let explicitThreadId = sanitizedLineageId(notif.params.threadId)
+            let key = resolveThreadKey(serverId: serverId, threadId: explicitThreadId)
             guard let thread = threads[key] else { return }
+            let agentId = sanitizedLineageId(notif.params.agentId)
+            let agentNickname = sanitizedLineageId(notif.params.agentNickname) ?? thread.agentNickname
+            let agentRole = sanitizedLineageId(notif.params.agentRole) ?? thread.agentRole
+            debugAgentDirectoryLog(
+                "delta parsed threadId=\(explicitThreadId ?? "<nil>") agentId=\(agentId ?? "<nil>") nickname=\(agentNickname ?? "<nil>") role=\(agentRole ?? "<nil>")"
+            )
             if let last = thread.messages.last, last.role == .assistant {
                 thread.messages[thread.messages.count - 1].text += notif.params.delta
+                if thread.messages[thread.messages.count - 1].agentNickname == nil {
+                    thread.messages[thread.messages.count - 1].agentNickname = agentNickname
+                }
+                if thread.messages[thread.messages.count - 1].agentRole == nil {
+                    thread.messages[thread.messages.count - 1].agentRole = agentRole
+                }
             } else {
-                thread.messages.append(ChatMessage(role: .assistant, text: notif.params.delta))
+                thread.messages.append(
+                    ChatMessage(
+                        role: .assistant,
+                        text: notif.params.delta,
+                        agentNickname: agentNickname,
+                        agentRole: agentRole
+                    )
+                )
             }
+            if explicitThreadId != nil || agentId == nil {
+                thread.agentNickname = agentNickname
+                thread.agentRole = agentRole
+            }
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: explicitThreadId ?? (agentId == nil ? key.threadId : nil),
+                agentId: agentId,
+                nickname: agentNickname,
+                role: agentRole
+            )
             thread.updatedAt = Date()
 
         case "turn/completed", "codex/event/task_complete":
@@ -542,11 +1118,58 @@ final class ServerManager: ObservableObject {
                 handleItemNotification(serverId: serverId, method: method, data: data)
             } else if method == "codex/event/turn_diff" {
                 handleLegacyCodexEventNotification(serverId: serverId, method: method, data: data)
-            } else if (method == "codex/event" || method.hasPrefix("codex/event/")),
-                      !serversUsingItemNotifications.contains(serverId) {
-                handleLegacyCodexEventNotification(serverId: serverId, method: method, data: data)
+            } else if method == "codex/event" || method.hasPrefix("codex/event/") {
+                ingestCodexEventAgentMetadata(serverId: serverId, method: method, data: data)
+                if !serversUsingItemNotifications.contains(serverId) {
+                    handleLegacyCodexEventNotification(serverId: serverId, method: method, data: data)
+                }
             }
         }
+    }
+
+    private func handleSessionConfiguredNotification(serverId: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any],
+              let sessionId = extractString(params, keys: ["sessionId", "session_id", "threadId", "thread_id"]),
+              !sessionId.isEmpty else { return }
+
+        guard let conn = connections[serverId] else { return }
+        let key = ThreadKey(serverId: serverId, threadId: sessionId)
+        let thread = threads[key] ?? ThreadState(
+            serverId: serverId,
+            threadId: sessionId,
+            serverName: conn.server.name,
+            serverSource: conn.server.source
+        )
+        let parentId = extractString(
+            params,
+            keys: ["forkedFromId", "forked_from_id", "parentThreadId", "parent_thread_id"]
+        )
+        let rootId = extractString(params, keys: ["rootThreadId", "root_thread_id"])
+        let title = extractString(params, keys: ["threadName", "thread_name"])
+        let modelProvider = extractString(params, keys: ["modelProvider", "model_provider", "modelProviderId", "model_provider_id"])
+        let agentMetadata = extractAgentMetadata(params)
+
+        thread.parentThreadId = sanitizedLineageId(parentId) ?? thread.parentThreadId
+        thread.rootThreadId = sanitizedLineageId(rootId) ?? thread.rootThreadId
+        thread.agentNickname = agentMetadata.nickname ?? thread.agentNickname
+        thread.agentRole = agentMetadata.role ?? thread.agentRole
+        upsertAgentDirectory(
+            serverId: serverId,
+            threadId: sessionId,
+            agentId: agentMetadata.agentId,
+            nickname: thread.agentNickname,
+            role: thread.agentRole
+        )
+        if let title, !title.isEmpty {
+            thread.preview = title
+        }
+        if let modelProvider, !modelProvider.isEmpty {
+            thread.modelProvider = modelProvider
+        }
+
+        threads[key] = thread
+        observeThread(thread)
     }
 
     private func handleItemNotification(serverId: String, method: String, data: Data) {
@@ -571,7 +1194,14 @@ final class ServerManager: ObservableObject {
             }
             guard let itemData = try? JSONSerialization.data(withJSONObject: itemDict),
                   let item = try? JSONDecoder().decode(ResumedThreadItem.self, from: itemData),
-                  let msg = chatMessage(from: item) else { return }
+                  let msg = chatMessage(
+                    from: item,
+                    sourceTurnId: nil,
+                    sourceTurnIndex: nil,
+                    serverId: serverId,
+                    defaultAgentNickname: thread.agentNickname,
+                    defaultAgentRole: thread.agentRole
+                  ) else { return }
             let itemId = extractString(itemDict, keys: ["id"])
             if method == "item/started", let itemId {
                 upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
@@ -621,6 +1251,389 @@ final class ServerManager: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func extractStringValue(_ value: Any?) -> String? {
+        if let value = value as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        return nil
+    }
+
+    private func extractStringArray(_ dict: [String: Any], keys: [String]) -> [String] {
+        for key in keys {
+            guard let raw = dict[key] else { continue }
+            if let strings = raw as? [String] {
+                return strings.compactMap { sanitizedLineageId($0) }
+            }
+            if let values = raw as? [Any] {
+                return values.compactMap { extractStringValue($0) }.compactMap { sanitizedLineageId($0) }
+            }
+        }
+        return []
+    }
+
+    private func ingestCodexEventAgentMetadata(serverId: String, method: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any] else { return }
+
+        let eventPayload: [String: Any]
+        let eventType: String
+        if method == "codex/event" {
+            eventPayload = (params["msg"] as? [String: Any]) ?? params
+            eventType = extractString(eventPayload, keys: ["type"]) ?? "codex/event"
+        } else {
+            eventPayload = (params["msg"] as? [String: Any]) ?? params
+            eventType = String(method.dropFirst("codex/event/".count))
+        }
+
+        func upsertIdentity(
+            threadId: String?,
+            agentId: String?,
+            nickname: String?,
+            role: String?,
+            source: String
+        ) {
+            let normalizedThreadId = sanitizedLineageId(threadId)
+            let normalizedAgentId = sanitizedLineageId(agentId)
+            let normalizedNickname = sanitizedLineageId(nickname)
+            let normalizedRole = sanitizedLineageId(role)
+            guard normalizedThreadId != nil || normalizedAgentId != nil || normalizedNickname != nil || normalizedRole != nil else {
+                return
+            }
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: normalizedThreadId,
+                agentId: normalizedAgentId,
+                nickname: normalizedNickname,
+                role: normalizedRole
+            )
+            debugAgentDirectoryLog(
+                "codex-event metadata server=\(serverId) event=\(eventType) source=\(source) threadId=\(normalizedThreadId ?? "<nil>") agentId=\(normalizedAgentId ?? "<nil>") nickname=\(normalizedNickname ?? "<nil>") role=\(normalizedRole ?? "<nil>")"
+            )
+        }
+
+        var senderMetadata = extractAgentMetadata(eventPayload)
+        senderMetadata.threadId = senderMetadata.threadId
+            ?? sanitizedLineageId(
+                extractString(
+                    eventPayload,
+                    keys: ["sender_thread_id", "senderThreadId", "thread_id", "threadId", "conversation_id", "conversationId"]
+                )
+            )
+            ?? sanitizedLineageId(
+                extractString(
+                    params,
+                    keys: ["thread_id", "threadId", "conversation_id", "conversationId"]
+                )
+            )
+        senderMetadata.agentId = senderMetadata.agentId
+            ?? sanitizedLineageId(extractString(eventPayload, keys: ["sender_agent_id", "senderAgentId"]))
+        upsertIdentity(
+            threadId: senderMetadata.threadId,
+            agentId: senderMetadata.agentId,
+            nickname: senderMetadata.nickname,
+            role: senderMetadata.role,
+            source: "sender"
+        )
+
+        upsertIdentity(
+            threadId: extractString(eventPayload, keys: ["new_thread_id", "newThreadId"]),
+            agentId: extractString(eventPayload, keys: ["new_agent_id", "newAgentId"]),
+            nickname: extractString(eventPayload, keys: ["new_agent_nickname", "newAgentNickname"]),
+            role: extractString(eventPayload, keys: ["new_agent_role", "newAgentRole"]),
+            source: "spawn-end"
+        )
+
+        upsertIdentity(
+            threadId: extractString(eventPayload, keys: ["receiver_thread_id", "receiverThreadId"]),
+            agentId: extractString(eventPayload, keys: ["receiver_agent_id", "receiverAgentId"]),
+            nickname: extractString(eventPayload, keys: ["receiver_agent_nickname", "receiverAgentNickname"]),
+            role: extractString(eventPayload, keys: ["receiver_agent_role", "receiverAgentRole"]),
+            source: "receiver-single"
+        )
+
+        let receiverThreadIds = extractStringArray(
+            eventPayload,
+            keys: ["receiver_thread_ids", "receiverThreadIds"]
+        )
+        let receiverAgentsAny = (eventPayload["receiver_agents"] as? [Any]) ?? (eventPayload["receiverAgents"] as? [Any]) ?? []
+
+        for (index, threadId) in receiverThreadIds.enumerated() {
+            let alignedAgent = index < receiverAgentsAny.count ? (receiverAgentsAny[index] as? [String: Any]) : nil
+            let alignedIdentity = alignedAgent.map { extractAgentMetadata($0) }
+            upsertIdentity(
+                threadId: threadId,
+                agentId: alignedIdentity?.agentId ?? alignedAgent.flatMap { extractString($0, keys: ["agent_id", "agentId", "id"]) },
+                nickname: alignedIdentity?.nickname ?? alignedAgent.flatMap { extractString($0, keys: ["agent_nickname", "agentNickname", "nickname", "name"]) },
+                role: alignedIdentity?.role ?? alignedAgent.flatMap { extractString($0, keys: ["agent_role", "agentRole", "agent_type", "agentType", "role", "type"]) },
+                source: "receiver-thread-ids[\(index)]"
+            )
+        }
+
+        for (index, rawReceiver) in receiverAgentsAny.enumerated() {
+            if let receiver = rawReceiver as? [String: Any] {
+                let metadata = extractAgentMetadata(receiver)
+                let threadId = metadata.threadId
+                    ?? extractString(receiver, keys: ["thread_id", "threadId", "receiver_thread_id", "receiverThreadId"])
+                upsertIdentity(
+                    threadId: threadId,
+                    agentId: metadata.agentId,
+                    nickname: metadata.nickname ?? extractString(receiver, keys: ["receiver_agent_nickname", "receiverAgentNickname"]),
+                    role: metadata.role ?? extractString(receiver, keys: ["receiver_agent_role", "receiverAgentRole"]),
+                    source: "receiver-agents[\(index)]"
+                )
+            } else {
+                upsertIdentity(
+                    threadId: extractStringValue(rawReceiver),
+                    agentId: nil,
+                    nickname: nil,
+                    role: nil,
+                    source: "receiver-agents[\(index)]-scalar"
+                )
+            }
+        }
+
+        if let statuses = eventPayload["statuses"] as? [String: Any] {
+            for (threadId, rawStatus) in statuses {
+                let statusDict = rawStatus as? [String: Any]
+                upsertIdentity(
+                    threadId: threadId,
+                    agentId: statusDict.flatMap { extractString($0, keys: ["agent_id", "agentId"]) },
+                    nickname: statusDict.flatMap { extractString($0, keys: ["agent_nickname", "agentNickname", "receiver_agent_nickname", "receiverAgentNickname"]) },
+                    role: statusDict.flatMap { extractString($0, keys: ["agent_role", "agentRole", "receiver_agent_role", "receiverAgentRole", "agent_type", "agentType"]) },
+                    source: "statuses"
+                )
+            }
+        }
+
+        if let statusEntries = eventPayload["agent_statuses"] as? [Any] {
+            for (index, rawEntry) in statusEntries.enumerated() {
+                guard let entry = rawEntry as? [String: Any] else { continue }
+                upsertIdentity(
+                    threadId: extractString(entry, keys: ["thread_id", "threadId", "receiver_thread_id", "receiverThreadId"]),
+                    agentId: extractString(entry, keys: ["agent_id", "agentId"]),
+                    nickname: extractString(entry, keys: ["agent_nickname", "agentNickname", "receiver_agent_nickname", "receiverAgentNickname"]),
+                    role: extractString(entry, keys: ["agent_role", "agentRole", "receiver_agent_role", "receiverAgentRole", "agent_type", "agentType"]),
+                    source: "agent-statuses[\(index)]"
+                )
+            }
+        }
+    }
+
+    private struct AgentIdentity {
+        var threadId: String?
+        var agentId: String?
+        var nickname: String?
+        var role: String?
+
+        var hasMetadata: Bool {
+            agentId != nil || nickname != nil || role != nil
+        }
+    }
+
+    private func extractAgentMetadata(_ dict: [String: Any]) -> AgentIdentity {
+        let directThreadId = extractString(dict, keys: [
+            "threadId", "thread_id",
+            "conversationId", "conversation_id",
+            "receiverThreadId", "receiver_thread_id"
+        ])
+        let directAgentId = extractString(dict, keys: ["agentId", "agent_id", "id"])
+        let directNickname = extractString(dict, keys: ["agentNickname", "agent_nickname", "nickname", "name"])
+        let directRole = extractString(dict, keys: ["agentRole", "agent_role", "agentType", "agent_type", "role", "type"])
+
+        let source = dict["source"] as? [String: Any]
+        let subAgent = (source?["subAgent"] as? [String: Any]) ?? (source?["sub_agent"] as? [String: Any])
+        let threadSpawn = (subAgent?["thread_spawn"] as? [String: Any]) ?? (subAgent?["threadSpawn"] as? [String: Any])
+        let nestedThreadId = threadSpawn.flatMap { extractString($0, keys: ["thread_id", "threadId"]) }
+        let nestedAgentId = threadSpawn.flatMap { extractString($0, keys: ["agent_id", "agentId"]) }
+        let nestedSpawnId = threadSpawn.flatMap { extractString($0, keys: ["id"]) }
+        let nestedSubAgentId = subAgent.flatMap { extractString($0, keys: ["agent_id", "agentId", "id"]) }
+        let nestedNickname = threadSpawn.flatMap { extractString($0, keys: ["agent_nickname", "agentNickname", "nickname", "name"]) }
+        let nestedRole = threadSpawn.flatMap { extractString($0, keys: ["agent_role", "agentRole", "agent_type", "agentType", "role", "type"]) }
+        let nestedSubAgentNickname = subAgent.flatMap { extractString($0, keys: ["agent_nickname", "agentNickname", "nickname", "name"]) }
+        let nestedSubAgentRole = subAgent.flatMap { extractString($0, keys: ["agent_role", "agentRole", "agent_type", "agentType", "role", "type"]) }
+
+        return AgentIdentity(
+            threadId: sanitizedLineageId(directThreadId) ?? sanitizedLineageId(nestedThreadId),
+            agentId: sanitizedLineageId(directAgentId)
+                ?? sanitizedLineageId(nestedAgentId)
+                ?? sanitizedLineageId(nestedSubAgentId)
+                ?? sanitizedLineageId(nestedSpawnId),
+            nickname: sanitizedLineageId(directNickname)
+                ?? sanitizedLineageId(nestedNickname)
+                ?? sanitizedLineageId(nestedSubAgentNickname),
+            role: sanitizedLineageId(directRole)
+                ?? sanitizedLineageId(nestedRole)
+                ?? sanitizedLineageId(nestedSubAgentRole)
+        )
+    }
+
+    private func resolveAgentIdentity(
+        serverId: String,
+        threadId: String?,
+        params: [String: Any] = [:]
+    ) -> AgentIdentity {
+        let normalizedThreadId = sanitizedLineageId(threadId)
+        var fromParams = extractAgentMetadata(params)
+        fromParams.threadId = fromParams.threadId ?? normalizedThreadId
+
+        if fromParams.hasMetadata {
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: fromParams.threadId,
+                agentId: fromParams.agentId,
+                nickname: fromParams.nickname,
+                role: fromParams.role
+            )
+        }
+
+        let fromDirectory = mergedAgentDirectoryEntry(
+            serverId: serverId,
+            threadId: fromParams.threadId,
+            agentId: fromParams.agentId
+        )
+        let resolvedThreadId = fromParams.threadId ?? fromDirectory?.threadId
+        let fromThreadState = resolvedThreadId
+            .map { ThreadKey(serverId: serverId, threadId: $0) }
+            .flatMap { threads[$0] }
+
+        let resolved = AgentIdentity(
+            threadId: resolvedThreadId,
+            agentId: fromParams.agentId ?? fromDirectory?.agentId,
+            nickname: fromParams.nickname ?? fromDirectory?.nickname ?? fromThreadState?.agentNickname,
+            role: fromParams.role ?? fromDirectory?.role ?? fromThreadState?.agentRole
+        )
+
+        if resolved.hasMetadata {
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: resolved.threadId,
+                agentId: resolved.agentId,
+                nickname: resolved.nickname,
+                role: resolved.role
+            )
+        }
+        return resolved
+    }
+
+    private func mergedAgentDirectoryEntry(serverId: String?, threadId: String?, agentId: String?) -> AgentDirectoryEntry? {
+        guard let serverScope = agentDirectoryServerScope(serverId) else {
+            return nil
+        }
+        let normalizedThreadId = sanitizedLineageId(threadId)
+        let normalizedAgentId = sanitizedLineageId(agentId)
+        let threadEntry = normalizedThreadId.flatMap {
+            agentDirectory.byThreadId[agentDirectoryScopedKey(serverId: serverScope, id: $0)]
+        }
+        let agentEntry = normalizedAgentId.flatMap {
+            agentDirectory.byAgentId[agentDirectoryScopedKey(serverId: serverScope, id: $0)]
+        }
+        guard threadEntry != nil || agentEntry != nil else { return nil }
+
+        let preferred = agentEntry ?? threadEntry
+        return AgentDirectoryEntry(
+            nickname: preferred?.nickname ?? threadEntry?.nickname ?? agentEntry?.nickname,
+            role: preferred?.role ?? threadEntry?.role ?? agentEntry?.role,
+            threadId: normalizedThreadId ?? threadEntry?.threadId ?? agentEntry?.threadId,
+            agentId: normalizedAgentId ?? agentEntry?.agentId ?? threadEntry?.agentId
+        )
+    }
+
+    private func upsertAgentDirectory(
+        serverId: String?,
+        threadId: String?,
+        agentId: String?,
+        nickname: String?,
+        role: String?
+    ) {
+        guard let serverScope = agentDirectoryServerScope(serverId) else {
+            debugAgentDirectoryLog(
+                "upsert skipped threadId=\(threadId ?? "<nil>") agentId=\(agentId ?? "<nil>") reason=missing-server-scope"
+            )
+            return
+        }
+        let normalizedThreadId = sanitizedLineageId(threadId)
+        let normalizedAgentId = sanitizedLineageId(agentId)
+        let normalizedNickname = sanitizedLineageId(nickname)
+        let normalizedRole = sanitizedLineageId(role)
+        guard normalizedThreadId != nil || normalizedAgentId != nil || normalizedNickname != nil || normalizedRole != nil else {
+            debugAgentDirectoryLog(
+                "upsert skipped server=\(serverScope) threadId=\(threadId ?? "<nil>") agentId=\(agentId ?? "<nil>") reason=empty-identifiers-and-metadata"
+            )
+            return
+        }
+
+        let scopedThreadKey = normalizedThreadId.map { agentDirectoryScopedKey(serverId: serverScope, id: $0) }
+        let scopedAgentKey = normalizedAgentId.map { agentDirectoryScopedKey(serverId: serverScope, id: $0) }
+
+        var merged = AgentDirectoryEntry(
+            nickname: normalizedNickname,
+            role: normalizedRole,
+            threadId: normalizedThreadId,
+            agentId: normalizedAgentId
+        )
+
+        if let scopedThreadKey, let existing = agentDirectory.byThreadId[scopedThreadKey] {
+            merged = merged.merged(over: existing)
+        }
+        if let scopedAgentKey, let existing = agentDirectory.byAgentId[scopedAgentKey] {
+            merged = merged.merged(over: existing)
+        }
+
+        var didChange = false
+        if let scopedThreadKey, agentDirectory.byThreadId[scopedThreadKey] != merged {
+            agentDirectory.byThreadId[scopedThreadKey] = merged
+            didChange = true
+        }
+        if let scopedAgentKey, agentDirectory.byAgentId[scopedAgentKey] != merged {
+            agentDirectory.byAgentId[scopedAgentKey] = merged
+            didChange = true
+        }
+        if let linkedThreadId = merged.threadId,
+           let linkedAgentId = merged.agentId {
+            let linkedThreadKey = agentDirectoryScopedKey(serverId: serverScope, id: linkedThreadId)
+            let linkedAgentKey = agentDirectoryScopedKey(serverId: serverScope, id: linkedAgentId)
+            if agentDirectory.byThreadId[linkedThreadKey] != merged {
+                agentDirectory.byThreadId[linkedThreadKey] = merged
+                didChange = true
+            }
+            if agentDirectory.byAgentId[linkedAgentKey] != merged {
+                agentDirectory.byAgentId[linkedAgentKey] = merged
+                didChange = true
+            }
+        }
+        let mergedLabel = formatAgentLabel(
+            nickname: merged.nickname,
+            role: merged.role,
+            fallbackThreadId: merged.threadId ?? merged.agentId
+        ) ?? "<nil>"
+        if didChange {
+            agentDirectoryVersion = agentDirectoryVersion &+ 1
+            debugAgentDirectoryLog(
+                "upsert updated server=\(serverScope) threadId=\(merged.threadId ?? "<nil>") agentId=\(merged.agentId ?? "<nil>") label=\(mergedLabel)"
+            )
+        } else if merged.nickname != nil || merged.role != nil || merged.agentId != nil {
+            debugAgentDirectoryLog(
+                "upsert no-op server=\(serverScope) threadId=\(merged.threadId ?? "<nil>") agentId=\(merged.agentId ?? "<nil>") label=\(mergedLabel)"
+            )
+        }
+    }
+
+    private func formatAgentLabel(nickname: String?, role: String?, fallbackThreadId: String? = nil) -> String? {
+        AgentLabelFormatter.format(
+            nickname: nickname,
+            role: role,
+            fallbackIdentifier: fallbackThreadId
+        )
+    }
+
+    private func sanitizedLineageId(_ raw: String?) -> String? {
+        AgentLabelFormatter.sanitized(raw)
     }
 
     private func upsertLiveItemMessage(_ message: ChatMessage, itemId: String, key: ThreadKey, thread: ThreadState) {
@@ -860,6 +1873,42 @@ final class ServerManager: ObservableObject {
             }
             thread.updatedAt = Date()
 
+        case "web_search_begin":
+            let itemId = extractString(eventPayload, keys: ["call_id", "callId", "item_id", "itemId"])
+            let query = extractString(eventPayload, keys: ["query"]) ?? ""
+
+            var lines: [String] = ["Status: inProgress"]
+            if !query.isEmpty { lines.append("Query: \(query)") }
+            let body = lines.joined(separator: "\n")
+
+            guard let msg = systemMessage(title: "Web Search", body: body) else { return }
+            if let itemId {
+                upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
+            } else {
+                thread.messages.append(msg)
+            }
+            thread.updatedAt = Date()
+
+        case "web_search_end":
+            let itemId = extractString(eventPayload, keys: ["call_id", "callId", "item_id", "itemId"])
+            let query = extractString(eventPayload, keys: ["query"]) ?? ""
+            let status = extractString(eventPayload, keys: ["status"]) ?? "completed"
+
+            var lines: [String] = ["Status: \(status)"]
+            if !query.isEmpty { lines.append("Query: \(query)") }
+            var body = lines.joined(separator: "\n")
+            if let action = eventPayload["action"], let pretty = prettyJSON(action) {
+                body += "\n\nAction:\n```json\n\(pretty)\n```"
+            }
+
+            guard let msg = systemMessage(title: "Web Search", body: body) else { return }
+            if let itemId {
+                completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
+            } else {
+                thread.messages.append(msg)
+            }
+            thread.updatedAt = Date()
+
         case "patch_apply_begin":
             let itemId = extractString(eventPayload, keys: ["call_id", "callId"])
             let changeSummary = legacyPatchChangeBody(from: eventPayload["changes"])
@@ -997,15 +2046,59 @@ final class ServerManager: ObservableObject {
         if thread.hasTurnActive { return }
 
         let cwd = thread.cwd.isEmpty ? "/tmp" : thread.cwd
-        guard let response = try? await conn.resumeThread(threadId: key.threadId, cwd: cwd) else { return }
-        let restored = restoredMessages(from: response.thread.turns)
+        guard let response = try? await conn.resumeThread(
+            threadId: key.threadId,
+            cwd: cwd,
+            approvalPolicy: "never",
+            sandboxMode: "workspace-write"
+        ) else { return }
+        let restored = restoredMessages(
+            from: response.thread.turns,
+            serverId: key.serverId,
+            defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
+            defaultAgentRole: response.thread.agentRole ?? thread.agentRole
+        )
         guard !messagesEquivalent(thread.messages, restored) else { return }
         if shouldPreferLocalMessages(current: thread.messages, restored: restored) { return }
 
         thread.messages = restored
+        threadTurnCounts[key] = response.thread.turns.count
+        thread.modelProvider = response.modelProvider ?? response.model
+        thread.parentThreadId = sanitizedLineageId(response.thread.parentThreadId) ?? thread.parentThreadId
+        thread.rootThreadId = sanitizedLineageId(response.thread.rootThreadId) ?? thread.rootThreadId
+        thread.agentNickname = sanitizedLineageId(response.thread.agentNickname) ?? thread.agentNickname
+        thread.agentRole = sanitizedLineageId(response.thread.agentRole) ?? thread.agentRole
+        upsertAgentDirectory(
+            serverId: key.serverId,
+            threadId: response.thread.id,
+            agentId: response.thread.agentId,
+            nickname: thread.agentNickname,
+            role: thread.agentRole
+        )
         thread.updatedAt = Date()
         liveItemMessageIndices[key] = nil
         liveTurnDiffMessageIndices[key] = nil
+    }
+
+    private func rollbackDepthForMessage(_ message: ChatMessage, in key: ThreadKey) throws -> Int {
+        guard let selectedTurnIndex = message.sourceTurnIndex else {
+            throw NSError(domain: "Shitter", code: 1021, userInfo: [NSLocalizedDescriptionKey: "Message is missing turn metadata"])
+        }
+        let totalTurns = threadTurnCounts[key] ?? inferredTurnCount(from: threads[key]?.messages ?? [])
+        guard totalTurns > 0 else {
+            throw NSError(domain: "Shitter", code: 1022, userInfo: [NSLocalizedDescriptionKey: "No turn history available"])
+        }
+        guard selectedTurnIndex >= 0, selectedTurnIndex < totalTurns else {
+            throw NSError(domain: "Shitter", code: 1023, userInfo: [NSLocalizedDescriptionKey: "Message is outside available turn history"])
+        }
+        return max(totalTurns - selectedTurnIndex - 1, 0)
+    }
+
+    private func inferredTurnCount(from messages: [ChatMessage]) -> Int {
+        if let maxTurnIndex = messages.compactMap(\.sourceTurnIndex).max() {
+            return maxTurnIndex + 1
+        }
+        return messages.filter { $0.role == .user && $0.isFromUserTurnBoundary }.count
     }
 
     private func shouldPreferLocalMessages(current: [ChatMessage], restored: [ChatMessage]) -> Bool {
@@ -1046,6 +2139,11 @@ final class ServerManager: ObservableObject {
         guard lhs.count == rhs.count else { return false }
         for (left, right) in zip(lhs, rhs) {
             guard left.role == right.role, left.text == right.text else { return false }
+            guard left.sourceTurnId == right.sourceTurnId else { return false }
+            guard left.sourceTurnIndex == right.sourceTurnIndex else { return false }
+            guard left.isFromUserTurnBoundary == right.isFromUserTurnBoundary else { return false }
+            guard left.agentNickname == right.agentNickname else { return false }
+            guard left.agentRole == right.agentRole else { return false }
             guard left.images.count == right.images.count else { return false }
             for (leftImage, rightImage) in zip(left.images, right.images) {
                 guard leftImage.data == rightImage.data else { return false }
@@ -1082,12 +2180,24 @@ final class ServerManager: ObservableObject {
 
     // MARK: - Message Restoration
 
-    func restoredMessages(from turns: [ResumedTurn]) -> [ChatMessage] {
+    func restoredMessages(
+        from turns: [ResumedTurn],
+        serverId: String? = nil,
+        defaultAgentNickname: String? = nil,
+        defaultAgentRole: String? = nil
+    ) -> [ChatMessage] {
         var restored: [ChatMessage] = []
         restored.reserveCapacity(turns.count * 3)
-        for turn in turns {
+        for (turnIndex, turn) in turns.enumerated() {
             for item in turn.items {
-                if let msg = chatMessage(from: item) {
+                if let msg = chatMessage(
+                    from: item,
+                    sourceTurnId: turn.id,
+                    sourceTurnIndex: turnIndex,
+                    serverId: serverId,
+                    defaultAgentNickname: defaultAgentNickname,
+                    defaultAgentRole: defaultAgentRole
+                ) {
                     restored.append(msg)
                 }
             }
@@ -1095,18 +2205,52 @@ final class ServerManager: ObservableObject {
         return restored
     }
 
-    private func chatMessage(from item: ResumedThreadItem) -> ChatMessage? {
+    private func chatMessage(
+        from item: ResumedThreadItem,
+        sourceTurnId: String?,
+        sourceTurnIndex: Int?,
+        serverId: String?,
+        defaultAgentNickname: String? = nil,
+        defaultAgentRole: String? = nil
+    ) -> ChatMessage? {
         switch item {
         case .userMessage(let content):
             let (text, images) = renderUserInput(content)
             if text.isEmpty && images.isEmpty { return nil }
-            return ChatMessage(role: .user, text: text, images: images)
-        case .agentMessage(let text, _):
+            return ChatMessage(
+                role: .user,
+                text: text,
+                images: images,
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex,
+                isFromUserTurnBoundary: true
+            )
+        case .agentMessage(let text, _, let itemAgentId, let itemAgentNickname, let itemAgentRole):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { return nil }
-            return ChatMessage(role: .assistant, text: trimmed)
+            let normalizedNickname = sanitizedLineageId(itemAgentNickname) ?? sanitizedLineageId(defaultAgentNickname)
+            let normalizedRole = sanitizedLineageId(itemAgentRole) ?? sanitizedLineageId(defaultAgentRole)
+            upsertAgentDirectory(
+                serverId: serverId,
+                threadId: nil,
+                agentId: itemAgentId,
+                nickname: normalizedNickname,
+                role: normalizedRole
+            )
+            return ChatMessage(
+                role: .assistant,
+                text: trimmed,
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex,
+                agentNickname: normalizedNickname,
+                agentRole: normalizedRole
+            )
         case .plan(let text):
-            return systemMessage(title: "Plan", body: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            return withTurnMetadata(
+                systemMessage(title: "Plan", body: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .reasoning(let summary, let content):
             let summaryText = summary
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1119,7 +2263,11 @@ final class ServerManager: ObservableObject {
             var sections: [String] = []
             if !summaryText.isEmpty { sections.append(summaryText) }
             if !detailText.isEmpty { sections.append(detailText) }
-            return systemMessage(title: "Reasoning", body: sections.joined(separator: "\n\n"))
+            return withTurnMetadata(
+                systemMessage(title: "Reasoning", body: sections.joined(separator: "\n\n")),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .commandExecution(let command, let cwd, let status, let output, let exitCode, let durationMs):
             var lines: [String] = ["Status: \(status)"]
             if !cwd.isEmpty { lines.append("Directory: \(cwd)") }
@@ -1131,10 +2279,18 @@ final class ServerManager: ObservableObject {
                 let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { body += "\n\nOutput:\n```text\n\(trimmed)\n```" }
             }
-            return systemMessage(title: "Command Execution", body: body)
+            return withTurnMetadata(
+                systemMessage(title: "Command Execution", body: body),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .fileChange(let changes, let status):
             if changes.isEmpty {
-                return systemMessage(title: "File Change", body: "Status: \(status)")
+                return withTurnMetadata(
+                    systemMessage(title: "File Change", body: "Status: \(status)"),
+                    sourceTurnId: sourceTurnId,
+                    sourceTurnIndex: sourceTurnIndex
+                )
             }
             var parts: [String] = []
             for change in changes {
@@ -1143,7 +2299,11 @@ final class ServerManager: ObservableObject {
                 if !diff.isEmpty { body += "\n\n```diff\n\(diff)\n```" }
                 parts.append(body)
             }
-            return systemMessage(title: "File Change", body: "Status: \(status)\n\n" + parts.joined(separator: "\n\n---\n\n"))
+            return withTurnMetadata(
+                systemMessage(title: "File Change", body: "Status: \(status)\n\n" + parts.joined(separator: "\n\n---\n\n")),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .mcpToolCall(let server, let tool, let status, let result, let error, let durationMs):
             var lines: [String] = ["Status: \(status)"]
             if !server.isEmpty || !tool.isEmpty {
@@ -1163,11 +2323,195 @@ final class ServerManager: ObservableObject {
                     body += "\n\nResult:\n```json\n\(pretty)\n```"
                 }
             }
-            return systemMessage(title: "MCP Tool Call", body: body)
-        case .collabAgentToolCall(let tool, let status, let receiverThreadIds, let prompt):
+            return withTurnMetadata(
+                systemMessage(title: "MCP Tool Call", body: body),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
+        case .collabAgentToolCall(let tool, let status, let receiverThreadIds, let receiverAgents, let prompt):
             var lines: [String] = ["Status: \(status)", "Tool: \(tool)"]
-            if !receiverThreadIds.isEmpty {
-                lines.append("Targets: \(receiverThreadIds.joined(separator: ", "))")
+            if !receiverThreadIds.isEmpty || !receiverAgents.isEmpty {
+                var labels: [String] = []
+                var seenIds: Set<String> = []
+                var consumedReceiverAgentIndexes: Set<Int> = []
+                let normalizedTargets = receiverThreadIds.compactMap { sanitizedLineageId($0) }
+                let listsAlignByIndex = normalizedTargets.count == receiverAgents.count
+
+                for agent in receiverAgents {
+                    upsertAgentDirectory(
+                        serverId: serverId,
+                        threadId: agent.threadId,
+                        agentId: agent.agentId,
+                        nickname: agent.agentNickname,
+                        role: agent.agentRole
+                    )
+                }
+
+                for (targetIndex, targetId) in normalizedTargets.enumerated() {
+                    if seenIds.contains(targetId) { continue }
+                    seenIds.insert(targetId)
+
+                    var matchedReason = "source=receiver-targets"
+                    var overrideIndex: Int?
+                    if let index = receiverAgents.firstIndex(where: { sanitizedLineageId($0.threadId) == targetId }) {
+                        overrideIndex = index
+                        matchedReason = "source=receiverAgents.threadId"
+                    } else if let index = receiverAgents.firstIndex(where: { sanitizedLineageId($0.agentId) == targetId }) {
+                        overrideIndex = index
+                        matchedReason = "source=receiverAgents.agentId"
+                    } else if listsAlignByIndex, receiverAgents.indices.contains(targetIndex) {
+                        overrideIndex = targetIndex
+                        matchedReason = "source=aligned-index-\(targetIndex)"
+                    }
+
+                    if let overrideIndex {
+                        consumedReceiverAgentIndexes.insert(overrideIndex)
+                    }
+                    let override = overrideIndex.flatMap { receiverAgents[$0] }
+                    let overrideThreadId = sanitizedLineageId(override?.threadId)
+                    let overrideAgentId = sanitizedLineageId(override?.agentId)
+                    let directoryThreadMatch = mergedAgentDirectoryEntry(serverId: serverId, threadId: targetId, agentId: nil) != nil
+                    let directoryAgentMatch = mergedAgentDirectoryEntry(serverId: serverId, threadId: nil, agentId: targetId) != nil
+                    let prefersAgentTarget: Bool
+                    if overrideAgentId == targetId {
+                        prefersAgentTarget = true
+                    } else if overrideThreadId == targetId {
+                        prefersAgentTarget = false
+                    } else if directoryAgentMatch && !directoryThreadMatch {
+                        prefersAgentTarget = true
+                    } else if directoryThreadMatch && !directoryAgentMatch {
+                        prefersAgentTarget = false
+                    } else {
+                        prefersAgentTarget = overrideThreadId == nil && overrideAgentId != nil
+                    }
+
+                    let directoryEntry = mergedAgentDirectoryEntry(serverId: serverId, threadId: targetId, agentId: targetId)
+                    let lookupThreadId = overrideThreadId
+                        ?? directoryEntry?.threadId
+                        ?? (prefersAgentTarget ? nil : targetId)
+                    let fallback = serverId.flatMap { server in
+                        lookupThreadId.map { resolveAgentIdentity(serverId: server, threadId: $0) }
+                    }
+
+                    let resolvedThreadId = overrideThreadId
+                        ?? directoryEntry?.threadId
+                        ?? fallback?.threadId
+                        ?? (prefersAgentTarget ? nil : targetId)
+                    let resolvedAgentId = overrideAgentId
+                        ?? directoryEntry?.agentId
+                        ?? fallback?.agentId
+                        ?? (prefersAgentTarget ? targetId : nil)
+                    let resolvedNickname = sanitizedLineageId(override?.agentNickname)
+                        ?? directoryEntry?.nickname
+                        ?? fallback?.nickname
+                    let resolvedRole = sanitizedLineageId(override?.agentRole)
+                        ?? directoryEntry?.role
+                        ?? fallback?.role
+
+                    upsertAgentDirectory(
+                        serverId: serverId,
+                        threadId: resolvedThreadId,
+                        agentId: resolvedAgentId,
+                        nickname: resolvedNickname,
+                        role: resolvedRole
+                    )
+
+                    let label = formatAgentLabel(
+                        nickname: resolvedNickname,
+                        role: resolvedRole,
+                        fallbackThreadId: resolvedThreadId ?? resolvedAgentId ?? targetId
+                    ) ?? targetId
+                    labels.append(label)
+
+                    if resolvedNickname != nil || resolvedRole != nil {
+                        logTargetResolution(
+                            targetId: targetId,
+                            resolvedLabel: label,
+                            reason: "resolved-via=\(matchedReason)"
+                        )
+                    } else {
+                        logTargetResolution(
+                            targetId: targetId,
+                            resolvedLabel: label,
+                            reason: "unresolved reason=no-metadata \(matchedReason)"
+                        )
+                    }
+                    if let resolvedThreadId {
+                        seenIds.insert(resolvedThreadId)
+                    }
+                    if let resolvedAgentId {
+                        seenIds.insert(resolvedAgentId)
+                    }
+                }
+
+                for (agentIndex, agent) in receiverAgents.enumerated() {
+                    if consumedReceiverAgentIndexes.contains(agentIndex) { continue }
+                    let normalizedThreadId = sanitizedLineageId(agent.threadId)
+                    let normalizedAgentId = sanitizedLineageId(agent.agentId)
+                    let targetId = normalizedThreadId ?? normalizedAgentId
+                    guard let targetId else { continue }
+                    if seenIds.contains(targetId) { continue }
+                    seenIds.insert(targetId)
+
+                    let directoryEntry = mergedAgentDirectoryEntry(
+                        serverId: serverId,
+                        threadId: normalizedThreadId,
+                        agentId: normalizedAgentId
+                    )
+                    let lookupThreadId = normalizedThreadId ?? directoryEntry?.threadId
+                    let fallback = serverId.flatMap { server in
+                        lookupThreadId.map { resolveAgentIdentity(serverId: server, threadId: $0) }
+                    }
+                    let resolvedThreadId = normalizedThreadId ?? directoryEntry?.threadId ?? fallback?.threadId
+                    let resolvedAgentId = normalizedAgentId
+                        ?? directoryEntry?.agentId
+                        ?? fallback?.agentId
+                        ?? (resolvedThreadId == nil ? targetId : nil)
+                    let resolvedNickname = sanitizedLineageId(agent.agentNickname)
+                        ?? directoryEntry?.nickname
+                        ?? fallback?.nickname
+                    let resolvedRole = sanitizedLineageId(agent.agentRole)
+                        ?? directoryEntry?.role
+                        ?? fallback?.role
+
+                    upsertAgentDirectory(
+                        serverId: serverId,
+                        threadId: resolvedThreadId,
+                        agentId: resolvedAgentId,
+                        nickname: resolvedNickname,
+                        role: resolvedRole
+                    )
+                    let label = formatAgentLabel(
+                        nickname: resolvedNickname,
+                        role: resolvedRole,
+                        fallbackThreadId: resolvedThreadId ?? resolvedAgentId ?? targetId
+                    ) ?? targetId
+                    labels.append(label)
+
+                    if resolvedNickname != nil || resolvedRole != nil {
+                        logTargetResolution(
+                            targetId: targetId,
+                            resolvedLabel: label,
+                            reason: "resolved-via=receiver-agent-ref"
+                        )
+                    } else {
+                        logTargetResolution(
+                            targetId: targetId,
+                            resolvedLabel: label,
+                            reason: "unresolved reason=receiver-agent-ref-missing-metadata"
+                        )
+                    }
+                    if let resolvedThreadId {
+                        seenIds.insert(resolvedThreadId)
+                    }
+                    if let resolvedAgentId {
+                        seenIds.insert(resolvedAgentId)
+                    }
+                }
+
+                if !labels.isEmpty {
+                    lines.append("Targets: \(labels.joined(separator: ", "))")
+                }
             }
             if let prompt {
                 let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1177,29 +2521,75 @@ final class ServerManager: ObservableObject {
                     lines.append(trimmed)
                 }
             }
-            return systemMessage(title: "Collaboration", body: lines.joined(separator: "\n"))
+            return withTurnMetadata(
+                systemMessage(title: "Collaboration", body: lines.joined(separator: "\n")),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .webSearch(let query, let action):
-            var lines: [String] = []
+            var lines: [String] = ["Status: completed"]
             if !query.isEmpty { lines.append("Query: \(query)") }
             if let action, let pretty = prettyJSON(action.value) {
                 lines.append("")
                 lines.append("Action:")
                 lines.append("```json\n\(pretty)\n```")
             }
-            return systemMessage(title: "Web Search", body: lines.joined(separator: "\n"))
+            return withTurnMetadata(
+                systemMessage(title: "Web Search", body: lines.joined(separator: "\n")),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .imageView(let path):
-            return systemMessage(title: "Image View", body: "Path: \(path)")
+            return withTurnMetadata(
+                systemMessage(title: "Image View", body: "Path: \(path)"),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .enteredReviewMode(let review):
-            return systemMessage(title: "Review Mode", body: "Entered review: \(review)")
+            return withTurnMetadata(
+                systemMessage(title: "Review Mode", body: "Entered review: \(review)"),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .exitedReviewMode(let review):
-            return systemMessage(title: "Review Mode", body: "Exited review: \(review)")
+            return withTurnMetadata(
+                systemMessage(title: "Review Mode", body: "Exited review: \(review)"),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .contextCompaction:
-            return systemMessage(title: "Context", body: "Context compaction occurred.")
+            return withTurnMetadata(
+                systemMessage(title: "Context", body: "Context compaction occurred."),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .unknown(let type):
-            return systemMessage(title: "Event", body: "Unhandled item type: \(type)")
+            return withTurnMetadata(
+                systemMessage(title: "Event", body: "Unhandled item type: \(type)"),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
         case .ignored:
             return nil
         }
+    }
+
+    private func withTurnMetadata(
+        _ message: ChatMessage?,
+        sourceTurnId: String?,
+        sourceTurnIndex: Int?
+    ) -> ChatMessage? {
+        guard let message else { return nil }
+        return ChatMessage(
+            role: message.role,
+            text: message.text,
+            images: message.images,
+            sourceTurnId: sourceTurnId,
+            sourceTurnIndex: sourceTurnIndex,
+            isFromUserTurnBoundary: message.isFromUserTurnBoundary,
+            agentNickname: message.agentNickname,
+            agentRole: message.agentRole
+        )
     }
 
     private func systemMessage(title: String, body: String) -> ChatMessage? {

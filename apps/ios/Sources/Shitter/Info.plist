@@ -38,6 +38,13 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Codex discovers coding agents and SSH servers on your local network.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>BerkeleyMono-Regular.otf</string>
+		<string>BerkeleyMono-Bold.otf</string>
+		<string>BerkeleyMono-Oblique.otf</string>
+		<string>BerkeleyMono-Bold-Oblique.otf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -26,6 +26,7 @@ enum class ServerConnectionStatus {
 
 enum class ServerSource {
     LOCAL,
+    BUNDLED,
     BONJOUR,
     SSH,
     TAILSCALE,
@@ -36,6 +37,7 @@ enum class ServerSource {
     fun rawValue(): String =
         when (this) {
             LOCAL -> "local"
+            BUNDLED -> "bundled"
             BONJOUR -> "bonjour"
             SSH -> "ssh"
             TAILSCALE -> "tailscale"
@@ -47,6 +49,7 @@ enum class ServerSource {
         fun from(raw: String?): ServerSource =
             when (raw?.trim()?.lowercase()) {
                 "local" -> LOCAL
+                "bundled" -> BUNDLED
                 "bonjour" -> BONJOUR
                 "ssh" -> SSH
                 "tailscale" -> TAILSCALE
@@ -62,6 +65,18 @@ enum class AuthStatus {
     NOT_LOGGED_IN,
     API_KEY,
     CHATGPT,
+}
+
+enum class ApprovalKind {
+    COMMAND_EXECUTION,
+    FILE_CHANGE,
+}
+
+enum class ApprovalDecision {
+    ACCEPT,
+    ACCEPT_FOR_SESSION,
+    DECLINE,
+    CANCEL,
 }
 
 data class ThreadKey(
@@ -85,6 +100,16 @@ data class ServerConfig(
                 host = "127.0.0.1",
                 port = port,
                 source = ServerSource.LOCAL,
+                hasCodexServer = true,
+            )
+
+        fun bundled(port: Int): ServerConfig =
+            ServerConfig(
+                id = "bundled",
+                name = "Bundled Server",
+                host = "127.0.0.1",
+                port = port,
+                source = ServerSource.BUNDLED,
                 hasCodexServer = true,
             )
     }
@@ -183,12 +208,40 @@ data class SkillMetadata(
     val enabled: Boolean,
 )
 
+data class SkillMentionInput(
+    val name: String,
+    val path: String,
+)
+
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: MessageRole,
     val text: String,
     val timestampEpochMillis: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
+    val sourceTurnId: String? = null,
+    val sourceTurnIndex: Int? = null,
+    val isFromUserTurnBoundary: Boolean = false,
+    val agentNickname: String? = null,
+    val agentRole: String? = null,
+)
+
+data class PendingApproval(
+    val id: String,
+    val requestId: String,
+    val serverId: String,
+    val method: String,
+    val kind: ApprovalKind,
+    val threadId: String?,
+    val turnId: String?,
+    val itemId: String?,
+    val command: String?,
+    val cwd: String?,
+    val reason: String?,
+    val grantRoot: String?,
+    val requesterAgentNickname: String? = null,
+    val requesterAgentRole: String? = null,
+    val createdAtEpochMillis: Long = System.currentTimeMillis(),
 )
 
 data class ThreadState(
@@ -199,12 +252,21 @@ data class ThreadState(
     val messages: List<ChatMessage> = emptyList(),
     val preview: String = "",
     val cwd: String = "",
+    val modelProvider: String = "",
+    val parentThreadId: String? = null,
+    val rootThreadId: String? = null,
+    val agentNickname: String? = null,
+    val agentRole: String? = null,
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
     val activeTurnId: String? = null,
     val lastError: String? = null,
+    val isPlaceholder: Boolean = false,
 ) {
     val hasTurnActive: Boolean
         get() = status == ThreadStatus.THINKING
+
+    val isFork: Boolean
+        get() = !parentThreadId.isNullOrBlank()
 }
 
 data class AppState(
@@ -219,6 +281,8 @@ data class AppState(
     val availableModels: List<ModelOption> = emptyList(),
     val accountByServerId: Map<String, AccountState> = emptyMap(),
     val currentCwd: String = defaultWorkingDirectory(),
+    val pendingApprovals: List<PendingApproval> = emptyList(),
+    val toolTargetLabelsById: Map<String, String> = emptyMap(),
 ) {
     val activeThread: ThreadState?
         get() = activeThreadKey?.let { key ->
@@ -230,6 +294,9 @@ data class AppState(
             activeServerId
                 ?.let { accountByServerId[it] }
                 ?: AccountState()
+
+    val activePendingApproval: PendingApproval?
+        get() = pendingApprovals.firstOrNull()
 }
 
 internal fun defaultWorkingDirectory(): String =

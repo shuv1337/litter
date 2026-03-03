@@ -53,7 +53,7 @@ pub extern "C" fn codex_start_server(out_port: *mut u16) -> i32 {
     runtime().spawn(async move {
         let handle = runtime().spawn(async move {
             run_main_with_transport(
-                None,
+                Default::default(),
                 CliConfigOverrides::default(),
                 LoaderOverrides::default(),
                 false,

@@ -11,7 +11,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     SWIFT_STRICT_CONCURRENCY: targeted
-    MARKETING_VERSION: "1.0.0"
+    MARKETING_VERSION: "1.0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
     OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
@@ -27,6 +27,9 @@ packages:
   Inject:
     url: https://github.com/krzysztofzablocki/Inject
     from: "1.5.2"
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: "2.1.0"
 
 targets:
   ShitterRemote:
@@ -37,6 +40,10 @@ targets:
       - path: Sources/Shitter
         excludes:
           - "**/*.h"
+    resources:
+      - path: Sources/Shitter/Resources/ios_system/commandDictionary.plist
+      - path: Sources/Shitter/Resources/ios_system/extraCommandsDictionary.plist
+      - path: Sources/Shitter/Resources/Fonts
     dependencies:
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
@@ -44,6 +51,7 @@ targets:
       - package: Citadel
       - package: MarkdownUI
       - package: Inject
+      - package: Highlightr
       - framework: Frameworks/ios_system/ios_system.xcframework
         embed: true
       - framework: Frameworks/ios_system/shell.xcframework
@@ -70,6 +78,10 @@ targets:
       - path: Sources/Shitter
         excludes:
           - "**/*.h"
+    resources:
+      - path: Sources/Shitter/Resources/ios_system/commandDictionary.plist
+      - path: Sources/Shitter/Resources/ios_system/extraCommandsDictionary.plist
+      - path: Sources/Shitter/Resources/Fonts
     dependencies:
       - framework: Frameworks/codex_bridge.xcframework
         embed: false
@@ -79,6 +91,7 @@ targets:
       - package: Citadel
       - package: MarkdownUI
       - package: Inject
+      - package: Highlightr
       - framework: Frameworks/ios_system/ios_system.xcframework
         embed: true
       - framework: Frameworks/ios_system/shell.xcframework
@@ -96,6 +109,19 @@ targets:
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
+  CodexIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests/CodexIOSTests
+    dependencies:
+      - target: Shitter
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGNING_ALLOWED: false
+        CODE_SIGNING_REQUIRED: false
 
 schemes:
   ShitterRemote:
@@ -123,6 +149,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - CodexIOSTests
     profile:
       config: Release
     analyze:

@@ -2,10 +2,13 @@ import Foundation
 import Network
 import UIKit
 
+private let codexDiscoveryPorts: [UInt16] = [8390, 4222]
+
 private struct DiscoveryCandidate: Hashable {
     let ip: String
     let name: String?
     let source: ServerSource
+    let codexPortHint: UInt16?
 }
 
 private struct CandidateReachability: Sendable {
@@ -20,7 +23,6 @@ final class NetworkDiscovery: ObservableObject {
 
     private var scanTask: Task<Void, Never>?
     private var activeScanID = UUID()
-    private static let codexDiscoveryPorts: [UInt16] = [8390, 4222]
 
     func startScanning() {
         stopScanning()
@@ -40,7 +42,10 @@ final class NetworkDiscovery: ObservableObject {
             ))
         }
 
-        scanTask = Task { await discoverNetworkServers(scanID: scanID) }
+        scanTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.discoverNetworkServersInBackground(scanID: scanID)
+        }
     }
 
     func stopScanning() {
@@ -51,36 +56,131 @@ final class NetworkDiscovery: ObservableObject {
 
     // MARK: - Discovery
 
-    private func discoverNetworkServers(scanID: UUID) async {
+    private nonisolated func discoverNetworkServersInBackground(scanID: UUID) async {
         defer {
-            if activeScanID == scanID {
-                isScanning = false
+            Task { @MainActor [weak self] in
+                guard let self, self.activeScanID == scanID else { return }
+                self.isScanning = false
             }
         }
         guard !Task.isCancelled else { return }
+        let isCurrent = await MainActor.run { [weak self] in
+            guard let self else { return false }
+            return self.activeScanID == scanID
+        }
+        guard isCurrent else { return }
 
         let localIPv4 = Self.localIPv4Address()?.0
-        async let bonjourCandidates = Self.discoverBonjourSSHCandidates(timeout: 3.0)
-        async let tailscaleCandidates = Self.discoverTailscaleSSHCandidates(timeout: 2.0)
-        let merged = Self.mergeCandidates(
-            Array((await bonjourCandidates) + (await tailscaleCandidates)),
-            excluding: localIPv4
-        )
-        let reachable = await Self.filterCandidatesWithOpenServices(merged, timeout: 1.0)
-        guard !Task.isCancelled, activeScanID == scanID else { return }
+        var cumulativeCandidates: [DiscoveryCandidate] = []
 
+        // Run two passes to reduce discovery misses from transient Bonjour/Tailscale timing.
+        // Within each pass, stream source results and probe completions progressively so
+        // DiscoveryView can render rows as soon as they are found.
+        for pass in 0..<2 {
+            let bonjourTimeout: TimeInterval = pass == 0 ? 5.0 : 3.0
+            let tailscaleTimeout: TimeInterval = pass == 0 ? 2.5 : 1.5
+            let probeTimeout: TimeInterval = pass == 0 ? 1.0 : 1.4
+            let probeAttempts = pass == 0 ? 2 : 3
+
+            var passCandidates = cumulativeCandidates
+            var probedIPs = Set<String>()
+            var passReachable: [CandidateReachability] = []
+
+            func probePendingCandidates() async {
+                let pending = passCandidates.filter { candidate in
+                    probedIPs.insert(candidate.ip).inserted
+                }
+                guard !pending.isEmpty else { return }
+
+                let reachable = await Self.filterCandidatesWithOpenServices(
+                    pending,
+                    timeout: probeTimeout,
+                    attempts: probeAttempts,
+                    onReachable: { state in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.activeScanID == scanID else { return }
+                            self.applyReachabilityResults([state])
+                        }
+                    }
+                )
+                passReachable.append(contentsOf: reachable)
+            }
+
+            await withTaskGroup(of: [DiscoveryCandidate].self) { group in
+                group.addTask { await Self.discoverBonjourCandidates(timeout: bonjourTimeout) }
+                group.addTask { await Self.discoverTailscaleSSHCandidates(timeout: tailscaleTimeout) }
+                group.addTask {
+                    await Self.discoverLocalSubnetCodexCandidates(
+                        localIPv4: localIPv4,
+                        timeout: pass == 0 ? 0.24 : 0.34,
+                        attempts: pass == 0 ? 1 : 2
+                    )
+                }
+
+                while let sourceCandidates = await group.next() {
+                    guard !Task.isCancelled else { return }
+                    let shouldContinue = await MainActor.run { [weak self] in
+                        guard let self else { return false }
+                        return self.activeScanID == scanID
+                    }
+                    guard shouldContinue else { return }
+
+                    let merged = Self.mergeCandidates(sourceCandidates, excluding: localIPv4)
+                    cumulativeCandidates = Self.mergeCandidates(cumulativeCandidates + merged, excluding: localIPv4)
+                    passCandidates = Self.mergeCandidates(passCandidates + merged, excluding: localIPv4)
+
+                    await probePendingCandidates()
+                }
+            }
+
+            // Re-probe any candidates carried over from previous pass that were not
+            // exercised in this pass to improve reliability after transient failures.
+            await probePendingCandidates()
+
+            guard !Task.isCancelled else { return }
+            let shouldApply = await MainActor.run { [weak self] in
+                guard let self else { return false }
+                return self.activeScanID == scanID
+            }
+            guard shouldApply else { return }
+            let passReachableSnapshot = passReachable
+            await MainActor.run { [weak self] in
+                guard let self, self.activeScanID == scanID else { return }
+                self.applyReachabilityResults(passReachableSnapshot)
+            }
+
+            if pass == 0 {
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+        }
+    }
+
+    private func applyReachabilityResults(_ reachable: [CandidateReachability]) {
         for state in reachable.sorted(by: { Self.candidateSortOrder(lhs: $0.candidate, rhs: $1.candidate) }) {
             let candidate = state.candidate
-            let id = "\(candidate.source.rawString)-\(candidate.ip)"
-            guard !servers.contains(where: { $0.id == id }) else { continue }
-            servers.append(DiscoveredServer(
+            let id = "network-\(candidate.ip)"
+            let discovered = DiscoveredServer(
                 id: id,
                 name: candidate.name ?? candidate.ip,
                 hostname: candidate.ip,
                 port: state.codexPort,
                 source: candidate.source,
                 hasCodexServer: state.codexPort != nil
-            ))
+            )
+
+            if let index = servers.firstIndex(where: { $0.id == id }) {
+                // Prefer the candidate with better source rank or codex endpoint.
+                let existing = servers[index]
+                let betterSource = Self.sourceRank(candidate.source) < Self.sourceRank(existing.source)
+                let hasCodexUpgrade = discovered.hasCodexServer && !existing.hasCodexServer
+                let betterCodexPort = discovered.hasCodexServer && existing.hasCodexServer && discovered.port != existing.port
+                let betterName = (existing.name == existing.hostname) && (discovered.name != discovered.hostname)
+                if betterSource || hasCodexUpgrade || betterCodexPort || betterName {
+                    servers[index] = discovered
+                }
+            } else {
+                servers.append(discovered)
+            }
         }
     }
 
@@ -111,11 +211,16 @@ final class NetworkDiscovery: ObservableObject {
         for candidate in candidates {
             guard isIPv4Address(candidate.ip), candidate.ip != localIPv4 else { continue }
             if let existing = merged[candidate.ip] {
-                if sourceRank(candidate.source) < sourceRank(existing.source) {
-                    merged[candidate.ip] = candidate
-                } else if existing.name == nil, candidate.name != nil {
-                    merged[candidate.ip] = candidate
-                }
+                let useCandidateSource = sourceRank(candidate.source) < sourceRank(existing.source)
+                let resolvedName = existing.name ?? candidate.name
+                let resolvedSource = useCandidateSource ? candidate.source : existing.source
+                let resolvedPortHint = existing.codexPortHint ?? candidate.codexPortHint
+                merged[candidate.ip] = DiscoveryCandidate(
+                    ip: candidate.ip,
+                    name: resolvedName,
+                    source: resolvedSource,
+                    codexPortHint: resolvedPortHint
+                )
             } else {
                 merged[candidate.ip] = candidate
             }
@@ -123,7 +228,7 @@ final class NetworkDiscovery: ObservableObject {
         return Array(merged.values)
     }
 
-    nonisolated private static func isPortOpen(host: String, port: UInt16, timeout: TimeInterval) async -> Bool {
+    nonisolated private static func isPortOpenOnce(host: String, port: UInt16, timeout: TimeInterval) async -> Bool {
         await withCheckedContinuation { cont in
             let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
             let resumed = LockedFlag()
@@ -153,22 +258,81 @@ final class NetworkDiscovery: ObservableObject {
         }
     }
 
+    nonisolated private static func isPortOpen(
+        host: String,
+        port: UInt16,
+        timeout: TimeInterval,
+        attempts: Int
+    ) async -> Bool {
+        let retries = max(1, attempts)
+        for attempt in 0..<retries {
+            if await isPortOpenOnce(host: host, port: port, timeout: timeout) {
+                return true
+            }
+            if attempt < retries - 1 {
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+        }
+        return false
+    }
+
     nonisolated private static func filterCandidatesWithOpenServices(
         _ candidates: [DiscoveryCandidate],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        attempts: Int,
+        onReachable: (@Sendable (CandidateReachability) -> Void)? = nil
     ) async -> [CandidateReachability] {
         await withTaskGroup(of: CandidateReachability?.self) { group in
             for candidate in candidates {
                 group.addTask {
-                    let hasSSH = await isPortOpen(host: candidate.ip, port: 22, timeout: timeout)
+                    let hasSSH = await isPortOpen(
+                        host: candidate.ip,
+                        port: 22,
+                        timeout: timeout,
+                        attempts: attempts
+                    )
                     var codexPort: UInt16?
+                    if let hint = candidate.codexPortHint {
+                        if await isPortOpen(
+                            host: candidate.ip,
+                            port: hint,
+                            timeout: timeout,
+                            attempts: attempts
+                        ) {
+                            codexPort = hint
+                        }
+                    }
                     for port in codexDiscoveryPorts {
-                        if await isPortOpen(host: candidate.ip, port: port, timeout: timeout) {
+                        if codexPort != nil { break }
+                        if await isPortOpen(
+                            host: candidate.ip,
+                            port: port,
+                            timeout: timeout,
+                            attempts: attempts
+                        ) {
                             codexPort = port
                             break
                         }
                     }
-                    guard hasSSH || codexPort != nil else {
+                    // Bonjour hosts can expose app-server shortly after service resolution;
+                    // give codex ports one longer retry window before classifying as SSH-only.
+                    if codexPort == nil, candidate.source == .bonjour {
+                        for port in codexDiscoveryPorts {
+                            if await isPortOpen(
+                                host: candidate.ip,
+                                port: port,
+                                timeout: max(0.8, timeout * 1.9),
+                                attempts: attempts + 1
+                            ) {
+                                codexPort = port
+                                break
+                            }
+                        }
+                    }
+
+                    // Bonjour records are already service-level signals; keep them even when probes flake.
+                    let includeOnBonjourSignal = candidate.source == .bonjour
+                    guard hasSSH || codexPort != nil || includeOnBonjourSignal else {
                         return nil
                     }
                     return CandidateReachability(candidate: candidate, codexPort: codexPort)
@@ -178,14 +342,33 @@ final class NetworkDiscovery: ObservableObject {
             for await state in group {
                 if let state {
                     reachable.append(state)
+                    onReachable?(state)
                 }
             }
             return reachable
         }
     }
 
-    private static func discoverBonjourSSHCandidates(timeout: TimeInterval) async -> [DiscoveryCandidate] {
-        let browser = BonjourSSHDiscoverer()
+    private static func discoverBonjourCandidates(timeout: TimeInterval) async -> [DiscoveryCandidate] {
+        async let ssh = discoverBonjourCandidates(
+            serviceType: "_ssh._tcp.",
+            timeout: timeout,
+            codexService: false
+        )
+        async let codex = discoverBonjourCandidates(
+            serviceType: "_codex._tcp.",
+            timeout: timeout,
+            codexService: true
+        )
+        return mergeCandidates(Array((await ssh) + (await codex)), excluding: nil)
+    }
+
+    private static func discoverBonjourCandidates(
+        serviceType: String,
+        timeout: TimeInterval,
+        codexService: Bool
+    ) async -> [DiscoveryCandidate] {
+        let browser = BonjourServiceDiscoverer(serviceType: serviceType, codexService: codexService)
         return await browser.discover(timeout: timeout)
     }
 
@@ -197,29 +380,90 @@ final class NetworkDiscovery: ObservableObject {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return []
-            }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let peers = json["Peer"] as? [String: Any] else {
-                return []
-            }
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    continue
+                }
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let peers = json["Peer"] as? [String: Any] else {
+                    continue
+                }
 
-            var candidates: [DiscoveryCandidate] = []
-            for peer in peers.values {
-                guard let peerDict = peer as? [String: Any] else { continue }
-                let hostName = cleanedHostName(peerDict["HostName"] as? String)
-                    ?? cleanedHostName(peerDict["DNSName"] as? String)
-                let ips = (peerDict["TailscaleIPs"] as? [String]) ?? []
-                guard let ipv4 = ips.first(where: { isIPv4Address($0) }) else { continue }
-                candidates.append(DiscoveryCandidate(ip: ipv4, name: hostName, source: .tailscale))
+                var candidates: [DiscoveryCandidate] = []
+                for peer in peers.values {
+                    guard let peerDict = peer as? [String: Any] else { continue }
+                    if let online = peerDict["Online"] as? Bool, !online {
+                        continue
+                    }
+                    let hostName = cleanedHostName(peerDict["HostName"] as? String)
+                        ?? cleanedHostName(peerDict["DNSName"] as? String)
+                    let ips = (peerDict["TailscaleIPs"] as? [String]) ?? []
+                    guard let ipv4 = ips.first(where: { isIPv4Address($0) }) else { continue }
+                    candidates.append(DiscoveryCandidate(ip: ipv4, name: hostName, source: .tailscale, codexPortHint: nil))
+                }
+                return candidates
+            } catch {
+                if attempt == 0 {
+                    try? await Task.sleep(for: .milliseconds(180))
+                }
             }
-            return candidates
-        } catch {
-            return []
         }
+        return []
+    }
+
+    nonisolated private static func discoverLocalSubnetCodexCandidates(
+        localIPv4: String?,
+        timeout: TimeInterval,
+        attempts: Int
+    ) async -> [DiscoveryCandidate] {
+        guard let localIPv4 else { return [] }
+        let parts = localIPv4.split(separator: ".")
+        guard parts.count == 4 else { return [] }
+        guard let lastOctet = Int(parts[3]) else { return [] }
+
+        let subnetPrefix = "\(parts[0]).\(parts[1]).\(parts[2])."
+        let hosts: [Int] = (1...254).filter { $0 != lastOctet }
+        var found: [DiscoveryCandidate] = []
+
+        let batchSize = 28
+        for start in stride(from: 0, to: hosts.count, by: batchSize) {
+            let batch = hosts[start..<min(start + batchSize, hosts.count)]
+            let batchResults: [DiscoveryCandidate] = await withTaskGroup(of: DiscoveryCandidate?.self) { group in
+                for host in batch {
+                    group.addTask {
+                        let ip = "\(subnetPrefix)\(host)"
+                        for port in codexDiscoveryPorts {
+                            if await isPortOpen(
+                                host: ip,
+                                port: port,
+                                timeout: timeout,
+                                attempts: attempts
+                            ) {
+                                return DiscoveryCandidate(
+                                    ip: ip,
+                                    name: nil,
+                                    source: .bonjour,
+                                    codexPortHint: port
+                                )
+                            }
+                        }
+                        return nil
+                    }
+                }
+
+                var results: [DiscoveryCandidate] = []
+                for await candidate in group {
+                    if let candidate {
+                        results.append(candidate)
+                    }
+                }
+                return results
+            }
+            found.append(contentsOf: batchResults)
+        }
+        return found
     }
 
     nonisolated private static func cleanedHostName(_ value: String?) -> String? {
@@ -267,7 +511,7 @@ final class NetworkDiscovery: ObservableObject {
             let name = String(cString: ptr.pointee.ifa_name)
             guard name.hasPrefix("en") else { continue }
             var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            ptr.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
+            _ = ptr.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
                 inet_ntop(AF_INET, &sin.pointee.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
             }
             return (String(cString: buf), name)
@@ -277,25 +521,55 @@ final class NetworkDiscovery: ObservableObject {
 }
 
 @MainActor
-private final class BonjourSSHDiscoverer: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+private final class BonjourServiceDiscoverer: NSObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
+    private struct ServiceRecord {
+        let name: String
+        let codexPortHint: UInt16?
+    }
+
+    private let serviceType: String
+    private let codexService: Bool
     private let browser = NetServiceBrowser()
     private var services: [NetService] = []
-    private var results: [String: String] = [:]
+    private var results: [String: ServiceRecord] = [:]
+    private var pendingServices: Set<ObjectIdentifier> = []
     private var continuation: CheckedContinuation<[DiscoveryCandidate], Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var resolveDrainTask: Task<Void, Never>?
     private var isFinished = false
+    private var requestedStop = false
+
+    init(serviceType: String, codexService: Bool) {
+        self.serviceType = serviceType
+        self.codexService = codexService
+    }
 
     func discover(timeout: TimeInterval) async -> [DiscoveryCandidate] {
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             browser.delegate = self
-            browser.searchForServices(ofType: "_ssh._tcp.", inDomain: "local.")
+            browser.searchForServices(ofType: serviceType, inDomain: "local.")
             timeoutTask = Task { [weak self] in
                 guard let self else { return }
                 let nanos = UInt64(max(timeout, 0.25) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nanos)
-                await self.finish()
+                self.stopAndDrain()
             }
+        }
+    }
+
+    private func stopAndDrain() {
+        guard !requestedStop else { return }
+        requestedStop = true
+        browser.stop()
+        if pendingServices.isEmpty {
+            finish()
+            return
+        }
+        resolveDrainTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(900))
+            self.finish()
         }
     }
 
@@ -303,14 +577,18 @@ private final class BonjourSSHDiscoverer: NSObject, NetServiceBrowserDelegate, N
         guard !isFinished else { return }
         isFinished = true
         timeoutTask?.cancel()
+        resolveDrainTask?.cancel()
         timeoutTask = nil
-        browser.stop()
+        resolveDrainTask = nil
+        if !requestedStop {
+            browser.stop()
+        }
         for service in services {
             service.stop()
             service.delegate = nil
         }
         let discovered = results.map {
-            DiscoveryCandidate(ip: $0.key, name: $0.value, source: .bonjour)
+            DiscoveryCandidate(ip: $0.key, name: $0.value.name, source: .bonjour, codexPortHint: $0.value.codexPortHint)
         }
         continuation?.resume(returning: discovered)
         continuation = nil
@@ -323,25 +601,45 @@ private final class BonjourSSHDiscoverer: NSObject, NetServiceBrowserDelegate, N
     }
 
     func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-        finish()
-    }
-
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        services.append(service)
-        service.delegate = self
-        service.resolve(withTimeout: 1.0)
-    }
-
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let addresses = sender.addresses else { return }
-        for address in addresses {
-            guard let ip = NetworkDiscovery.ipv4Address(fromSockaddrData: address) else { continue }
-            results[ip] = sender.name
-            break
+        if requestedStop, pendingServices.isEmpty {
+            finish()
+        } else if !requestedStop {
+            finish()
         }
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {}
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        guard !isFinished else { return }
+        services.append(service)
+        pendingServices.insert(ObjectIdentifier(service))
+        service.delegate = self
+        service.resolve(withTimeout: 2.5)
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        pendingServices.remove(ObjectIdentifier(sender))
+        guard let addresses = sender.addresses else { return }
+        let codexPort: UInt16? = {
+            guard codexService else { return nil }
+            guard sender.port > 0, sender.port <= Int(UInt16.max) else { return 8390 }
+            return UInt16(sender.port)
+        }()
+        for address in addresses {
+            guard let ip = NetworkDiscovery.ipv4Address(fromSockaddrData: address) else { continue }
+            results[ip] = ServiceRecord(name: sender.name, codexPortHint: codexPort)
+            break
+        }
+        if requestedStop, pendingServices.isEmpty {
+            finish()
+        }
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        pendingServices.remove(ObjectIdentifier(sender))
+        if requestedStop, pendingServices.isEmpty {
+            finish()
+        }
+    }
 }
 
 /// Thread-safe flag for one-shot continuation resumption.

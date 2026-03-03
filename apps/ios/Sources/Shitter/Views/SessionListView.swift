@@ -26,7 +26,7 @@ struct SessionListView: View {
             } else if let err = errorMessage, sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text(err)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(ShitterFont.monospaced(.caption))
                         .foregroundColor(.red)
                     Button("Retry") { Task { await loadSessions() } }
                         .foregroundColor(ShitterTheme.accent)
@@ -44,7 +44,7 @@ struct SessionListView: View {
                     Task { await startNew() }
                 }
                 .foregroundColor(ShitterTheme.accent)
-                .font(.system(.footnote, design: .monospaced))
+                .font(ShitterFont.monospaced(.footnote))
             }
         }
         .navigationDestination(isPresented: $navigateToConversation) {
@@ -61,7 +61,7 @@ struct SessionListView: View {
         List {
             if let err = errorMessage {
                 Text(err)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(ShitterFont.monospaced(.caption))
                     .foregroundColor(.red)
                     .padding(.vertical, 6)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -70,10 +70,10 @@ struct SessionListView: View {
             if sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text("No previous sessions")
-                        .font(.system(.subheadline, design: .monospaced))
+                        .font(ShitterFont.monospaced(.subheadline))
                         .foregroundColor(ShitterTheme.textMuted)
                     Text("Start a new session to begin")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(ShitterFont.monospaced(.caption))
                         .foregroundColor(Color(hex: "#444444"))
                 }
                 .frame(maxWidth: .infinity)
@@ -94,7 +94,7 @@ struct SessionListView: View {
             if nextCursor != nil {
                 Button("Load more") { Task { await loadMore() } }
                     .foregroundColor(ShitterTheme.accent)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(ShitterFont.monospaced(.footnote))
                     .frame(maxWidth: .infinity)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
@@ -106,7 +106,7 @@ struct SessionListView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(session.preview.isEmpty ? "Untitled session" : session.preview)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(ShitterFont.monospaced(.footnote))
                     .foregroundColor(.white)
                     .lineLimit(2)
                 Spacer(minLength: 0)
@@ -118,10 +118,10 @@ struct SessionListView: View {
             }
             HStack(spacing: 8) {
                 Text(relativeDate(session.updatedAt))
-                    .font(.system(.caption, design: .monospaced))
+                    .font(ShitterFont.monospaced(.caption))
                     .foregroundColor(ShitterTheme.textSecondary)
                 Text(session.modelProvider)
-                    .font(.system(.caption2, design: .monospaced))
+                    .font(ShitterFont.monospaced(.caption2))
                     .foregroundColor(ShitterTheme.accent)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -180,7 +180,10 @@ struct SessionListView: View {
         guard !isResuming else { return }
         workDir = cwd
         let model = (serverManager.activeConnection?.models.first(where: { $0.isDefault })?.id)
-        _ = await serverManager.startThread(serverId: server.id, cwd: cwd, model: model)
+        let startedKey = await serverManager.startThread(serverId: server.id, cwd: cwd, model: model)
+        if startedKey != nil {
+            _ = RecentDirectoryStore.shared.record(path: cwd, for: server.id)
+        }
         if let onSessionReady { onSessionReady(server, cwd) } else { navigateToConversation = true }
     }
 

@@ -20,9 +20,18 @@ struct ContentView: View {
     @EnvironmentObject var serverManager: ServerManager
     @StateObject private var appState = AppState()
     @State private var showAccount = false
+    @State private var sidebarDragOffset: CGFloat = 0
+    @State private var isEdgeOpeningSidebar = false
+
+    private let sidebarAnimation = Animation.spring(response: 0.3, dampingFraction: 0.86)
 
     private var activeAuthStatus: AuthStatus {
         serverManager.activeConnection?.authStatus ?? .unknown
+    }
+
+    private var sidebarRevealProgress: CGFloat {
+        guard appState.sidebarOpen else { return 0 }
+        return min(1, max(0, 1 + (sidebarDragOffset / SidebarOverlay.sidebarWidth)))
     }
 
     var body: some View {
@@ -36,8 +45,16 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .offset(x: sidebarRevealProgress * 284)
+            .scaleEffect(1 - (0.04 * sidebarRevealProgress), anchor: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 20 * sidebarRevealProgress, style: .continuous))
+            .shadow(color: .black.opacity(0.22 * sidebarRevealProgress), radius: 26, x: 8, y: 0)
+            .allowsHitTesting(sidebarRevealProgress < 0.01)
+            .animation(sidebarAnimation, value: appState.sidebarOpen)
+            .animation(sidebarAnimation, value: sidebarDragOffset)
+            .simultaneousGesture(edgeOpenGesture)
 
-            SidebarOverlay()
+            SidebarOverlay(dragOffset: $sidebarDragOffset)
 
             if let approval = serverManager.activePendingApproval {
                 ApprovalPromptView(approval: approval) { decision in
@@ -50,6 +67,9 @@ struct ContentView: View {
             if !serverManager.hasAnyConnection {
                 appState.showServerPicker = true
             }
+        }
+        .onChange(of: appState.sidebarOpen) { _, isOpen in
+            if !isOpen { sidebarDragOffset = 0 }
         }
         .onChange(of: activeAuthStatus) { _, newStatus in
             if case .notLoggedIn = newStatus {
@@ -70,6 +90,43 @@ struct ContentView: View {
             }
             .preferredColorScheme(.dark)
         }
+    }
+
+    private var edgeOpenGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                guard !appState.sidebarOpen || isEdgeOpeningSidebar else { return }
+
+                if !isEdgeOpeningSidebar {
+                    let startsAtEdge = value.startLocation.x <= 24
+                    let horizontalIntent = abs(value.translation.width) > abs(value.translation.height)
+                    guard startsAtEdge, horizontalIntent, value.translation.width > 0 else { return }
+                    isEdgeOpeningSidebar = true
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        appState.sidebarOpen = true
+                        sidebarDragOffset = -SidebarOverlay.sidebarWidth
+                    }
+                }
+
+                let translationX = max(0, value.translation.width)
+                sidebarDragOffset = min(
+                    0,
+                    max(-SidebarOverlay.sidebarWidth, -SidebarOverlay.sidebarWidth + translationX)
+                )
+            }
+            .onEnded { value in
+                guard isEdgeOpeningSidebar else { return }
+                isEdgeOpeningSidebar = false
+
+                let projectedOpenDistance = max(value.translation.width, value.predictedEndTranslation.width)
+                let shouldOpen = projectedOpenDistance > SidebarOverlay.sidebarWidth * 0.35
+                withAnimation(sidebarAnimation) {
+                    appState.sidebarOpen = shouldOpen
+                    sidebarDragOffset = 0
+                }
+            }
     }
 
     @ViewBuilder
@@ -95,6 +152,21 @@ private struct ApprovalPromptView: View {
         }
     }
 
+    private var requesterLabel: String? {
+        let nickname = approval.requesterAgentNickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let role = approval.requesterAgentRole?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !nickname.isEmpty && !role.isEmpty {
+            return "\(nickname) [\(role)]"
+        }
+        if !nickname.isEmpty {
+            return nickname
+        }
+        if !role.isEmpty {
+            return "[\(role)]"
+        }
+        return nil
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.7)
@@ -102,23 +174,29 @@ private struct ApprovalPromptView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Text(title)
-                    .font(.system(.headline, design: .monospaced))
+                    .font(ShitterFont.monospaced(.headline))
                     .foregroundColor(ShitterTheme.textPrimary)
 
                 if let reason = approval.reason, !reason.isEmpty {
                     Text(reason)
-                        .font(.system(.footnote, design: .monospaced))
+                        .font(ShitterFont.monospaced(.footnote))
                         .foregroundColor(ShitterTheme.textSecondary)
+                }
+
+                if let requesterLabel {
+                    Text("Requester: \(requesterLabel)")
+                        .font(ShitterFont.monospaced(.caption))
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let command = approval.command, !command.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Command")
-                            .font(.system(.caption, design: .monospaced))
+                            .font(ShitterFont.monospaced(.caption))
                             .foregroundColor(ShitterTheme.textMuted)
                         ScrollView(.horizontal, showsIndicators: false) {
                             Text(command)
-                                .font(.system(.footnote, design: .monospaced))
+                                .font(ShitterFont.monospaced(.footnote))
                                 .foregroundColor(ShitterTheme.textBody)
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,13 +208,13 @@ private struct ApprovalPromptView: View {
 
                 if let cwd = approval.cwd, !cwd.isEmpty {
                     Text("CWD: \(cwd)")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(ShitterFont.monospaced(.caption))
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let grantRoot = approval.grantRoot, !grantRoot.isEmpty {
                     Text("Grant Root: \(grantRoot)")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(ShitterFont.monospaced(.caption))
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
@@ -161,7 +239,7 @@ private struct ApprovalPromptView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .font(.system(.callout, design: .monospaced))
+                .font(ShitterFont.monospaced(.callout))
             }
             .padding(16)
             .modifier(GlassRectModifier(cornerRadius: 14))
@@ -182,7 +260,7 @@ struct LaunchView: View {
             VStack(spacing: 24) {
                 BrandLogo(size: 132)
                 Text("AI coding agent on iOS")
-                    .font(.system(.body, design: .monospaced))
+                    .font(ShitterFont.monospaced(.body))
                     .foregroundColor(ShitterTheme.textMuted)
             }
         }
