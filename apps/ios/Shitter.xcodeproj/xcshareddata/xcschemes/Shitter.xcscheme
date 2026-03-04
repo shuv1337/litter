@@ -44,7 +44,7 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "8BF6D89AC27372E86DCE83EC"
+               BlueprintIdentifier = "67154E932301C6777DA27E3B"
                BuildableName = "CodexIOSTests.xctest"
                BlueprintName = "CodexIOSTests"
                ReferencedContainer = "container:Shitter.xcodeproj">
