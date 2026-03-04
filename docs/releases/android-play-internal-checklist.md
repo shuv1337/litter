@@ -7,12 +7,14 @@
 4. Create an upload keystore (or use your existing Play upload key).
 
 ## Required Environment Variables
-- `LITTER_PLAY_SERVICE_ACCOUNT_JSON` = path to service-account JSON
-- `LITTER_UPLOAD_STORE_FILE` = path to upload keystore (`.jks`)
-- `LITTER_UPLOAD_STORE_PASSWORD` = keystore password
-- `LITTER_UPLOAD_KEY_ALIAS` = key alias
-- `LITTER_UPLOAD_KEY_PASSWORD` = key password
-- Optional: `LITTER_PLAY_TRACK` (default: `internal`)
+- `SHITTER_PLAY_SERVICE_ACCOUNT_JSON` = path to service-account JSON
+- `SHITTER_UPLOAD_STORE_FILE` = path to upload keystore (`.jks`)
+- `SHITTER_UPLOAD_STORE_PASSWORD` = keystore password
+- `SHITTER_UPLOAD_KEY_ALIAS` = key alias
+- `SHITTER_UPLOAD_KEY_PASSWORD` = key password
+- Optional: `SHITTER_PLAY_TRACK` (default: `internal`)
+
+Legacy `LITTER_*` names are still accepted for backward compatibility.
 
 ## Upload Command
 ```bash

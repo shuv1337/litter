@@ -10,10 +10,13 @@ fun projectPropOrEnv(name: String): String? =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
         ?: System.getenv(name)?.takeIf { it.isNotBlank() }
 
-val uploadStoreFile = projectPropOrEnv("LITTER_UPLOAD_STORE_FILE")
-val uploadStorePassword = projectPropOrEnv("LITTER_UPLOAD_STORE_PASSWORD")
-val uploadKeyAlias = projectPropOrEnv("LITTER_UPLOAD_KEY_ALIAS")
-val uploadKeyPassword = projectPropOrEnv("LITTER_UPLOAD_KEY_PASSWORD")
+fun projectPropOrEnvWithLegacy(preferred: String, legacy: String): String? =
+    projectPropOrEnv(preferred) ?: projectPropOrEnv(legacy)
+
+val uploadStoreFile = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_FILE", "LITTER_UPLOAD_STORE_FILE")
+val uploadStorePassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_PASSWORD", "LITTER_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_ALIAS", "LITTER_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_PASSWORD", "LITTER_UPLOAD_KEY_PASSWORD")
 val hasUploadSigning = listOf(uploadStoreFile, uploadStorePassword, uploadKeyAlias, uploadKeyPassword).all { !it.isNullOrBlank() }
 
 android {
@@ -96,9 +99,9 @@ android {
 
 play {
     defaultToAppBundles.set(true)
-    track.set(projectPropOrEnv("LITTER_PLAY_TRACK") ?: "internal")
+    track.set(projectPropOrEnvWithLegacy("SHITTER_PLAY_TRACK", "LITTER_PLAY_TRACK") ?: "internal")
     releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
-    val serviceAccountPath = projectPropOrEnv("LITTER_PLAY_SERVICE_ACCOUNT_JSON")
+    val serviceAccountPath = projectPropOrEnvWithLegacy("SHITTER_PLAY_SERVICE_ACCOUNT_JSON", "LITTER_PLAY_SERVICE_ACCOUNT_JSON")
     if (!serviceAccountPath.isNullOrBlank()) {
         serviceAccountCredentials.set(file(serviceAccountPath))
     }

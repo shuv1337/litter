@@ -1471,8 +1471,8 @@ class ServerManager(
             val key = pair.substringBefore('=', "").trim()
             if (key.isBlank()) return@forEach
             val value = pair.substringAfter('=', "")
-            out[URLDecoder.decode(key, StandardCharsets.UTF_8)] =
-                URLDecoder.decode(value, StandardCharsets.UTF_8)
+            out[URLDecoder.decode(key, StandardCharsets.UTF_8.name())] =
+                URLDecoder.decode(value, StandardCharsets.UTF_8.name())
         }
         return out
     }
