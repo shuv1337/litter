@@ -14,18 +14,18 @@ Primary goals:
 
 ## Phase 0 — Environment and repo prep
 
-- [ ] Checkout branch:
+- [x] Checkout branch:
   ```bash
   git checkout rebrand/litter-to-shitter
   git pull --ff-only
   ```
-- [ ] Verify merge commit is present:
+- [x] Verify merge commit is present:
   ```bash
   git log --oneline --decorate -n 5
   ```
   Expect to see `f85a880`.
 
-- [ ] Sync submodules exactly:
+- [x] Sync submodules exactly:
   ```bash
   git submodule sync --recursive
   git submodule update --init --recursive
@@ -33,16 +33,16 @@ Primary goals:
   ```
   Expect `shared/third_party/codex` at `8159f05dfd1e2ce70a9dbc043fbbfe1da8782860`.
 
-- [ ] Ensure local prerequisites:
-  - Android: JDK 17+, Android SDK configured (`apps/android/local.properties` or `ANDROID_HOME`)
-  - iOS: Xcode, command line tools, `xcodegen`
-  - Rust targets for iOS bridge builds
+- [x] Ensure local prerequisites:
+  - Android: JDK (Homebrew `openjdk@21`) + SDK (`/opt/homebrew/share/android-commandlinetools`) configured via env vars ✅
+  - iOS: Xcode, command line tools, `xcodegen` ✅
+  - Rust targets for iOS bridge builds ✅
 
 ---
 
 ## Phase 1 — Branding and path integrity audit
 
-- [ ] Run strict branding scan (exclude third-party and this plan):
+- [x] Run strict branding scan (exclude third-party and this plan):
   ```bash
   rg -n "litter|Litter|com\.litter|com\.sigkitten|Sources/Litter|Litter\.xcodeproj" \
     --glob '!.git/*' \
@@ -52,7 +52,7 @@ Primary goals:
   ```
   Expected: **no results** in first-party app code/docs/config.
 
-- [ ] Validate key identity files:
+- [x] Validate key identity files:
   - `apps/android/app/build.gradle.kts` uses `io.latitudes.shitter.android`
   - `apps/android/app/src/main/AndroidManifest.xml` component names use `io.latitudes.shitter.android.*`
   - `apps/ios/project.yml` has:
@@ -60,7 +60,7 @@ Primary goals:
     - bundle identifiers `io.latitudes.shitter` and `io.latitudes.shitter.remote`
   - `README.md` has only Shitter branding
 
-- [ ] Validate no stale Litter directories remain (except explicit historical artifacts if any):
+- [x] Validate no stale Litter directories remain (except explicit historical artifacts if any):
   ```bash
   find . -path './.git' -prune -o -iname '*litter*' -print
   ```
@@ -69,23 +69,27 @@ Primary goals:
 
 ## Phase 2 — Android validation
 
-- [ ] Confirm SDK wiring:
+- [x] Confirm SDK wiring:
   ```bash
   cat apps/android/local.properties
   ```
   or confirm `ANDROID_HOME` is set.
+  - Result: `apps/android/local.properties` missing, but validation was run with:
+    - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`
+    - `ANDROID_HOME=/opt/homebrew/share/android-commandlinetools`
+    - `ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools`
 
-- [ ] Run unit tests:
+- [x] Run unit tests:
   ```bash
   ./apps/android/gradlew -p apps/android :app:testOnDeviceDebugUnitTest :app:testRemoteOnlyDebugUnitTest
   ```
 
-- [ ] Build both debug flavors:
+- [x] Build both debug flavors:
   ```bash
   ./apps/android/gradlew -p apps/android :app:assembleOnDeviceDebug :app:assembleRemoteOnlyDebug
   ```
 
-- [ ] Optional lint pass:
+- [x] Optional lint pass:
   ```bash
   ./apps/android/gradlew -p apps/android :app:lintOnDeviceDebug :app:lintRemoteOnlyDebug
   ```
@@ -94,35 +98,36 @@ Primary goals:
   1. Install APK.
   2. Launch app.
   3. Verify app label, theme text, login/discovery/sessions flows, and no crash-on-start.
+  - Skipped due Android build blocker.
 
-- [ ] Capture build outputs and any failures in notes.
+- [x] Capture build outputs and any failures in notes.
 
 ---
 
 ## Phase 3 — iOS validation
 
-- [ ] Regenerate project from spec:
+- [x] Regenerate project from spec:
   ```bash
-  xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj
+  xcodegen generate --spec apps/ios/project.yml --project apps/ios
   ```
 
-- [ ] Ensure required iOS frameworks are present:
+- [x] Ensure required iOS frameworks are present:
   ```bash
   ./apps/ios/scripts/download-ios-system.sh
   ```
 
-- [ ] Build Rust bridge artifacts:
+- [x] Build Rust bridge artifacts:
   ```bash
   ./apps/ios/scripts/build-rust.sh
   ```
 
-- [ ] CLI build both schemes:
+- [x] CLI build both schemes:
   ```bash
   xcodebuild -project apps/ios/Shitter.xcodeproj -scheme ShitterRemote -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
   xcodebuild -project apps/ios/Shitter.xcodeproj -scheme Shitter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
   ```
 
-- [ ] Run iOS tests:
+- [x] Run iOS tests:
   ```bash
   xcodebuild test -project apps/ios/Shitter.xcodeproj -scheme Shitter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
   ```
@@ -132,22 +137,23 @@ Primary goals:
   - Brand/logo/text are Shitter
   - Discovery and server connect sheet render correctly
   - Conversation/session sidebar flows work
+  - Not executed in this CLI pass (requires interactive simulator validation).
 
 ---
 
 ## Phase 4 — Release workflow sanity checks
 
-- [ ] Android release helper scripts sanity:
+- [x] Android release helper scripts sanity:
   - `apps/android/scripts/download-bundled-assets.sh`
   - `apps/android/scripts/play-upload.sh` (dry-run or argument validation if available)
 
-- [ ] iOS TestFlight script sanity:
+- [x] iOS TestFlight script sanity:
   ```bash
   bash -n apps/ios/scripts/testflight-upload.sh
   ```
   Confirm defaults align with Shitter bundle IDs/schemes.
 
-- [ ] Confirm docs checklists are branded and still accurate:
+- [x] Confirm docs checklists are branded and still accurate:
   - `docs/releases/android-play-internal-checklist.md`
   - `docs/releases/ios-testflight-checklist.md`
   - `docs/releases/testflight-whats-new.md`
@@ -158,23 +164,35 @@ Primary goals:
 
 If failures are found:
 
-- [ ] Create targeted fixes (small atomic commits).
-- [ ] Re-run only impacted validation steps first, then full phase gate.
-- [ ] Keep branding invariants intact after every fix.
+- [x] Create targeted fixes (small atomic commits).
+- [x] Re-run only impacted validation steps first, then full phase gate.
+- [x] Keep branding invariants intact after every fix.
 
 Suggested commit pattern:
 - `fix(android): <issue>`
 - `fix(ios): <issue>`
 - `docs(release): <issue>`
 
+### Execution notes (2026-03-03)
+
+- iOS regression found + fixed: `Unable to find module dependency: Highlightr` in `CodeBlockView.swift` due stale/generated project state.
+- Applied fix by regenerating `apps/ios/Shitter.xcodeproj` from `apps/ios/project.yml` and re-running iOS build/test commands.
+- Android release env var branding follow-up:
+  - Added `SHITTER_*` primary variables with `LITTER_*` backward-compat fallback in `apps/android/app/build.gradle.kts` and `apps/android/scripts/play-upload.sh`.
+  - Updated `docs/releases/android-play-internal-checklist.md` accordingly.
+- Android validation now runs successfully when JAVA_HOME/ANDROID_HOME/ANDROID_SDK_ROOT are set to local Homebrew SDK paths.
+- Lint follow-up fixes:
+  - `ServerManager.kt`: replaced API-33 `URLDecoder.decode(String, Charset)` overload with backward-compatible `decode(String, charset.name())`.
+  - `BundledCodexService.kt`: fixed `SuspiciousIndentation` lint error around terminator matching block.
+
 ---
 
 ## Exit criteria (Definition of Done)
 
-- [ ] No unresolved branding regressions (`Litter`/`com.litter`/`com.sigkitten`) in first-party code/docs.
-- [ ] Android unit tests and debug assemblies pass.
-- [ ] iOS project generation + both scheme builds pass.
-- [ ] iOS tests pass.
+- [x] No unresolved branding regressions (`Litter`/`com.litter`/`com.sigkitten`) in first-party code/docs. (legacy `LITTER_*` env var aliases intentionally retained for compatibility)
+- [x] Android unit tests and debug assemblies pass.
+- [x] iOS project generation + both scheme builds pass.
+- [x] iOS tests pass.
 - [ ] Manual smoke checks pass on simulator/emulator.
 - [ ] Any follow-up fixes are committed and pushed.
 
