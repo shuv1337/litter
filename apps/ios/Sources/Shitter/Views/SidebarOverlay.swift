@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarOverlay: View {
     @EnvironmentObject var appState: AppState
     @Binding var dragOffset: CGFloat
+    var topInset: CGFloat = 0
 
     static let sidebarWidth: CGFloat = 300
     private let animation = Animation.spring(response: 0.3, dampingFraction: 0.86)
@@ -18,7 +19,21 @@ struct SidebarOverlay: View {
                 }
 
             SessionSidebarView()
-                .frame(width: Self.sidebarWidth)
+                .padding(.top, topInset + 8)
+                .frame(
+                    minWidth: Self.sidebarWidth,
+                    idealWidth: Self.sidebarWidth,
+                    maxWidth: Self.sidebarWidth,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+                .background {
+                    ZStack {
+                        ShitterTheme.surface
+                        Rectangle().fill(.ultraThinMaterial)
+                    }
+                }
+                .ignoresSafeArea()
                 .offset(x: panelOffset)
                 .shadow(color: .black.opacity(0.35), radius: 20, x: 6, y: 0)
                 .gesture(
@@ -62,3 +77,22 @@ struct SidebarOverlay: View {
         }
     }
 }
+
+#if DEBUG
+private struct SidebarOverlayPreviewHost: View {
+    @State private var dragOffset: CGFloat = 0
+
+    var body: some View {
+        SidebarOverlay(dragOffset: $dragOffset)
+    }
+}
+
+#Preview("Sidebar Overlay") {
+    ShitterPreviewScene(
+        serverManager: ShitterPreviewData.makeSidebarManager(),
+        appState: ShitterPreviewData.makeAppState(sidebarOpen: true)
+    ) {
+        SidebarOverlayPreviewHost()
+    }
+}
+#endif

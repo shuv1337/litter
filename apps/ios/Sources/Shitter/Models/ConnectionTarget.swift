@@ -1,13 +1,13 @@
 import Foundation
 import Security
 
-enum ConnectionTarget {
+enum ConnectionTarget: Equatable {
     case local
     case remote(host: String, port: UInt16)
     case sshThenRemote(host: String, credentials: SSHCredentials)
 }
 
-enum SSHCredentials {
+enum SSHCredentials: Equatable {
     case password(username: String, password: String)
     case key(username: String, privateKey: String, passphrase: String?)
 }

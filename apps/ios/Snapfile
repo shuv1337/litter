@@ -1,0 +1,22 @@
+require File.expand_path("fastlane/snapshot_runtime_version_patch", Dir.pwd)
+require File.expand_path("fastlane/snapshot_report_devices_patch", Dir.pwd)
+
+scheme("Shitter")
+project("./Shitter.xcodeproj")
+
+devices([
+  "iPhone 13 Pro Max"
+])
+
+languages([
+  "en-US"
+])
+
+# Avoid hard-pinning a stale simulator runtime (e.g. 26.0 vs 26.0.1).
+ios_version(ENV.fetch("SNAPSHOT_IOS_VERSION", "latest"))
+
+output_directory("./fastlane/screenshots")
+clear_previous_screenshots(true)
+override_status_bar(true)
+stop_after_first_error(true)
+concurrent_simulators(false)

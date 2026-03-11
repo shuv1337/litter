@@ -5,80 +5,200 @@ struct HeaderView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
-    @State private var showModelSelector = false
     @State private var isReloading = false
+    @State private var showOAuth = false
+
+    var topInset: CGFloat = 0
 
     private var activeConn: ServerConnection? {
         serverManager.activeConnection
     }
 
     var body: some View {
-        HStack(spacing: 16) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    appState.sidebarOpen.toggle()
-                }
-            } label: {
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(.title3, weight: .medium))
-                    .foregroundColor(Color(hex: "#999999"))
-            }
-
-            Button { showModelSelector = true } label: {
-                HStack(spacing: 6) {
-                    if serverManager.activeThreadKey != nil, !selectedModelName.isEmpty {
-                        Text(selectedModelName)
-                            .font(.system(.title3, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .allowsTightening(true)
-                    } else {
-                        Text("shitter")
-                            .font(.system(.title3, weight: .semibold))
-                            .foregroundColor(.white)
-                        if !selectedModelName.isEmpty {
-                            Text(selectedModelName)
-                                .font(.system(.title3))
-                                .foregroundColor(Color(hex: "#666666"))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                                .allowsTightening(true)
-                        }
+        VStack(spacing: 4) {
+            HStack(alignment: .center, spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        appState.sidebarOpen.toggle()
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.system(.caption, weight: .medium))
-                        .foregroundColor(Color(hex: "#666666"))
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(ShitterTheme.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .modifier(GlassCircleModifier())
                 }
+                .accessibilityIdentifier("header.sidebarButton")
+
+                Spacer(minLength: 0)
+
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        appState.showModelSelector.toggle()
+                    }
+                } label: {
+                    VStack(spacing: 2) {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(authDotColor)
+                                .frame(width: 6, height: 6)
+                            Text(sessionModelLabel)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                            Text(sessionReasoningLabel)
+                                .foregroundColor(ShitterTheme.textSecondary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(ShitterTheme.textSecondary)
+                                .rotationEffect(.degrees(appState.showModelSelector ? 180 : 0))
+                        }
+                        .font(ShitterFont.styled(.subheadline, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+
+                        Text(sessionDirectoryLabel)
+                            .font(ShitterFont.styled(.caption2, weight: .semibold))
+                            .foregroundColor(ShitterTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .modifier(GlassRectModifier(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("header.modelPickerButton")
+
+                Spacer(minLength: 0)
+
+                reloadButton
             }
+            .padding(.horizontal, 16)
+            .padding(.top, topInset)
+            .padding(.bottom, 4)
 
-            Spacer()
-
-            reloadButton
+            if appState.showModelSelector {
+                InlineModelSelectorView(onDismiss: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        appState.showModelSelector = false
+                    }
+                })
+                .padding(.horizontal, 16)
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .background(
+            LinearGradient(
+                colors: ShitterTheme.headerScrim,
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .padding(.bottom, -30)
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
+        )
         .onChange(of: serverManager.activeThreadKey) { _, _ in
+            syncSelectionFromActiveThread()
             Task { await loadModelsIfNeeded() }
         }
+        .onChange(of: serverManager.activeThread?.model) { _, _ in
+            syncSelectionFromActiveThread()
+        }
+        .onChange(of: serverManager.activeThread?.reasoningEffort) { _, _ in
+            syncSelectionFromActiveThread()
+        }
+        .onChange(of: serverManager.activeThread?.cwd) { _, _ in
+            syncSelectionFromActiveThread()
+        }
         .task {
+            syncSelectionFromActiveThread()
             await loadModelsIfNeeded()
         }
+        .onChange(of: activeConn?.oauthURL) { _, url in
+            showOAuth = url != nil
+        }
+        .onChange(of: activeConn?.loginCompleted) { _, completed in
+            if completed == true {
+                showOAuth = false
+                activeConn?.loginCompleted = false
+                Task {
+                    await serverManager.refreshAllSessions()
+                    await serverManager.syncActiveThreadFromServer()
+                    syncSelectionFromActiveThread()
+                }
+            }
+        }
+        .sheet(isPresented: $showOAuth) {
+            if let conn = activeConn, let url = conn.oauthURL {
+                NavigationStack {
+                    OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
+                        conn.forwardOAuthCallback(callbackURL)
+                    }) {
+                        Task { await conn.cancelLogin() }
+                    }
+                    .ignoresSafeArea()
+                    .navigationTitle("Login with ChatGPT")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Cancel") {
+                                Task { await conn.cancelLogin() }
+                                showOAuth = false
+                            }
+                            .foregroundColor(ShitterTheme.danger)
+                        }
+                    }
+                }
+            }
+        }
         .enableInjection()
-        .sheet(isPresented: $showModelSelector) {
-            ModelSelectorView()
-                .environmentObject(serverManager)
-                .environmentObject(appState)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+    }
+
+    private var authDotColor: Color {
+        let conn = activeConn ?? serverManager.connections.values.first(where: { $0.isConnected })
+        switch conn?.authStatus {
+        case .chatgpt, .apiKey: return ShitterTheme.accentStrong
+        case .notLoggedIn: return ShitterTheme.danger
+        case .unknown, .none: return ShitterTheme.textMuted
         }
     }
 
-    private var selectedModelName: String {
-        appState.selectedModel
+    private var sessionModelLabel: String {
+        let selected = appState.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty { return selected }
+
+        let threadModel = serverManager.activeThread?.model.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !threadModel.isEmpty { return threadModel }
+
+        return "shitter"
+    }
+
+    private var sessionReasoningLabel: String {
+        let selected = appState.reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty { return selected }
+
+        let threadReasoning = serverManager.activeThread?.reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !threadReasoning.isEmpty { return threadReasoning }
+
+        return "default"
+    }
+
+    private var sessionDirectoryLabel: String {
+        let currentDirectory = serverManager.activeThread?.cwd.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !currentDirectory.isEmpty {
+            return abbreviateHomePath(currentDirectory)
+        }
+
+        let appDirectory = appState.currentCwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !appDirectory.isEmpty {
+            return abbreviateHomePath(appDirectory)
+        }
+
+        return "~"
     }
 
     private func loadModelsIfNeeded() async {
+        syncSelectionFromActiveThread()
+
         guard let conn = activeConn, conn.isConnected, !conn.modelsLoaded else { return }
         do {
             let resp = try await conn.listModels()
@@ -96,12 +216,36 @@ struct HeaderView: View {
         } catch {}
     }
 
+    private func syncSelectionFromActiveThread() {
+        let threadModel = serverManager.activeThread?.model.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !threadModel.isEmpty && appState.selectedModel != threadModel {
+            appState.selectedModel = threadModel
+        }
+
+        let threadReasoning = serverManager.activeThread?.reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !threadReasoning.isEmpty && appState.reasoningEffort != threadReasoning {
+            appState.reasoningEffort = threadReasoning
+        }
+
+        let threadCwd = serverManager.activeThread?.cwd.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !threadCwd.isEmpty && appState.currentCwd != threadCwd {
+            appState.currentCwd = threadCwd
+        }
+    }
+
     private var reloadButton: some View {
         Button {
             Task {
                 isReloading = true
-                await serverManager.refreshAllSessions()
-                await serverManager.syncActiveThreadFromServer()
+                let conn = activeConn ?? serverManager.connections.values.first(where: { $0.isConnected })
+                if conn?.authStatus == .notLoggedIn {
+                    await conn?.logout()
+                    await conn?.loginWithChatGPT()
+                } else {
+                    await serverManager.refreshAllSessions()
+                    await serverManager.syncActiveThreadFromServer()
+                    syncSelectionFromActiveThread()
+                }
                 isReloading = false
             }
         } label: {
@@ -112,21 +256,23 @@ struct HeaderView: View {
                         .tint(ShitterTheme.accent)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(.subheadline, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(serverManager.hasAnyConnection ? ShitterTheme.accent : ShitterTheme.textMuted)
                 }
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 44, height: 44)
+            .modifier(GlassCircleModifier())
         }
+        .accessibilityIdentifier("header.reloadButton")
         .disabled(isReloading || !serverManager.hasAnyConnection)
     }
+
 }
 
-struct ModelSelectorView: View {
+struct InlineModelSelectorView: View {
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-    @State private var loadError: String?
+    var onDismiss: () -> Void
 
     private var models: [CodexModel] {
         serverManager.activeConnection?.models ?? []
@@ -138,131 +284,166 @@ struct ModelSelectorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Model")
-                .font(.system(.subheadline, weight: .semibold))
-                .foregroundColor(.white)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
-            if models.isEmpty {
-                Spacer()
-                if let err = loadError {
-                    Text(err)
-                        .font(.system(.footnote))
-                        .foregroundColor(ShitterTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(20)
-                    Button("Retry") {
-                        loadError = nil
-                        Task { await loadModels() }
-                    }
-                    .font(.system(.subheadline, weight: .medium))
-                    .foregroundColor(ShitterTheme.accent)
-                } else {
-                    ProgressView().tint(ShitterTheme.accent)
-                }
-                Spacer()
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(models) { model in
-                            Button {
-                                appState.selectedModel = model.id
-                                appState.reasoningEffort = model.defaultReasoningEffort
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack(spacing: 6) {
-                                            Text(model.displayName)
-                                                .font(.system(.subheadline))
-                                                .foregroundColor(.white)
-                                            if model.isDefault {
-                                                Text("default")
-                                                    .font(.system(.caption2, weight: .medium))
-                                                    .foregroundColor(ShitterTheme.accent)
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 2)
-                                                    .background(ShitterTheme.accent.opacity(0.15))
-                                                    .clipShape(Capsule())
-                                            }
-                                        }
-                                        Text(model.description)
-                                            .font(.system(.caption))
-                                            .foregroundColor(ShitterTheme.textSecondary)
-                                    }
-                                    Spacer()
-                                    if model.id == appState.selectedModel {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(.subheadline, weight: .medium))
-                                            .foregroundColor(ShitterTheme.accent)
-                                    }
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                            }
-                            Divider().background(Color(hex: "#1E1E1E")).padding(.leading, 20)
-                        }
-
-                        if let info = currentModel, !info.supportedReasoningEfforts.isEmpty {
-                            Text("Reasoning")
-                                .font(.system(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 20)
-                                .padding(.top, 20)
-                                .padding(.bottom, 12)
-
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(info.supportedReasoningEfforts) { effort in
-                                        Button {
-                                            appState.reasoningEffort = effort.reasoningEffort
-                                        } label: {
-                                            Text(effort.reasoningEffort)
-                                                .font(.system(.footnote, weight: .medium))
-                                                .foregroundColor(effort.reasoningEffort == appState.reasoningEffort ? .black : .white)
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                                .background(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.accent : ShitterTheme.surfaceLight)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(models) { model in
+                        Button {
+                            appState.selectedModel = model.id
+                            appState.reasoningEffort = model.defaultReasoningEffort
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(model.displayName)
+                                            .font(ShitterFont.styled(.footnote))
+                                            .foregroundColor(ShitterTheme.textPrimary)
+                                        if model.isDefault {
+                                            Text("default")
+                                                .font(ShitterFont.styled(.caption2, weight: .medium))
+                                                .foregroundColor(ShitterTheme.accent)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 1)
+                                                .background(ShitterTheme.accent.opacity(0.15))
                                                 .clipShape(Capsule())
                                         }
                                     }
+                                    Text(model.description)
+                                        .font(ShitterFont.styled(.caption2))
+                                        .foregroundColor(ShitterTheme.textSecondary)
                                 }
-                                .padding(.horizontal, 20)
+                                Spacer()
+                                if model.id == appState.selectedModel {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(ShitterTheme.accent)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                        if model.id != models.last?.id {
+                            Divider().background(ShitterTheme.separator).padding(.leading, 16)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 320)
+
+            if let info = currentModel, !info.supportedReasoningEfforts.isEmpty {
+                Divider().background(ShitterTheme.separator).padding(.horizontal, 12)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(info.supportedReasoningEfforts) { effort in
+                            Button {
+                                appState.reasoningEffort = effort.reasoningEffort
+                            } label: {
+                                Text(effort.reasoningEffort)
+                                    .font(ShitterFont.styled(.caption2, weight: .medium))
+                                    .foregroundColor(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.accent : ShitterTheme.surfaceLight)
+                                    .clipShape(Capsule())
                             }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .fixedSize(horizontal: false, vertical: true)
+        .modifier(GlassRectModifier(cornerRadius: 16))
+    }
+}
+
+struct ModelSelectorSheet: View {
+    @EnvironmentObject var serverManager: ServerManager
+    @EnvironmentObject var appState: AppState
+
+    private var models: [CodexModel] {
+        serverManager.activeConnection?.models ?? []
+    }
+
+    private var currentModel: CodexModel? {
+        models.first { $0.id == appState.selectedModel }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(models) { model in
+                Button {
+                    appState.selectedModel = model.id
+                    appState.reasoningEffort = model.defaultReasoningEffort
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(model.displayName)
+                                    .font(ShitterFont.styled(.footnote))
+                                    .foregroundColor(ShitterTheme.textPrimary)
+                                if model.isDefault {
+                                    Text("default")
+                                        .font(ShitterFont.styled(.caption2, weight: .medium))
+                                        .foregroundColor(ShitterTheme.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1)
+                                        .background(ShitterTheme.accent.opacity(0.15))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            Text(model.description)
+                                .font(ShitterFont.styled(.caption2))
+                                .foregroundColor(ShitterTheme.textSecondary)
+                        }
+                        Spacer()
+                        if model.id == appState.selectedModel {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(ShitterTheme.accent)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                }
+                Divider().background(ShitterTheme.separator).padding(.leading, 20)
+            }
+
+            if let info = currentModel, !info.supportedReasoningEfforts.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(info.supportedReasoningEfforts) { effort in
+                            Button {
+                                appState.reasoningEffort = effort.reasoningEffort
+                            } label: {
+                                Text(effort.reasoningEffort)
+                                    .font(ShitterFont.styled(.caption2, weight: .medium))
+                                    .foregroundColor(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(effort.reasoningEffort == appState.reasoningEffort ? ShitterTheme.accent : ShitterTheme.surfaceLight)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                 }
             }
 
             Spacer()
         }
+        .padding(.top, 20)
         .background(.ultraThinMaterial)
-        .task {
-            if models.isEmpty { await loadModels() }
-        }
-    }
-
-    private func loadModels() async {
-        guard let conn = serverManager.activeConnection, conn.isConnected else {
-            loadError = "Not connected to a server"
-            return
-        }
-        do {
-            let resp = try await conn.listModels()
-            conn.models = resp.data
-            conn.modelsLoaded = true
-            if appState.selectedModel.isEmpty {
-                if let defaultModel = resp.data.first(where: { $0.isDefault }) {
-                    appState.selectedModel = defaultModel.id
-                    appState.reasoningEffort = defaultModel.defaultReasoningEffort
-                } else if let first = resp.data.first {
-                    appState.selectedModel = first.id
-                    appState.reasoningEffort = first.defaultReasoningEffort
-                }
-            }
-        } catch {
-            loadError = error.localizedDescription
-        }
     }
 }
+
+#if DEBUG
+#Preview("Header") {
+    ShitterPreviewScene {
+        HeaderView()
+    }
+}
+#endif

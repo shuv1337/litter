@@ -2,7 +2,7 @@ name: Shitter
 options:
   bundleIdPrefix: io.latitudes.shitter
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
 
@@ -15,7 +15,7 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
     OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
-    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
 
 packages:
   Citadel:
@@ -35,7 +35,7 @@ targets:
   ShitterRemote:
     type: application
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "18.0"
     sources:
       - path: Sources/Shitter
         excludes:
@@ -73,7 +73,7 @@ targets:
   Shitter:
     type: application
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "18.0"
     sources:
       - path: Sources/Shitter
         excludes:
@@ -112,7 +112,7 @@ targets:
   CodexIOSTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "18.0"
     sources:
       - path: Tests/CodexIOSTests
     dependencies:
@@ -120,6 +120,21 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+        CODE_SIGNING_ALLOWED: false
+        CODE_SIGNING_REQUIRED: false
+  CodexIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Tests/CodexIOSUITests
+      - path: SnapshotHelper.swift
+    dependencies:
+      - target: Shitter
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Shitter
         CODE_SIGNING_ALLOWED: false
         CODE_SIGNING_REQUIRED: false
 
@@ -151,6 +166,7 @@ schemes:
       config: Debug
       targets:
         - CodexIOSTests
+        - CodexIOSUITests
     profile:
       config: Release
     analyze:

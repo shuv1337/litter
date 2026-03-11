@@ -16,6 +16,7 @@ final class ServerConnection: ObservableObject, Identifiable {
     @Published var loginCompleted = false
     @Published var models: [CodexModel] = []
     @Published var modelsLoaded = false
+    @Published var rateLimits: RateLimitSnapshot?
 
     let client = JSONRPCClient()
     private var serverURL: URL?
@@ -76,6 +77,7 @@ final class ServerConnection: ObservableObject, Identifiable {
             connectionPhase = "ready"
             Task { [weak self] in
                 await self?.checkAuth()
+                await self?.fetchRateLimits()
             }
         } catch {
             connectionPhase = "error: \(error.localizedDescription)"
@@ -86,6 +88,20 @@ final class ServerConnection: ObservableObject, Identifiable {
         Task { await client.disconnect() }
         isConnected = false
         serverURL = nil
+        rateLimits = nil
+    }
+
+    func forwardOAuthCallback(_ url: URL) {
+        switch target {
+        case .local:
+            Task { _ = try? await URLSession.shared.data(from: url) }
+        case .remote:
+            Task {
+                _ = try? await execCommand(["curl", "-s", "-4", "-L", "--max-time", "10", url.absoluteString])
+            }
+        case .sshThenRemote:
+            break
+        }
     }
 
     // MARK: - RPC Methods
@@ -216,27 +232,28 @@ final class ServerConnection: ObservableObject, Identifiable {
             lower.contains("missing codex-linux-sandbox executable path")
     }
 
+    @discardableResult
     func sendTurn(
         threadId: String,
         text: String,
         model: String? = nil,
         effort: String? = nil,
         additionalInput: [UserInput] = []
-    ) async throws {
+    ) async throws -> TurnStartResponse {
         var inputs: [UserInput] = [UserInput(type: "text", text: text)]
         inputs.append(contentsOf: additionalInput)
-        let _: TurnStartResponse = try await client.sendRequest(
+        return try await client.sendRequest(
             method: "turn/start",
             params: TurnStartParams(threadId: threadId, input: inputs, model: model, effort: effort),
             responseType: TurnStartResponse.self
         )
     }
 
-    func interrupt(threadId: String) async {
+    func interrupt(threadId: String, turnId: String) async {
         struct Empty: Decodable {}
         _ = try? await client.sendRequest(
             method: "turn/interrupt",
-            params: TurnInterruptParams(threadId: threadId),
+            params: TurnInterruptParams(threadId: threadId, turnId: turnId),
             responseType: Empty.self
         )
     }
@@ -373,6 +390,19 @@ final class ServerConnection: ObservableObject, Identifiable {
         }
     }
 
+    func getAuthToken() async -> (method: String?, token: String?) {
+        do {
+            let resp: GetAuthStatusResponse = try await client.sendRequest(
+                method: "getAuthStatus",
+                params: GetAuthStatusParams(includeToken: true, refreshToken: false),
+                responseType: GetAuthStatusResponse.self
+            )
+            return (resp.authMethod, resp.authToken)
+        } catch {
+            return (nil, nil)
+        }
+    }
+
     func loginWithChatGPT() async {
         do {
             let resp: LoginStartResponse = try await client.sendRequest(
@@ -424,6 +454,18 @@ final class ServerConnection: ObservableObject, Identifiable {
         oauthURL = nil
     }
 
+    // MARK: - Rate Limits
+
+    func fetchRateLimits() async {
+        struct EmptyParams: Encodable {}
+        guard let resp = try? await client.sendRequest(
+            method: "account/rateLimits/read",
+            params: EmptyParams(),
+            responseType: GetAccountRateLimitsResponse.self
+        ) else { return }
+        rateLimits = resp.rateLimits
+    }
+
     // MARK: - Account Notifications
 
     func handleAccountNotification(method: String, data: Data) {
@@ -438,6 +480,10 @@ final class ServerConnection: ObservableObject, Identifiable {
             }
         case "account/updated":
             Task { await self.checkAuth() }
+        case "account/rateLimits/updated":
+            if let notif = try? JSONDecoder().decode(AccountRateLimitsUpdatedNotification.self, from: extractParams(data)) {
+                rateLimits = notif.rateLimits
+            }
         default:
             break
         }

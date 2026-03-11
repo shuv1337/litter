@@ -2,10 +2,11 @@ import SwiftUI
 
 struct SSHLoginSheet: View {
     let server: DiscoveredServer
-    let onConnect: (ConnectionTarget) -> Void
+    let onConnect: (ConnectionTarget, String?) -> Void
+    private let autoLoadSavedCredentials: Bool
 
     @Environment(\.dismiss) private var dismiss
-    @State private var username = ""
+    @State private var username: String
     @State private var password = ""
     @State private var useKey = false
     @State private var privateKey = ""
@@ -15,6 +16,29 @@ struct SSHLoginSheet: View {
     @State private var loadedSavedCredentials = false
     @State private var isConnecting = false
     @State private var errorMessage: String?
+
+    init(
+        server: DiscoveredServer,
+        autoLoadSavedCredentials: Bool = true,
+        initialUsername: String = "",
+        onConnect: @escaping (ConnectionTarget, String?) -> Void
+    ) {
+        self.server = server
+        self.onConnect = onConnect
+        self.autoLoadSavedCredentials = autoLoadSavedCredentials
+        _username = State(initialValue: initialUsername)
+    }
+
+    private var sshPort: Int {
+        Int(server.port ?? 22)
+    }
+
+    private var hostDisplay: String {
+        if sshPort == 22 {
+            return server.hostname
+        }
+        return "\(server.hostname):\(sshPort)"
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,10 +51,10 @@ struct SSHLoginSheet: View {
                                 .foregroundColor(ShitterTheme.accent)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(server.name)
-                                    .font(ShitterFont.monospaced(.subheadline))
-                                    .foregroundColor(.white)
-                                Text(server.hostname)
-                                    .font(ShitterFont.monospaced(.caption))
+                                    .font(ShitterFont.styled(.subheadline))
+                                    .foregroundColor(ShitterTheme.textPrimary)
+                                Text(hostDisplay)
+                                    .font(ShitterFont.styled(.caption))
                                     .foregroundColor(ShitterTheme.textSecondary)
                             }
                         }
@@ -39,8 +63,8 @@ struct SSHLoginSheet: View {
 
                     Section {
                         TextField("username", text: $username)
-                            .font(ShitterFont.monospaced(.footnote))
-                            .foregroundColor(.white)
+                            .font(ShitterFont.styled(.footnote))
+                            .foregroundColor(ShitterTheme.textPrimary)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
                     } header: {
@@ -59,14 +83,14 @@ struct SSHLoginSheet: View {
 
                         if useKey {
                             TextEditor(text: $privateKey)
-                                .font(ShitterFont.monospaced(.caption))
-                                .foregroundColor(.white)
+                                .font(ShitterFont.styled(.caption))
+                                .foregroundColor(ShitterTheme.textPrimary)
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 100)
                                 .overlay(alignment: .topLeading) {
                                     if privateKey.isEmpty {
                                         Text("Paste private key here...")
-                                            .font(ShitterFont.monospaced(.caption))
+                                            .font(ShitterFont.styled(.caption))
                                             .foregroundColor(ShitterTheme.textMuted)
                                             .padding(.top, 8)
                                             .padding(.leading, 4)
@@ -74,12 +98,12 @@ struct SSHLoginSheet: View {
                                     }
                                 }
                             SecureField("passphrase (optional)", text: $passphrase)
-                                .font(ShitterFont.monospaced(.footnote))
-                                .foregroundColor(.white)
+                                .font(ShitterFont.styled(.footnote))
+                                .foregroundColor(ShitterTheme.textPrimary)
                         } else {
                             SecureField("password", text: $password)
-                                .font(ShitterFont.monospaced(.footnote))
-                                .foregroundColor(.white)
+                                .font(ShitterFont.styled(.footnote))
+                                .foregroundColor(ShitterTheme.textPrimary)
                         }
                     } header: {
                         Text("Authentication")
@@ -90,8 +114,8 @@ struct SSHLoginSheet: View {
                     Section {
                         Toggle(isOn: $rememberCredentials) {
                             Text("Remember credentials on this device")
-                                .font(ShitterFont.monospaced(.footnote))
-                                .foregroundColor(.white)
+                                .font(ShitterFont.styled(.footnote))
+                                .foregroundColor(ShitterTheme.textPrimary)
                         }
                         .tint(ShitterTheme.accent)
 
@@ -100,7 +124,7 @@ struct SSHLoginSheet: View {
                                 forgetSavedCredentials()
                             } label: {
                                 Text("Forget saved credentials")
-                                    .font(ShitterFont.monospaced(.footnote))
+                                    .font(ShitterFont.styled(.footnote))
                             }
                         }
                     } header: {
@@ -119,7 +143,7 @@ struct SSHLoginSheet: View {
                                 }
                                 Text("Connect")
                                     .foregroundColor(ShitterTheme.accent)
-                                    .font(ShitterFont.monospaced(.subheadline))
+                                    .font(ShitterFont.styled(.subheadline))
                             }
                         }
                         .disabled(isConnecting || username.isEmpty || (!useKey && password.isEmpty) || (useKey && privateKey.isEmpty))
@@ -130,7 +154,7 @@ struct SSHLoginSheet: View {
                         Section {
                             Text(err)
                                 .foregroundColor(.red)
-                                .font(ShitterFont.monospaced(.caption))
+                                .font(ShitterFont.styled(.caption))
                         }
                         .listRowBackground(ShitterTheme.surface.opacity(0.6))
                     }
@@ -139,7 +163,6 @@ struct SSHLoginSheet: View {
             }
             .navigationTitle("SSH Login")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
@@ -147,8 +170,8 @@ struct SSHLoginSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .task {
+            guard autoLoadSavedCredentials else { return }
             loadSavedCredentialsIfNeeded()
         }
     }
@@ -170,22 +193,33 @@ struct SSHLoginSheet: View {
         Task {
             do {
                 let ssh = SSHSessionManager.shared
-                try await ssh.connect(host: server.hostname, credentials: credentials)
+                try await ssh.connect(host: server.hostname, port: sshPort, credentials: credentials)
                 let port = try await ssh.startRemoteServer()
+                let detectedWakeMAC = await ssh.discoverWakeMACAddress()
                 var remoteHost = server.hostname
                     .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
                     .replacingOccurrences(of: "%25", with: "%")
                 if !remoteHost.contains(":"), let pct = remoteHost.firstIndex(of: "%") {
                     remoteHost = String(remoteHost[..<pct])
                 }
-                let target = ConnectionTarget.remote(host: remoteHost, port: port)
+                let target: ConnectionTarget
+                if server.sshPortForwardingEnabled {
+                    let localPort = try await ssh.establishLocalPortForward(remotePort: port)
+                    target = .remote(host: "127.0.0.1", port: localPort)
+                } else {
+                    target = .remote(host: remoteHost, port: port)
+                }
 
                 do {
                     if rememberCredentials {
-                        try SSHCredentialStore.shared.save(savedCredential(from: credentials), host: server.hostname)
+                        try SSHCredentialStore.shared.save(
+                            savedCredential(from: credentials),
+                            host: server.hostname,
+                            port: sshPort
+                        )
                         hasSavedCredentials = true
                     } else {
-                        try SSHCredentialStore.shared.delete(host: server.hostname)
+                        try SSHCredentialStore.shared.delete(host: server.hostname, port: sshPort)
                         hasSavedCredentials = false
                     }
                 } catch {
@@ -194,7 +228,7 @@ struct SSHLoginSheet: View {
 
                 clearSensitiveInput()
                 isConnecting = false
-                onConnect(target)
+                onConnect(target, detectedWakeMAC)
             } catch {
                 isConnecting = false
                 errorMessage = error.localizedDescription
@@ -207,7 +241,7 @@ struct SSHLoginSheet: View {
         loadedSavedCredentials = true
 
         do {
-            guard let saved = try SSHCredentialStore.shared.load(host: server.hostname) else {
+            guard let saved = try SSHCredentialStore.shared.load(host: server.hostname, port: sshPort) else {
                 hasSavedCredentials = false
                 return
             }
@@ -231,7 +265,7 @@ struct SSHLoginSheet: View {
 
     private func forgetSavedCredentials() {
         do {
-            try SSHCredentialStore.shared.delete(host: server.hostname)
+            try SSHCredentialStore.shared.delete(host: server.hostname, port: sshPort)
             hasSavedCredentials = false
             rememberCredentials = false
             clearSensitiveInput()
@@ -267,3 +301,13 @@ struct SSHLoginSheet: View {
         passphrase = ""
     }
 }
+
+#if DEBUG
+#Preview("SSH Login") {
+    SSHLoginSheet(
+        server: ShitterPreviewData.sampleSSHServer,
+        autoLoadSavedCredentials: false,
+        initialUsername: "builder"
+    ) { _, _ in }
+}
+#endif

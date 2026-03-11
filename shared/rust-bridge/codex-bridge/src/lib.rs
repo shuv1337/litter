@@ -30,6 +30,8 @@ fn runtime() -> &'static Runtime {
 #[unsafe(no_mangle)]
 pub extern "C" fn codex_start_server(out_port: *mut u16) -> i32 {
     init_codex_home();
+    #[cfg(target_os = "ios")]
+    init_tls_roots();
 
     let port = match std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -131,4 +133,26 @@ fn init_codex_home() {
     }
 
     eprintln!("[codex-bridge] unable to initialize any writable CODEX_HOME location");
+}
+
+#[cfg(target_os = "ios")]
+fn init_tls_roots() {
+    if std::env::var("SSL_CERT_FILE").is_ok() {
+        return;
+    }
+
+    let codex_home = match std::env::var("CODEX_HOME") {
+        Ok(h) => PathBuf::from(h),
+        Err(_) => return,
+    };
+    let pem_path = codex_home.join("cacert.pem");
+    if !pem_path.exists() {
+        static CACERT_PEM: &[u8] = include_bytes!("cacert.pem");
+        if let Err(e) = fs::write(&pem_path, CACERT_PEM) {
+            eprintln!("[codex-bridge] failed to write cacert.pem: {e}");
+            return;
+        }
+    }
+    unsafe { std::env::set_var("SSL_CERT_FILE", &pem_path); }
+    eprintln!("[codex-bridge] SSL_CERT_FILE={}", pem_path.display());
 }

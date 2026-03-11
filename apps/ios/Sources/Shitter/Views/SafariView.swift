@@ -1,27 +1,52 @@
 import SwiftUI
-import SafariServices
-import UIKit
+import WebKit
 
-struct SafariView: UIViewControllerRepresentable {
+struct OAuthWebView: UIViewRepresentable {
     let url: URL
+    var onCallbackIntercepted: ((URL) -> Void)?
     var onDismiss: (() -> Void)?
 
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let vc = SFSafariViewController(url: url)
-        vc.delegate = context.coordinator
-        return vc
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.navigationDelegate = context.coordinator
+        webView.isOpaque = false
+        webView.backgroundColor = .black
+        webView.scrollView.backgroundColor = .black
+        webView.load(URLRequest(url: url))
+        return webView
     }
 
-    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onDismiss: onDismiss) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCallbackIntercepted: onCallbackIntercepted, onDismiss: onDismiss)
+    }
 
-    final class Coordinator: NSObject, SFSafariViewControllerDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        let onCallbackIntercepted: ((URL) -> Void)?
         let onDismiss: (() -> Void)?
-        init(onDismiss: (() -> Void)?) { self.onDismiss = onDismiss }
+        init(onCallbackIntercepted: ((URL) -> Void)?, onDismiss: (() -> Void)?) {
+            self.onCallbackIntercepted = onCallbackIntercepted
+            self.onDismiss = onDismiss
+        }
 
-        func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
-            onDismiss?()
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            if let url = navigationAction.request.url,
+               (url.host == "localhost" || url.host == "127.0.0.1"),
+               url.path.contains("/auth/callback") {
+                decisionHandler(.cancel)
+                if let handler = onCallbackIntercepted {
+                    handler(url)
+                } else {
+                    Task { _ = try? await URLSession.shared.data(from: url) }
+                }
+                return
+            }
+            decisionHandler(.allow)
         }
     }
 }

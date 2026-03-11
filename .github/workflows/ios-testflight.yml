@@ -9,15 +9,15 @@ on:
       scheme:
         description: "Xcode scheme to archive"
         required: true
-        default: "Litter"
+        default: "Shitter"
         type: choice
         options:
-          - Litter
-          - LitterRemote
+          - Shitter
+          - ShitterRemote
       app_bundle_id:
         description: "App bundle identifier"
         required: true
-        default: "com.sigkitten.litter"
+        default: "com.sigkitten.shitter"
         type: string
       beta_group_name:
         description: "TestFlight beta group"
@@ -184,8 +184,8 @@ jobs:
               WAIT_FOR_PROCESSING="0"
             fi
           else
-            SCHEME="Litter"
-            APP_BUNDLE_ID="com.sigkitten.litter"
+            SCHEME="Shitter"
+            APP_BUNDLE_ID="com.sigkitten.shitter"
             BETA_GROUP_NAME="Internal Testers"
             WAIT_FOR_PROCESSING="1"
           fi

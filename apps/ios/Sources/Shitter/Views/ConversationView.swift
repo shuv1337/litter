@@ -7,6 +7,8 @@ struct ConversationView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
+    var topInset: CGFloat = 0
+    var bottomInset: CGFloat = 0
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
     @AppStorage("conversationTextSizeStep") private var conversationTextSizeStep = ConversationTextSize.medium.rawValue
     @FocusState private var composerFocused: Bool
@@ -21,22 +23,35 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ConversationMessageList(
-                messages: messages,
-                threadStatus: threadStatus,
-                activeThreadKey: serverManager.activeThreadKey,
-                agentDirectoryVersion: serverManager.agentDirectoryVersion,
-                textSizeStep: $conversationTextSizeStep,
-                inputFocused: $composerFocused,
-                onEditUserMessage: editMessage,
-                onForkFromUserMessage: forkFromMessage
-            )
+        ConversationMessageList(
+            messages: messages,
+            threadStatus: threadStatus,
+            activeThreadKey: serverManager.activeThreadKey,
+            agentDirectoryVersion: serverManager.agentDirectoryVersion,
+            topInset: topInset,
+            textSizeStep: $conversationTextSizeStep,
+            inputFocused: $composerFocused,
+            onEditUserMessage: editMessage,
+            onForkFromUserMessage: forkFromMessage
+        )
+        .mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 60)
+                Rectangle().fill(.black)
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 60)
+            }
+            .ignoresSafeArea()
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             ConversationInputBar(
                 onSend: sendMessage,
                 onFileSearch: searchComposerFiles,
-                inputFocused: $composerFocused
+                inputFocused: $composerFocused,
+                bottomInset: bottomInset
             )
+            .background(.clear, ignoresSafeAreaEdges: .bottom)
         }
         .alert("Conversation Action Error", isPresented: Binding(
             get: { messageActionError != nil },
@@ -134,6 +149,57 @@ private enum ConversationTextSize: Int, CaseIterable {
     }
 }
 
+struct ContextBadgeView: View, Equatable {
+    let percent: Int
+    let tint: Color
+
+    private let cornerRadius: CGFloat = 3.5
+    private let strokeWidth: CGFloat = 1.2
+    private let inset: CGFloat = 1.5
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(tint.opacity(0.4), lineWidth: strokeWidth)
+
+            GeometryReader { geo in
+                let inner = geo.size.width - (inset + strokeWidth) * 2
+                RoundedRectangle(cornerRadius: max(0, cornerRadius - inset))
+                    .fill(tint.opacity(0.25))
+                    .frame(width: max(0, inner * CGFloat(percent) / 100.0))
+                    .padding(.leading, inset + strokeWidth / 2)
+                    .frame(maxHeight: .infinity, alignment: .center)
+            }
+            .padding(.vertical, inset + strokeWidth / 2)
+
+            Text("\(percent)")
+                .font(.system(size: 7.5, weight: .heavy, design: .monospaced))
+                .foregroundColor(tint)
+        }
+        .frame(width: 28, height: 13)
+    }
+}
+
+struct RateLimitBadgeView: View, Equatable {
+    let label: String
+    let percent: Int
+
+    private var tint: Color {
+        if percent <= 10 { return ShitterTheme.danger }
+        if percent <= 30 { return ShitterTheme.warning }
+        return ShitterTheme.textMuted
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                .foregroundColor(ShitterTheme.textSecondary)
+            ContextBadgeView(percent: percent, tint: tint)
+        }
+    }
+}
+
 private struct BottomMarkerMaxYPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = .greatestFiniteMagnitude
 
@@ -147,6 +213,7 @@ private struct ConversationMessageList: View {
     let threadStatus: ConversationStatus
     let activeThreadKey: ThreadKey?
     let agentDirectoryVersion: Int
+    var topInset: CGFloat = 0
     @Binding var textSizeStep: Int
     let inputFocused: FocusState<Bool>.Binding
     let onEditUserMessage: (ChatMessage) -> Void
@@ -176,39 +243,43 @@ private struct ConversationMessageList: View {
             GeometryReader { viewport in
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(messages) { message in
-                                EquatableMessageBubble(
-                                    message: message,
-                                    serverId: activeThreadKey?.serverId,
-                                    textScale: textScale,
-                                    agentDirectoryVersion: agentDirectoryVersion,
-                                    messageActionsDisabled: messageActionsDisabled,
-                                    onEditUserMessage: onEditUserMessage,
-                                    onForkFromUserMessage: onForkFromUserMessage
-                                )
-                                    .id(message.id)
-                            }
-                            if case .thinking = threadStatus {
-                                TypingIndicator()
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 16)
-                        Color.clear
-                            .frame(height: 1)
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: BottomMarkerMaxYPreferenceKey.self,
-                                        value: geo.frame(in: .named("conversationScrollArea")).maxY
+                        VStack(alignment: .leading, spacing: 0) {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(messages) { message in
+                                    EquatableMessageBubble(
+                                        message: message,
+                                        serverId: activeThreadKey?.serverId,
+                                        textScale: textScale,
+                                        agentDirectoryVersion: agentDirectoryVersion,
+                                        messageActionsDisabled: messageActionsDisabled,
+                                        onEditUserMessage: onEditUserMessage,
+                                        onForkFromUserMessage: onForkFromUserMessage
                                     )
+                                        .id(message.id)
                                 }
-                            )
-                            .id("bottom")
+                                if case .thinking = threadStatus {
+                                    TypingIndicator()
+                                }
+                            }
                             .padding(.horizontal, 16)
-                            .padding(.bottom, 16)
+                            .padding(.top, topInset + 56)
+
+                            Color.clear
+                                .frame(height: 1)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: BottomMarkerMaxYPreferenceKey.self,
+                                            value: geo.frame(in: .named("conversationScrollArea")).maxY
+                                        )
+                                    }
+                                )
+                                .id("bottom")
+                                .padding(.horizontal, 16)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
                     }
+                    .defaultScrollAnchor(.bottom)
                     .coordinateSpace(name: "conversationScrollArea")
                     .scrollDismissesKeyboard(.interactively)
                     .simultaneousGesture(
@@ -231,10 +302,10 @@ private struct ConversationMessageList: View {
                         }
                     }
                     .onAppear {
-                        scheduleScrollToBottom(proxy, delay: 0, force: true, animated: false)
+                        scheduleScrollToBottom(proxy, delay: 0.12, force: true, animated: false)
                     }
                     .onChange(of: activeThreadKey) {
-                        scheduleScrollToBottom(proxy, delay: 0, force: true, animated: false)
+                        scheduleScrollToBottom(proxy, delay: 0.12, force: true, animated: false)
                     }
                     .onChange(of: messages.count) {
                         scheduleScrollToBottom(proxy)
@@ -375,17 +446,12 @@ private struct ScrollToBottomIndicator: View {
                     .font(.system(.caption, weight: .bold))
                     .offset(y: bob ? 1.5 : -1.5)
                 Text("Latest")
-                    .font(ShitterFont.monospaced(.caption, weight: .semibold))
+                    .font(ShitterFont.styled(.caption, weight: .semibold))
             }
-            .foregroundColor(.white)
+            .foregroundColor(ShitterTheme.textPrimary)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(ShitterTheme.surface.opacity(0.94))
-            .overlay(
-                Capsule().stroke(ShitterTheme.border.opacity(0.9), lineWidth: 1)
-            )
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(0.24), radius: 8, x: 0, y: 4)
+            .modifier(GlassCapsuleModifier())
         }
         .buttonStyle(.plain)
         .onAppear {
@@ -507,6 +573,7 @@ private struct ConversationInputBar: View {
     let onSend: (String, [SkillMentionSelection]) -> Void
     let onFileSearch: (String) async throws -> [FuzzyFileSearchResult]
     let inputFocused: FocusState<Bool>.Binding
+    var bottomInset: CGFloat = 0
 
     @State private var inputText = ""
     @State private var showAttachMenu = false
@@ -541,9 +608,15 @@ private struct ConversationInputBar: View {
     @State private var skillsLoading = false
     @State private var mentionSkillPathsByName: [String: String] = [:]
     @State private var hasAttemptedSkillMentionLoad = false
+    @StateObject private var voiceManager = VoiceTranscriptionManager()
+    @State private var showMicPermissionAlert = false
 
     private var hasText: Bool {
         !inputText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var isTurnActive: Bool {
+        serverManager.activeThread?.hasTurnActive == true
     }
 
     var body: some View {
@@ -572,6 +645,13 @@ private struct ConversationInputBar: View {
                 .padding(.top, 8)
             }
             composerRow
+                .overlay(alignment: .bottomTrailing) {
+                    if bottomInset > 20 {
+                        contextBar
+                            .offset(y: 16)
+                    }
+                }
+                .padding(.bottom, bottomInset)
         }
         .overlay(alignment: .bottom) {
             if showSlashPopup {
@@ -599,7 +679,18 @@ private struct ConversationInputBar: View {
             hideComposerPopups()
             inputFocused.wrappedValue = true
         }
+        .alert("Microphone Access", isPresented: $showMicPermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Microphone permission is required for voice input. Enable it in Settings.")
+        }
         .onDisappear {
+            if voiceManager.isRecording { voiceManager.cancelRecording() }
             popupRefreshTask?.cancel()
             popupRefreshTask = nil
             fileSearchTask?.cancel()
@@ -620,10 +711,10 @@ private struct ConversationInputBar: View {
                 .ignoresSafeArea()
         }
         .sheet(isPresented: $showModelSelector) {
-            ModelSelectorView()
+            ModelSelectorSheet()
                 .environmentObject(serverManager)
                 .environmentObject(appState)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPermissionsSheet) {
@@ -638,8 +729,8 @@ private struct ConversationInputBar: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text(preset.title)
-                                        .foregroundColor(.white)
-                                        .font(ShitterFont.monospaced(.subheadline))
+                                        .foregroundColor(ShitterTheme.textPrimary)
+                                        .font(ShitterFont.styled(.subheadline))
                                     Spacer()
                                     if preset.approvalPolicy == appState.approvalPolicy && preset.sandboxMode == appState.sandboxMode {
                                         Image(systemName: "checkmark")
@@ -648,7 +739,7 @@ private struct ConversationInputBar: View {
                                 }
                                 Text(preset.description)
                                     .foregroundColor(ShitterTheme.textSecondary)
-                                    .font(ShitterFont.monospaced(.caption))
+                                    .font(ShitterFont.styled(.caption))
                             }
                         }
                         .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -665,7 +756,6 @@ private struct ConversationInputBar: View {
                     }
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showExperimentalSheet) {
             NavigationStack {
@@ -674,7 +764,7 @@ private struct ConversationInputBar: View {
                         ProgressView().tint(ShitterTheme.accent)
                     } else if experimentalFeatures.isEmpty {
                         Text("No experimental features available")
-                            .font(ShitterFont.monospaced(.footnote))
+                            .font(ShitterFont.styled(.footnote))
                             .foregroundColor(ShitterTheme.textMuted)
                     } else {
                         List {
@@ -682,10 +772,10 @@ private struct ConversationInputBar: View {
                                 HStack(alignment: .top, spacing: 10) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(feature.displayName ?? feature.name)
-                                            .font(ShitterFont.monospaced(.subheadline))
-                                            .foregroundColor(.white)
+                                            .font(ShitterFont.styled(.subheadline))
+                                            .foregroundColor(ShitterTheme.textPrimary)
                                         Text(feature.description ?? feature.stage)
-                                            .font(ShitterFont.monospaced(.caption))
+                                            .font(ShitterFont.styled(.caption))
                                             .foregroundColor(ShitterTheme.textSecondary)
                                     }
                                     Spacer(minLength: 0)
@@ -722,7 +812,6 @@ private struct ConversationInputBar: View {
                     }
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showSkillsSheet) {
             NavigationStack {
@@ -731,7 +820,7 @@ private struct ConversationInputBar: View {
                         ProgressView().tint(ShitterTheme.accent)
                     } else if skills.isEmpty {
                         Text("No skills available for this workspace")
-                            .font(ShitterFont.monospaced(.footnote))
+                            .font(ShitterFont.styled(.footnote))
                             .foregroundColor(ShitterTheme.textMuted)
                     } else {
                         List {
@@ -739,20 +828,20 @@ private struct ConversationInputBar: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
                                         Text(skill.name)
-                                            .font(ShitterFont.monospaced(.subheadline))
-                                            .foregroundColor(.white)
+                                            .font(ShitterFont.styled(.subheadline))
+                                            .foregroundColor(ShitterTheme.textPrimary)
                                         Spacer()
                                         if skill.enabled {
                                             Text("enabled")
-                                                .font(ShitterFont.monospaced(.caption2))
+                                                .font(ShitterFont.styled(.caption2))
                                                 .foregroundColor(ShitterTheme.accent)
                                         }
                                     }
                                     Text(skill.description)
-                                        .font(ShitterFont.monospaced(.caption))
+                                        .font(ShitterFont.styled(.caption))
                                         .foregroundColor(ShitterTheme.textSecondary)
                                     Text(skill.path)
-                                        .font(ShitterFont.monospaced(.caption2))
+                                        .font(ShitterFont.styled(.caption2))
                                         .foregroundColor(ShitterTheme.textMuted)
                                 }
                                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -776,7 +865,6 @@ private struct ConversationInputBar: View {
                     }
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .alert("Rename Thread", isPresented: Binding(
             get: { showRenamePrompt },
@@ -812,24 +900,27 @@ private struct ConversationInputBar: View {
 
     private var composerRow: some View {
         HStack(alignment: .center, spacing: 8) {
-            Button { showAttachMenu = true } label: {
-                Image(systemName: "plus")
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .modifier(GlassCircleModifier())
+            if !voiceManager.isRecording && !voiceManager.isTranscribing && !isTurnActive {
+                Button { showAttachMenu = true } label: {
+                    Image(systemName: "plus")
+                        .font(.system(.body, weight: .semibold))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .modifier(GlassCircleModifier())
+                }
+                .transition(.scale.combined(with: .opacity))
             }
 
             HStack(spacing: 0) {
                 TextField("Message shitter...", text: $inputText, axis: .vertical)
                     .font(.system(.body))
-                    .foregroundColor(.white)
+                    .foregroundColor(ShitterTheme.textPrimary)
                     .lineLimit(1...5)
                     .focused(inputFocused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
-                    .padding(.leading, 14)
-                    .padding(.vertical, 8)
+                    .padding(.leading, 16)
+                    .padding(.vertical, 10)
 
                 if hasText {
                     Button {
@@ -856,13 +947,131 @@ private struct ConversationInputBar: View {
                             .foregroundColor(ShitterTheme.accent)
                     }
                     .padding(.trailing, 4)
+                } else if voiceManager.isRecording {
+                    AudioWaveformView(level: voiceManager.audioLevel)
+                        .frame(width: 48, height: 20)
+                    Button {
+                        Task {
+                            let auth = await serverManager.activeConnection?.getAuthToken()
+                            if let text = await voiceManager.stopAndTranscribe(
+                                authMethod: auth?.method, authToken: auth?.token
+                            ), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                inputText = text
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(.title2))
+                            .foregroundColor(ShitterTheme.accentStrong)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.trailing, 4)
+                } else if voiceManager.isTranscribing {
+                    ProgressView()
+                        .tint(ShitterTheme.accent)
+                        .padding(.trailing, 8)
+                } else {
+                    Button {
+                        Task {
+                            let granted = await voiceManager.requestMicPermission()
+                            guard granted else {
+                                showMicPermissionAlert = true
+                                return
+                            }
+                            voiceManager.startRecording()
+                        }
+                    } label: {
+                        Image(systemName: "mic.fill")
+                            .font(.system(.subheadline))
+                            .foregroundColor(ShitterTheme.textSecondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.trailing, 4)
                 }
             }
-            .frame(minHeight: 32)
-            .modifier(GlassCapsuleModifier())
+            .frame(minHeight: 36)
+            .modifier(GlassRoundedRectModifier(cornerRadius: 20))
+
+            if isTurnActive {
+                Button {
+                    Task { await serverManager.interrupt() }
+                } label: {
+                    Text("Cancel")
+                        .font(.system(.subheadline, weight: .medium))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
+                        .modifier(GlassCapsuleModifier())
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.86), value: isTurnActive)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
+    }
+
+    @ViewBuilder
+    private var contextBar: some View {
+        let rateLimits = serverManager.activeConnection?.rateLimits
+        let contextPct = contextPercent(thread: serverManager.activeThread)
+        let hasAnything = rateLimits?.primary != nil || rateLimits?.secondary != nil || contextPct != nil
+
+        if hasAnything {
+            HStack(spacing: 4) {
+                if let primary = rateLimits?.primary {
+                    RateLimitBadgeView(
+                        label: formatWindowLabel(primary),
+                        percent: normalizedPercent(primary.usedPercent)
+                    )
+                }
+                if let secondary = rateLimits?.secondary {
+                    RateLimitBadgeView(
+                        label: formatWindowLabel(secondary),
+                        percent: normalizedPercent(secondary.usedPercent)
+                    )
+                }
+                if let percent = contextPct {
+                    ContextBadgeView(percent: Int(percent), tint: contextTint(percent: percent))
+                }
+            }
+            .padding(.trailing, 40)
+        }
+    }
+
+    private func normalizedPercent(_ raw: Double) -> Int {
+        if raw > 1 { return min(Int(raw), 100) }
+        return min(Int(raw * 100), 100)
+    }
+
+    private func formatWindowLabel(_ window: RateLimitWindow) -> String {
+        guard let mins = window.windowDurationMins else { return "" }
+        if mins >= 1440 { return "\(mins / 1440)d" }
+        if mins >= 60 { return "\(mins / 60)h" }
+        return "\(mins)m"
+    }
+
+    private func contextPercent(thread: ThreadState?) -> Int64? {
+        guard let thread, let contextWindow = thread.modelContextWindow else { return nil }
+        let baseline: Int64 = 12_000
+        guard contextWindow > baseline else { return 0 }
+        let totalTokens = thread.contextTokensUsed ?? baseline
+        let effectiveWindow = contextWindow - baseline
+        let usedTokens = max(0, totalTokens - baseline)
+        let remainingTokens = max(0, effectiveWindow - usedTokens)
+        let percent = Int64((Double(remainingTokens) / Double(effectiveWindow) * 100).rounded())
+        return min(max(percent, 0), 100)
+    }
+
+    private func contextTint(percent: Int64) -> Color {
+        switch percent {
+        case ...15: return ShitterTheme.danger
+        case ...35: return ShitterTheme.warning
+        default: return ShitterTheme.accentStrong
+        }
     }
 
     private var slashSuggestionPopup: some View {
@@ -874,10 +1083,10 @@ private struct ConversationInputBar: View {
                     } label: {
                         HStack(spacing: 10) {
                             Text("/\(command.rawValue)")
-                                .font(ShitterFont.monospaced(.body))
-                                .foregroundColor(Color(hex: "#6EA676"))
+                                .font(ShitterFont.styled(.body))
+                                .foregroundColor(ShitterTheme.success)
                             Text(command.description)
-                                .font(ShitterFont.monospaced(.body))
+                                .font(ShitterFont.styled(.body))
                                 .foregroundColor(ShitterTheme.textSecondary)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
@@ -899,21 +1108,21 @@ private struct ConversationInputBar: View {
         suggestionPopup {
             if fileSearchLoading {
                 Text("Searching files...")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else if let fileSearchError, !fileSearchError.isEmpty {
                 Text(fileSearchError)
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else if fileSuggestions.isEmpty {
                 Text("No matches")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
@@ -929,8 +1138,8 @@ private struct ConversationInputBar: View {
                                     .font(.system(.caption))
                                     .foregroundColor(ShitterTheme.textSecondary)
                                 Text(suggestion.path)
-                                    .font(ShitterFont.monospaced(.footnote))
-                                    .foregroundColor(.white)
+                                    .font(ShitterFont.styled(.footnote))
+                                    .foregroundColor(ShitterTheme.textPrimary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
@@ -952,14 +1161,14 @@ private struct ConversationInputBar: View {
         suggestionPopup {
             if skillsLoading && skillSuggestions.isEmpty {
                 Text("Loading skills...")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else if skillSuggestions.isEmpty {
                 Text("No skills found")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
@@ -972,10 +1181,10 @@ private struct ConversationInputBar: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Text("$\(skill.name)")
-                                    .font(ShitterFont.monospaced(.footnote))
-                                    .foregroundColor(Color(hex: "#6EA676"))
+                                    .font(ShitterFont.styled(.footnote))
+                                    .foregroundColor(ShitterTheme.success)
                                 Text(skill.description)
-                                    .font(ShitterFont.monospaced(.footnote))
+                                    .font(ShitterFont.styled(.footnote))
                                     .foregroundColor(ShitterTheme.textSecondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
@@ -1621,13 +1830,17 @@ private func fuzzyScore(candidate: String, query: String) -> Int? {
     return queryIndex == normalizedQuery.endIndex ? score : nil
 }
 
+private let kDollarSign: UInt8 = 0x24
+private let kUnderscore: UInt8 = 0x5F
+private let kHyphen: UInt8 = 0x2D
+
 private func isMentionNameByte(_ byte: UInt8) -> Bool {
     switch byte {
-    case UInt8(ascii: "a")...UInt8(ascii: "z"),
-        UInt8(ascii: "A")...UInt8(ascii: "Z"),
-        UInt8(ascii: "0")...UInt8(ascii: "9"),
-        UInt8(ascii: "_"),
-        UInt8(ascii: "-"):
+    case 0x61...0x7A, // a-z
+        0x41...0x5A,  // A-Z
+        0x30...0x39,  // 0-9
+        kUnderscore,
+        kHyphen:
         return true
     default:
         return false
@@ -1646,7 +1859,7 @@ private func extractMentionNames(_ text: String) -> [String] {
     var mentions: [String] = []
     var index = 0
     while index < bytes.count {
-        guard bytes[index] == UInt8(ascii: "$") else {
+        guard bytes[index] == kDollarSign else {
             index += 1
             continue
         }
@@ -1795,7 +2008,7 @@ struct TypingIndicator: View {
     @State private var phase = 0
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(0..<3) { i in
+            ForEach(Array(0..<3), id: \.self) { i in
                 Circle()
                     .fill(ShitterTheme.accent)
                     .frame(width: 6, height: 6)
@@ -1845,3 +2058,10 @@ struct CameraView: UIViewControllerRepresentable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Conversation") {
+    ContentView()
+        .environmentObject(ShitterPreviewData.makeServerManager(messages: ShitterPreviewData.longConversation))
+}
+#endif

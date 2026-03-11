@@ -4,14 +4,33 @@ struct SessionListView: View {
     let server: DiscoveredServer
     let cwd: String
     var onSessionReady: ((DiscoveredServer, String) -> Void)?
+    private let autoLoadSessions: Bool
     @EnvironmentObject var serverManager: ServerManager
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
-    @State private var sessions: [ThreadSummary] = []
+    @State private var sessions: [ThreadSummary]
     @State private var nextCursor: String?
-    @State private var isLoading = true
+    @State private var isLoading: Bool
     @State private var errorMessage: String?
     @State private var resumingThreadId: String?
     @State private var navigateToConversation = false
+
+    init(
+        server: DiscoveredServer,
+        cwd: String,
+        onSessionReady: ((DiscoveredServer, String) -> Void)? = nil,
+        initialSessions: [ThreadSummary] = [],
+        autoLoadSessions: Bool = true
+    ) {
+        self.server = server
+        self.cwd = cwd
+        self.onSessionReady = onSessionReady
+        self.autoLoadSessions = autoLoadSessions
+        _sessions = State(initialValue: initialSessions)
+        _nextCursor = State(initialValue: nil)
+        _isLoading = State(initialValue: autoLoadSessions && initialSessions.isEmpty)
+        _errorMessage = State(initialValue: nil)
+        _resumingThreadId = State(initialValue: nil)
+    }
 
     private var conn: ServerConnection? {
         serverManager.connections[server.id]
@@ -26,7 +45,7 @@ struct SessionListView: View {
             } else if let err = errorMessage, sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text(err)
-                        .font(ShitterFont.monospaced(.caption))
+                        .font(ShitterFont.styled(.caption))
                         .foregroundColor(.red)
                     Button("Retry") { Task { await loadSessions() } }
                         .foregroundColor(ShitterTheme.accent)
@@ -37,20 +56,22 @@ struct SessionListView: View {
         }
         .navigationTitle(cwdLabel)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New Session") {
                     Task { await startNew() }
                 }
                 .foregroundColor(ShitterTheme.accent)
-                .font(ShitterFont.monospaced(.footnote))
+                .font(ShitterFont.styled(.footnote))
             }
         }
         .navigationDestination(isPresented: $navigateToConversation) {
             ConversationView()
         }
-        .task { await loadSessions() }
+        .task {
+            guard autoLoadSessions else { return }
+            await loadSessions()
+        }
     }
 
     private var cwdLabel: String {
@@ -61,7 +82,7 @@ struct SessionListView: View {
         List {
             if let err = errorMessage {
                 Text(err)
-                    .font(ShitterFont.monospaced(.caption))
+                    .font(ShitterFont.styled(.caption))
                     .foregroundColor(.red)
                     .padding(.vertical, 6)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -70,11 +91,11 @@ struct SessionListView: View {
             if sessions.isEmpty {
                 VStack(spacing: 12) {
                     Text("No previous sessions")
-                        .font(ShitterFont.monospaced(.subheadline))
+                        .font(ShitterFont.styled(.subheadline))
                         .foregroundColor(ShitterTheme.textMuted)
                     Text("Start a new session to begin")
-                        .font(ShitterFont.monospaced(.caption))
-                        .foregroundColor(Color(hex: "#444444"))
+                        .font(ShitterFont.styled(.caption))
+                        .foregroundColor(ShitterTheme.textMuted)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
@@ -94,7 +115,7 @@ struct SessionListView: View {
             if nextCursor != nil {
                 Button("Load more") { Task { await loadMore() } }
                     .foregroundColor(ShitterTheme.accent)
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .frame(maxWidth: .infinity)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
@@ -106,8 +127,8 @@ struct SessionListView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(session.preview.isEmpty ? "Untitled session" : session.preview)
-                    .font(ShitterFont.monospaced(.footnote))
-                    .foregroundColor(.white)
+                    .font(ShitterFont.styled(.footnote))
+                    .foregroundColor(ShitterTheme.textPrimary)
                     .lineLimit(2)
                 Spacer(minLength: 0)
                 if resumingThreadId == session.id {
@@ -118,10 +139,10 @@ struct SessionListView: View {
             }
             HStack(spacing: 8) {
                 Text(relativeDate(session.updatedAt))
-                    .font(ShitterFont.monospaced(.caption))
+                    .font(ShitterFont.styled(.caption))
                     .foregroundColor(ShitterTheme.textSecondary)
                 Text(session.modelProvider)
-                    .font(ShitterFont.monospaced(.caption2))
+                    .font(ShitterFont.styled(.caption2))
                     .foregroundColor(ShitterTheme.accent)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -180,7 +201,7 @@ struct SessionListView: View {
         guard !isResuming else { return }
         workDir = cwd
         let model = (serverManager.activeConnection?.models.first(where: { $0.isDefault })?.id)
-        let startedKey = await serverManager.startThread(serverId: server.id, cwd: cwd, model: model)
+        let startedKey = try? await serverManager.startThread(serverId: server.id, cwd: cwd, model: model)
         if startedKey != nil {
             _ = RecentDirectoryStore.shared.record(path: cwd, for: server.id)
         }
@@ -191,3 +212,20 @@ struct SessionListView: View {
         resumingThreadId != nil
     }
 }
+
+#if DEBUG
+#Preview("Session List") {
+    ShitterPreviewScene(
+        serverManager: ShitterPreviewData.makeServerManager(includeActiveThread: false)
+    ) {
+        NavigationStack {
+            SessionListView(
+                server: ShitterPreviewData.sampleServer,
+                cwd: ShitterPreviewData.sampleCwd,
+                initialSessions: ShitterPreviewData.sampleThreadSummaries,
+                autoLoadSessions: false
+            )
+        }
+    }
+}
+#endif

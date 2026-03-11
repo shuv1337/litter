@@ -1,9 +1,9 @@
 diff --git a/codex-rs/core/src/exec.rs b/codex-rs/core/src/exec.rs
-index 1e0e59d4e..1debd935d 100644
+index 19d56d71d..800d2e3bb 100644
 --- a/codex-rs/core/src/exec.rs
 +++ b/codex-rs/core/src/exec.rs
-@@ -36,6 +36,21 @@ use crate::text_encoding::bytes_to_string_smart;
- use codex_network_proxy::NetworkProxy;
+@@ -40,6 +40,21 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
+ use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
  use codex_utils_pty::process_group::kill_child_process_group;
  
 +#[cfg(target_os = "ios")]
@@ -24,7 +24,7 @@ index 1e0e59d4e..1debd935d 100644
  pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
  
  // Hardcode these since it does not seem worth including the libc crate just
-@@ -713,28 +728,60 @@ async fn exec(
+@@ -781,31 +796,63 @@ async fn exec(
          network.apply_to_env(&mut env);
      }
  
@@ -40,7 +40,7 @@ index 1e0e59d4e..1debd935d 100644
 -        args: args.into(),
 -        arg0: arg0_ref,
 -        cwd,
--        sandbox_policy,
+-        network_sandbox_policy,
 -        // The environment already has attempt-scoped proxy settings from
 -        // apply_to_env_for_attempt above. Passing network here would reapply
 -        // non-attempt proxy vars and drop attempt correlation metadata.
@@ -49,7 +49,8 @@ index 1e0e59d4e..1debd935d 100644
 -        env,
 -    })
 -    .await?;
--    consume_truncated_output(child, expiration, stdout_stream).await
+-    if let Some(after_spawn) = after_spawn {
+-        after_spawn();
 +    #[cfg(target_os = "ios")]
 +    {
 +        let (code, data) = IOS_EXEC_HOOK
@@ -93,7 +94,7 @@ index 1e0e59d4e..1debd935d 100644
 +            args: args.into(),
 +            arg0: arg0_ref,
 +            cwd,
-+            sandbox_policy,
++            network_sandbox_policy,
 +            // The environment already has attempt-scoped proxy settings from
 +            // apply_to_env_for_attempt above. Passing network here would reapply
 +            // non-attempt proxy vars and drop attempt correlation metadata.
@@ -102,32 +103,173 @@ index 1e0e59d4e..1debd935d 100644
 +            env,
 +        })
 +        .await?;
++        if let Some(after_spawn) = after_spawn {
++            after_spawn();
++        }
 +        consume_truncated_output(child, expiration, stdout_stream).await
-+    }
+     }
+-    consume_truncated_output(child, expiration, stdout_stream).await
  }
  
- /// Consumes the output of a child process, truncating it so it is suitable for
+ #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 diff --git a/codex-rs/core/src/unified_exec/process_manager.rs b/codex-rs/core/src/unified_exec/process_manager.rs
-index 694531646..77e5d8406 100644
+index 24214ae66..355efed55 100644
 --- a/codex-rs/core/src/unified_exec/process_manager.rs
 +++ b/codex-rs/core/src/unified_exec/process_manager.rs
-@@ -163,6 +163,12 @@ impl UnifiedExecProcessManager {
+@@ -164,21 +164,161 @@ impl UnifiedExecProcessManager {
              .workdir
              .clone()
              .unwrap_or_else(|| context.turn.cwd.clone());
+-        let process = self
+-            .open_session_with_sandbox(&request, cwd.clone(), context)
 +
 +        #[cfg(target_os = "ios")]
 +        {
 +            return self.exec_command_ios(&request, cwd, context).await;
 +        }
 +
-         let process = self
-             .open_session_with_sandbox(&request, cwd.clone(), context)
++        #[cfg(not(target_os = "ios"))]
++        {
++            let process = self
++                .open_session_with_sandbox(&request, cwd.clone(), context)
++                .await;
++
++            let (process, mut deferred_network_approval) = match process {
++                Ok((process, deferred_network_approval)) => {
++                    (Arc::new(process), deferred_network_approval)
++                }
++                Err(err) => {
++                    self.release_process_id(&request.process_id).await;
++                    return Err(err);
++                }
++            };
++
++            let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
++            let event_ctx = ToolEventCtx::new(
++                context.session.as_ref(),
++                context.turn.as_ref(),
++                &context.call_id,
++                None,
++            );
++            let emitter = ToolEmitter::unified_exec(
++                &request.command,
++                cwd.clone(),
++                ExecCommandSource::UnifiedExecStartup,
++                Some(request.process_id.clone()),
++            );
++            emitter.emit(event_ctx, ToolEventStage::Begin).await;
++
++            start_streaming_output(&process, context, Arc::clone(&transcript));
++            let max_tokens = resolve_max_tokens(request.max_output_tokens);
++            let yield_time_ms = clamp_yield_time(request.yield_time_ms);
++
++            let start = Instant::now();
++            // For the initial exec_command call, we both stream output to events
++            // (via start_streaming_output above) and collect a snapshot here for
++            // the tool response body.
++            let OutputHandles {
++                output_buffer,
++                output_notify,
++                output_closed,
++                output_closed_notify,
++                cancellation_token,
++            } = process.output_handles();
++            let deadline = start + Duration::from_millis(yield_time_ms);
++            let collected = Self::collect_output_until_deadline(
++                &output_buffer,
++                &output_notify,
++                &output_closed,
++                &output_closed_notify,
++                &cancellation_token,
++                deadline,
++            )
              .await;
-@@ -294,6 +300,85 @@ impl UnifiedExecProcessManager {
-         Ok(response)
-     }
++            let wall_time = Instant::now().saturating_duration_since(start);
++
++            let text = String::from_utf8_lossy(&collected).to_string();
++            let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
++            let exit_code = process.exit_code();
++            let has_exited = process.has_exited() || exit_code.is_some();
++            let chunk_id = generate_chunk_id();
++            let process_id = request.process_id.clone();
++
++            if has_exited {
++                // Short-lived command: emit ExecCommandEnd immediately using the
++                // same helper as the background watcher, so all end events share
++                // one implementation.
++                let exit = exit_code.unwrap_or(-1);
++                emit_exec_end_for_unified_exec(
++                    Arc::clone(&context.session),
++                    Arc::clone(&context.turn),
++                    context.call_id.clone(),
++                    request.command.clone(),
++                    cwd.clone(),
++                    Some(process_id),
++                    Arc::clone(&transcript),
++                    output.clone(),
++                    exit,
++                    wall_time,
++                )
++                .await;
  
+-        let (process, mut deferred_network_approval) = match process {
+-            Ok((process, deferred_network_approval)) => {
+-                (Arc::new(process), deferred_network_approval)
+-            }
+-            Err(err) => {
+                 self.release_process_id(&request.process_id).await;
+-                return Err(err);
+-            }
+-        };
++                finish_deferred_network_approval(
++                    context.session.as_ref(),
++                    deferred_network_approval.take(),
++                )
++                .await;
++                process.check_for_sandbox_denial_with_text(&text).await?;
++            } else {
++                // Long-lived command: persist the process so write_stdin can reuse
++                // it, and register a background watcher that will emit
++                // ExecCommandEnd when the PTY eventually exits (even if no further
++                // tool calls are made).
++                let network_approval_id = deferred_network_approval
++                    .as_ref()
++                    .map(|deferred| deferred.registration_id().to_string());
++                self.store_process(
++                    Arc::clone(&process),
++                    context,
++                    &request.command,
++                    cwd.clone(),
++                    start,
++                    process_id,
++                    request.tty,
++                    network_approval_id,
++                    Arc::clone(&transcript),
++                )
++                .await;
++            };
++
++            let original_token_count = approx_token_count(&text);
++            let response = UnifiedExecResponse {
++                event_call_id: context.call_id.clone(),
++                chunk_id,
++                wall_time,
++                output,
++                raw_output: collected,
++                process_id: if has_exited {
++                    None
++                } else {
++                    Some(request.process_id.clone())
++                },
++                exit_code,
++                original_token_count: Some(original_token_count),
++                session_command: Some(request.command.clone()),
++            };
++
++            return Ok(response);
++        }
++    }
++
 +    #[cfg(target_os = "ios")]
 +    async fn exec_command_ios(
 +        &self,
@@ -142,22 +284,40 @@ index 694531646..77e5d8406 100644
 +            &context.turn.shell_environment_policy,
 +            Some(context.session.conversation_id),
 +        );
-+
-+        let event_ctx = ToolEventCtx::new(
-+            context.session.as_ref(),
-+            context.turn.as_ref(),
-+            &context.call_id,
-+            None,
-+        );
-+        let emitter = ToolEmitter::unified_exec(
-+            &request.command,
-+            cwd.clone(),
-+            ExecCommandSource::UnifiedExecStartup,
-+            Some(request.process_id.clone()),
-+        );
-+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
-+
-+        let start = Instant::now();
+ 
+-        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+         let event_ctx = ToolEventCtx::new(
+             context.session.as_ref(),
+             context.turn.as_ref(),
+@@ -193,106 +333,54 @@ impl UnifiedExecProcessManager {
+         );
+         emitter.emit(event_ctx, ToolEventStage::Begin).await;
+ 
+-        start_streaming_output(&process, context, Arc::clone(&transcript));
+-        let max_tokens = resolve_max_tokens(request.max_output_tokens);
+-        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
+-
+         let start = Instant::now();
+-        // For the initial exec_command call, we both stream output to events
+-        // (via start_streaming_output above) and collect a snapshot here for
+-        // the tool response body.
+-        let OutputHandles {
+-            output_buffer,
+-            output_notify,
+-            output_closed,
+-            output_closed_notify,
+-            cancellation_token,
+-        } = process.output_handles();
+-        let deadline = start + Duration::from_millis(yield_time_ms);
+-        let collected = Self::collect_output_until_deadline(
+-            &output_buffer,
+-            &output_notify,
+-            &output_closed,
+-            &output_closed_notify,
+-            &cancellation_token,
+-            deadline,
+-        )
+-        .await;
 +        let (exit_code, raw_output) = tokio::task::spawn_blocking({
 +            let command = request.command.clone();
 +            let cwd = cwd.clone();
@@ -170,12 +330,64 @@ index 694531646..77e5d8406 100644
 +        })
 +        .await
 +        .unwrap_or((-1, b"spawn_blocking panicked\n".to_vec()));
-+        let wall_time = Instant::now().saturating_duration_since(start);
-+
+         let wall_time = Instant::now().saturating_duration_since(start);
+ 
+-        let text = String::from_utf8_lossy(&collected).to_string();
 +        let text = String::from_utf8_lossy(&raw_output).to_string();
 +        let max_tokens = resolve_max_tokens(request.max_output_tokens);
-+        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-+
+         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+-        let exit_code = process.exit_code();
+-        let has_exited = process.has_exited() || exit_code.is_some();
+-        let chunk_id = generate_chunk_id();
+-        let process_id = request.process_id.clone();
+-
+-        if has_exited {
+-            // Short‑lived command: emit ExecCommandEnd immediately using the
+-            // same helper as the background watcher, so all end events share
+-            // one implementation.
+-            let exit = exit_code.unwrap_or(-1);
+-            emit_exec_end_for_unified_exec(
+-                Arc::clone(&context.session),
+-                Arc::clone(&context.turn),
+-                context.call_id.clone(),
+-                request.command.clone(),
+-                cwd.clone(),
+-                Some(process_id),
+-                Arc::clone(&transcript),
+-                output.clone(),
+-                exit,
+-                wall_time,
+-            )
+-            .await;
+ 
+-            self.release_process_id(&request.process_id).await;
+-            finish_deferred_network_approval(
+-                context.session.as_ref(),
+-                deferred_network_approval.take(),
+-            )
+-            .await;
+-            process.check_for_sandbox_denial_with_text(&text).await?;
+-        } else {
+-            // Long‑lived command: persist the process so write_stdin can reuse
+-            // it, and register a background watcher that will emit
+-            // ExecCommandEnd when the PTY eventually exits (even if no further
+-            // tool calls are made).
+-            let network_approval_id = deferred_network_approval
+-                .as_ref()
+-                .map(|deferred| deferred.registration_id().to_string());
+-            self.store_process(
+-                Arc::clone(&process),
+-                context,
+-                &request.command,
+-                cwd.clone(),
+-                start,
+-                process_id,
+-                request.tty,
+-                network_approval_id,
+-                Arc::clone(&transcript),
+-            )
+-            .await;
+-        };
 +        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
 +        emit_exec_end_for_unified_exec(
 +            Arc::clone(&context.session),
@@ -192,21 +404,31 @@ index 694531646..77e5d8406 100644
 +        .await;
 +
 +        self.release_process_id(&request.process_id).await;
-+
-+        let original_token_count = approx_token_count(&text);
+ 
+         let original_token_count = approx_token_count(&text);
+-        let response = UnifiedExecResponse {
 +        Ok(UnifiedExecResponse {
-+            event_call_id: context.call_id.clone(),
+             event_call_id: context.call_id.clone(),
+-            chunk_id,
 +            chunk_id: generate_chunk_id(),
-+            wall_time,
-+            output,
+             wall_time,
+             output,
+-            raw_output: collected,
+-            process_id: if has_exited {
+-                None
+-            } else {
+-                Some(request.process_id.clone())
+-            },
+-            exit_code,
 +            raw_output,
 +            process_id: None,
 +            exit_code: Some(exit_code),
-+            original_token_count: Some(original_token_count),
-+            session_command: Some(request.command.clone()),
+             original_token_count: Some(original_token_count),
+             session_command: Some(request.command.clone()),
+-        };
+-
+-        Ok(response)
 +        })
-+    }
-+
+     }
+ 
      pub(crate) async fn write_stdin(
-         &self,
-         request: WriteStdinRequest<'_>,

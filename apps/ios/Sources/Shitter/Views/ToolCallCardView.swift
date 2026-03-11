@@ -17,7 +17,7 @@ struct ToolCallCardView: View {
                     .foregroundColor(kindAccent)
 
                 Text(model.summary)
-                    .font(ShitterFont.monospaced(.caption))
+                    .font(ShitterFont.styled(.caption))
                     .foregroundColor(ShitterTheme.textSystem)
                     .lineLimit(1)
 
@@ -27,7 +27,7 @@ struct ToolCallCardView: View {
 
                 if let duration = model.duration, !duration.isEmpty {
                     Text(duration)
-                        .font(ShitterFont.monospaced(.caption2))
+                        .font(ShitterFont.styled(.caption2))
                         .foregroundColor(ShitterTheme.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -74,7 +74,7 @@ struct ToolCallCardView: View {
 
     private var statusChip: some View {
         Text(model.status.label)
-            .font(ShitterFont.monospaced(.caption2, weight: .semibold))
+            .font(ShitterFont.styled(.caption2, weight: .semibold))
             .foregroundColor(statusChipText)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -85,32 +85,32 @@ struct ToolCallCardView: View {
     private var kindAccent: Color {
         switch model.kind {
         case .commandExecution, .commandOutput:
-            return Color(hex: "#C7B072")
+            return ShitterTheme.adaptive(light: "#8B6914", dark: "#C7B072")
         case .fileChange:
-            return Color(hex: "#7CAFD9")
+            return ShitterTheme.adaptive(light: "#2B6CB0", dark: "#7CAFD9")
         case .fileDiff:
-            return Color(hex: "#6FA9D8")
+            return ShitterTheme.adaptive(light: "#2563AA", dark: "#6FA9D8")
         case .mcpToolCall:
-            return Color(hex: "#C797D8")
+            return ShitterTheme.adaptive(light: "#8B3FAF", dark: "#C797D8")
         case .mcpToolProgress:
-            return Color(hex: "#D3A85E")
+            return ShitterTheme.adaptive(light: "#9A6B20", dark: "#D3A85E")
         case .webSearch:
-            return Color(hex: "#88C6C7")
+            return ShitterTheme.adaptive(light: "#3B8A8B", dark: "#88C6C7")
         case .collaboration:
-            return Color(hex: "#9BCF8E")
+            return ShitterTheme.adaptive(light: "#3D7A30", dark: "#9BCF8E")
         case .imageView:
-            return Color(hex: "#E3A66F")
+            return ShitterTheme.adaptive(light: "#B5712B", dark: "#E3A66F")
         }
     }
 
     private var statusChipBackground: Color {
         switch model.status {
         case .completed:
-            return Color(hex: "#6EA676").opacity(0.2)
+            return ShitterTheme.success.opacity(0.2)
         case .inProgress:
-            return Color(hex: "#E2A644").opacity(0.2)
+            return ShitterTheme.warning.opacity(0.2)
         case .failed:
-            return Color(hex: "#FF5555").opacity(0.2)
+            return ShitterTheme.danger.opacity(0.2)
         case .unknown:
             return ShitterTheme.surfaceLight.opacity(0.7)
         }
@@ -119,11 +119,11 @@ struct ToolCallCardView: View {
     private var statusChipText: Color {
         switch model.status {
         case .completed:
-            return Color(hex: "#6EA676")
+            return ShitterTheme.success
         case .inProgress:
-            return Color(hex: "#E2A644")
+            return ShitterTheme.warning
         case .failed:
-            return Color(hex: "#FF5555")
+            return ShitterTheme.danger
         case .unknown:
             return ShitterTheme.textSecondary
         }
@@ -140,10 +140,10 @@ struct ToolCallCardView: View {
                         ForEach(identifiedKeyValueEntries(entries)) { entry in
                             HStack(alignment: .top, spacing: 8) {
                                 Text(entry.value.key + ":")
-                                    .font(ShitterFont.monospaced(.caption2, weight: .semibold))
+                                    .font(ShitterFont.styled(.caption2, weight: .semibold))
                                     .foregroundColor(ShitterTheme.textSecondary)
                                 Text(entry.value.value)
-                                    .font(ShitterFont.monospaced(.caption2))
+                                    .font(ShitterFont.styled(.caption2))
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -171,10 +171,10 @@ struct ToolCallCardView: View {
                         ForEach(identifiedTextItems(items, prefix: "list")) { item in
                             HStack(alignment: .top, spacing: 6) {
                                 Text("•")
-                                    .font(ShitterFont.monospaced(.caption))
+                                    .font(ShitterFont.styled(.caption))
                                     .foregroundColor(ShitterTheme.textSecondary)
                                 Text(item.value)
-                                    .font(ShitterFont.monospaced(.caption))
+                                    .font(ShitterFont.styled(.caption))
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                             }
@@ -198,7 +198,7 @@ struct ToolCallCardView: View {
                                     .frame(width: 6, height: 6)
                                     .padding(.top, 5)
                                 Text(item.value)
-                                    .font(ShitterFont.monospaced(.caption))
+                                    .font(ShitterFont.styled(.caption))
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -215,7 +215,7 @@ struct ToolCallCardView: View {
 
     private func sectionLabel(_ label: String) -> some View {
         Text(label.uppercased())
-            .font(ShitterFont.monospaced(.caption2, weight: .bold))
+            .font(ShitterFont.styled(.caption2, weight: .bold))
             .foregroundColor(ShitterTheme.textSecondary)
     }
 
@@ -281,3 +281,13 @@ private struct IndexedValue<Value>: Identifiable {
     let index: Int
     let value: Value
 }
+
+#if DEBUG
+#Preview("Tool Call Card") {
+    ZStack {
+        ShitterTheme.backgroundGradient.ignoresSafeArea()
+        ToolCallCardView(model: ShitterPreviewData.sampleToolCallModel)
+            .padding(20)
+    }
+}
+#endif

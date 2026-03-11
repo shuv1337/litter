@@ -23,13 +23,30 @@ final class NetworkDiscovery: ObservableObject {
 
     private var scanTask: Task<Void, Never>?
     private var activeScanID = UUID()
+    private var networkServerLastSeen: [String: Date] = [:]
+
+    private let cacheKey = "litter.discovery.networkServers.v1"
+    private let cacheRetention: TimeInterval = 7 * 24 * 60 * 60
+
+    private struct CachedNetworkServer: Codable {
+        let id: String
+        let name: String
+        let hostname: String
+        let port: UInt16?
+        let source: String
+        let hasCodexServer: Bool
+        let wakeMAC: String?
+        let lastSeenAt: TimeInterval
+    }
 
     func startScanning() {
         stopScanning()
         let scanID = UUID()
         activeScanID = scanID
 
-        servers = []
+        let cachedNetworkServers = loadCachedNetworkServers()
+        let retainedNetworkServers = servers.filter { $0.source != .local }
+        servers = Self.mergeNetworkServers(cachedNetworkServers + retainedNetworkServers)
         isScanning = true
         if OnDeviceCodexFeature.isEnabled {
             servers.append(DiscoveredServer(
@@ -156,16 +173,20 @@ final class NetworkDiscovery: ObservableObject {
     }
 
     private func applyReachabilityResults(_ reachable: [CandidateReachability]) {
+        guard !reachable.isEmpty else { return }
+        let now = Date()
         for state in reachable.sorted(by: { Self.candidateSortOrder(lhs: $0.candidate, rhs: $1.candidate) }) {
             let candidate = state.candidate
             let id = "network-\(candidate.ip)"
+            networkServerLastSeen[id] = now
             let discovered = DiscoveredServer(
                 id: id,
                 name: candidate.name ?? candidate.ip,
                 hostname: candidate.ip,
                 port: state.codexPort,
                 source: candidate.source,
-                hasCodexServer: state.codexPort != nil
+                hasCodexServer: state.codexPort != nil,
+                wakeMAC: servers.first(where: { $0.id == id })?.wakeMAC
             )
 
             if let index = servers.firstIndex(where: { $0.id == id }) {
@@ -182,6 +203,7 @@ final class NetworkDiscovery: ObservableObject {
                 servers.append(discovered)
             }
         }
+        saveCachedNetworkServers()
     }
 
     nonisolated private static func candidateSortOrder(lhs: DiscoveryCandidate, rhs: DiscoveryCandidate) -> Bool {
@@ -201,6 +223,96 @@ final class NetworkDiscovery: ObservableObject {
         case .tailscale: return 1
         default: return 2
         }
+    }
+
+    private static func mergeNetworkServers(_ candidates: [DiscoveredServer]) -> [DiscoveredServer] {
+        var merged: [String: DiscoveredServer] = [:]
+        for candidate in candidates where candidate.source != .local {
+            if let existing = merged[candidate.id] {
+                let betterSource = sourceRank(candidate.source) < sourceRank(existing.source)
+                let hasCodexUpgrade = candidate.hasCodexServer && !existing.hasCodexServer
+                let betterCodexPort = candidate.hasCodexServer && existing.hasCodexServer && candidate.port != existing.port
+                let betterName = existing.name == existing.hostname && candidate.name != candidate.hostname
+                if betterSource || hasCodexUpgrade || betterCodexPort || betterName {
+                    merged[candidate.id] = candidate
+                }
+            } else {
+                merged[candidate.id] = candidate
+            }
+        }
+        return Array(merged.values).sorted { lhs, rhs in
+            let lhsRank = sourceRank(lhs.source)
+            let rhsRank = sourceRank(rhs.source)
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func loadCachedNetworkServers() -> [DiscoveredServer] {
+        guard let data = UserDefaults.standard.data(forKey: cacheKey) else { return [] }
+        let decoder = JSONDecoder()
+        guard let cached = try? decoder.decode([CachedNetworkServer].self, from: data) else {
+            UserDefaults.standard.removeObject(forKey: cacheKey)
+            return []
+        }
+
+        let now = Date()
+        let maxAge = cacheRetention
+        var pruned: [CachedNetworkServer] = []
+        var loaded: [DiscoveredServer] = []
+        networkServerLastSeen.removeAll(keepingCapacity: true)
+
+        for entry in cached {
+            guard now.timeIntervalSince1970 - entry.lastSeenAt <= maxAge else { continue }
+            let source = ServerSource.from(entry.source)
+            guard source != .local else { continue }
+            let server = DiscoveredServer(
+                id: entry.id,
+                name: entry.name,
+                hostname: entry.hostname,
+                port: entry.port,
+                source: source,
+                hasCodexServer: entry.hasCodexServer,
+                wakeMAC: entry.wakeMAC
+            )
+            loaded.append(server)
+            pruned.append(entry)
+            networkServerLastSeen[entry.id] = Date(timeIntervalSince1970: entry.lastSeenAt)
+        }
+
+        if pruned.count != cached.count {
+            persistCachedNetworkServers(pruned)
+        }
+
+        return loaded
+    }
+
+    private func saveCachedNetworkServers() {
+        let now = Date()
+        let cached = servers
+            .filter { $0.source != .local }
+            .map { server in
+                let lastSeen = networkServerLastSeen[server.id] ?? now
+                return CachedNetworkServer(
+                    id: server.id,
+                    name: server.name,
+                    hostname: server.hostname,
+                    port: server.port,
+                    source: server.source.rawString,
+                    hasCodexServer: server.hasCodexServer,
+                    wakeMAC: server.wakeMAC,
+                    lastSeenAt: lastSeen.timeIntervalSince1970
+                )
+            }
+        persistCachedNetworkServers(cached)
+    }
+
+    private func persistCachedNetworkServers(_ cached: [CachedNetworkServer]) {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(cached) else { return }
+        UserDefaults.standard.set(data, forKey: cacheKey)
     }
 
     nonisolated private static func mergeCandidates(
@@ -236,11 +348,13 @@ final class NetworkDiscovery: ObservableObject {
                 switch state {
                 case .ready:
                     if resumed.setTrue() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         cont.resume(returning: true)
                     }
                 case .failed, .cancelled:
                     if resumed.setTrue() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         cont.resume(returning: false)
                     }
@@ -251,6 +365,7 @@ final class NetworkDiscovery: ObservableObject {
             connection.start(queue: .global(qos: .utility))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 if resumed.setTrue() {
+                    connection.stateUpdateHandler = nil
                     connection.cancel()
                     cont.resume(returning: false)
                 }

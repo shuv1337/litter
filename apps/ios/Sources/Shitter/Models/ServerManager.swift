@@ -64,6 +64,11 @@ final class ServerManager: ObservableObject {
     private var threadTurnCounts: [ThreadKey: Int] = [:]
     private var agentDirectory = AgentDirectory()
 
+    private struct PersistedContextUsageSnapshot: Decodable {
+        let contextTokens: Int64?
+        let modelContextWindow: Int64?
+    }
+
     private struct AgentDirectoryEntry: Equatable {
         var nickname: String?
         var role: String?
@@ -241,14 +246,20 @@ final class ServerManager: ObservableObject {
 
     func addServer(_ server: DiscoveredServer, target: ConnectionTarget) async {
         if let existing = connections[server.id] {
-            configureConnectionCallbacks(existing, serverId: server.id)
-            if !existing.isConnected {
-                await existing.connect()
-                if existing.isConnected {
-                    await refreshSessions(for: server.id)
+            if existing.server == server && existing.target == target {
+                configureConnectionCallbacks(existing, serverId: server.id)
+                if !existing.isConnected {
+                    await existing.connect()
+                    if existing.isConnected {
+                        await refreshSessions(for: server.id)
+                    }
                 }
+                return
             }
-            return
+
+            existing.disconnect()
+            connections.removeValue(forKey: server.id)
+            connectionSubscriptions.removeValue(forKey: server.id)
         }
 
         let conn = ServerConnection(server: server, target: target)
@@ -281,6 +292,13 @@ final class ServerManager: ObservableObject {
     }
 
     func removeServer(id: String) {
+        if let conn = connections[id] {
+            if conn.target == .local {
+                Task { await CodexBridge.shared.stop() }
+            } else if conn.server.source == .ssh {
+                Task { await SSHSessionManager.shared.stopRemoteServer() }
+            }
+        }
         connections[id]?.disconnect()
         connections.removeValue(forKey: id)
         connectionSubscriptions.removeValue(forKey: id)
@@ -329,47 +347,50 @@ final class ServerManager: ObservableObject {
         model: String? = nil,
         approvalPolicy: String = "never",
         sandboxMode: String? = nil
-    ) async -> ThreadKey? {
-        guard let conn = connections[serverId] else { return nil }
-        do {
-            let resp = try await conn.startThread(
-                cwd: cwd,
-                model: model,
-                approvalPolicy: approvalPolicy,
-                sandboxMode: sandboxMode
-            )
-            let threadId = resp.thread.id
-            let key = ThreadKey(serverId: serverId, threadId: threadId)
-            let state = ThreadState(
-                serverId: serverId,
-                threadId: threadId,
-                serverName: conn.server.name,
-                serverSource: conn.server.source
-            )
-            state.cwd = cwd
-            state.modelProvider = resp.modelProvider ?? resp.model
-            state.parentThreadId = sanitizedLineageId(resp.thread.parentThreadId)
-            state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
-            state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
-            state.agentRole = sanitizedLineageId(resp.thread.agentRole)
-            upsertAgentDirectory(
-                serverId: serverId,
-                threadId: threadId,
-                agentId: resp.thread.agentId,
-                nickname: state.agentNickname,
-                role: state.agentRole
-            )
-            state.updatedAt = Date()
-            threads[key] = state
-            threadTurnCounts[key] = 0
-            liveItemMessageIndices[key] = nil
-            liveTurnDiffMessageIndices[key] = nil
-            observeThread(state)
-            activeThreadKey = key
-            return key
-        } catch {
-            return nil
+    ) async throws -> ThreadKey {
+        guard let conn = connections[serverId] else {
+            throw NSError(domain: "Shitter", code: 1, userInfo: [NSLocalizedDescriptionKey: "No connection for server"])
         }
+        let resp = try await conn.startThread(
+            cwd: cwd,
+            model: model,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+        let threadId = resp.thread.id
+        let key = ThreadKey(serverId: serverId, threadId: threadId)
+        let state = ThreadState(
+            serverId: serverId,
+            threadId: threadId,
+            serverName: conn.server.name,
+            serverSource: conn.server.source
+        )
+        state.cwd = resp.cwd
+        state.model = resp.model
+        state.modelProvider = resp.modelProvider ?? resp.model
+        state.reasoningEffort = resp.reasoningEffort
+        state.rolloutPath = resp.thread.path
+        state.parentThreadId = sanitizedLineageId(resp.thread.parentThreadId)
+        state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
+        state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
+        state.agentRole = sanitizedLineageId(resp.thread.agentRole)
+        upsertAgentDirectory(
+            serverId: serverId,
+            threadId: threadId,
+            agentId: resp.thread.agentId,
+            nickname: state.agentNickname,
+            role: state.agentRole
+        )
+        state.updatedAt = Date()
+        threads[key] = state
+        threadTurnCounts[key] = 0
+        liveItemMessageIndices[key] = nil
+        liveTurnDiffMessageIndices[key] = nil
+        observeThread(state)
+        activeThreadKey = key
+        await refreshThreadContextWindow(for: key, cwd: resp.cwd)
+        await refreshPersistedContextUsage(for: key)
+        return key
     }
 
     func resumeThread(
@@ -406,8 +427,11 @@ final class ServerManager: ObservableObject {
             threadTurnCounts[key] = resp.thread.turns.count
             liveItemMessageIndices[key] = nil
             liveTurnDiffMessageIndices[key] = nil
-            state.cwd = cwd
+            state.cwd = resp.cwd
+            state.model = resp.model
             state.modelProvider = resp.modelProvider ?? resp.model
+            state.reasoningEffort = resp.reasoningEffort
+            state.rolloutPath = resp.thread.path ?? state.rolloutPath
             state.parentThreadId = sanitizedLineageId(resp.thread.parentThreadId)
             state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
             state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
@@ -422,6 +446,8 @@ final class ServerManager: ObservableObject {
             state.status = .ready
             state.updatedAt = Date()
             activeThreadKey = key
+            await refreshThreadContextWindow(for: key, cwd: resp.cwd)
+            await refreshPersistedContextUsage(for: key)
             return true
         } catch {
             state.status = .error(error.localizedDescription)
@@ -445,6 +471,9 @@ final class ServerManager: ObservableObject {
             )
         } else {
             activeThreadKey = key
+            let cwd = threads[key]?.cwd ?? "/tmp"
+            await refreshThreadContextWindow(for: key, cwd: cwd)
+            await refreshPersistedContextUsage(for: key)
         }
     }
 
@@ -490,7 +519,10 @@ final class ServerManager: ObservableObject {
         liveTurnDiffMessageIndices[forkKey] = nil
         forkedState.cwd = response.cwd
         forkedState.preview = sourceThread.preview
+        forkedState.model = response.model
         forkedState.modelProvider = response.modelProvider ?? response.model
+        forkedState.reasoningEffort = response.reasoningEffort
+        forkedState.rolloutPath = response.thread.path
         forkedState.parentThreadId = sanitizedLineageId(response.thread.parentThreadId) ?? sourceKey.threadId
         forkedState.rootThreadId = sanitizedLineageId(response.thread.rootThreadId)
             ?? sourceThread.rootThreadId
@@ -510,6 +542,8 @@ final class ServerManager: ObservableObject {
         threads[forkKey] = forkedState
         observeThread(forkedState)
         activeThreadKey = forkKey
+        await refreshThreadContextWindow(for: forkKey, cwd: response.cwd)
+        await refreshPersistedContextUsage(for: forkKey)
         return forkKey
     }
 
@@ -765,14 +799,31 @@ final class ServerManager: ObservableObject {
     ) async {
         var key = activeThreadKey
         if key == nil {
-            if let serverId = connections.values.first(where: { $0.isConnected })?.id {
-                key = await startThread(
+            guard let serverId = connections.values.first(where: { $0.isConnected })?.id else { return }
+            do {
+                key = try await startThread(
                     serverId: serverId,
                     cwd: cwd,
                     model: model,
                     approvalPolicy: approvalPolicy,
                     sandboxMode: sandboxMode
                 )
+            } catch {
+                let conn = connections[serverId]
+                let errorKey = ThreadKey(serverId: serverId, threadId: "error-\(UUID().uuidString)")
+                let state = ThreadState(
+                    serverId: serverId,
+                    threadId: errorKey.threadId,
+                    serverName: conn?.server.name ?? "Server",
+                    serverSource: conn?.server.source ?? .local
+                )
+                state.messages.append(ChatMessage(role: .user, text: text, isFromUserTurnBoundary: true))
+                state.messages.append(ChatMessage(role: .system, text: error.localizedDescription))
+                state.status = .error(error.localizedDescription)
+                threads[errorKey] = state
+                observeThread(state)
+                activeThreadKey = errorKey
+                return
             }
         }
         guard let key, let thread = threads[key], let conn = connections[key.serverId] else { return }
@@ -783,13 +834,15 @@ final class ServerManager: ObservableObject {
             let skillInputs = skillMentions.map { mention in
                 UserInput(type: "skill", path: mention.path, name: mention.name)
             }
-            try await conn.sendTurn(
+            let resp = try await conn.sendTurn(
                 threadId: key.threadId,
                 text: text,
                 model: model,
                 effort: effort,
                 additionalInput: skillInputs
             )
+            NSLog("[send] sendTurn succeeded, turnId=%@", resp.turnId ?? "nil")
+            thread.activeTurnId = resp.turnId
         } catch {
             thread.status = .error(error.localizedDescription)
         }
@@ -855,9 +908,11 @@ final class ServerManager: ObservableObject {
     }
 
     func interrupt() async {
-        guard let key = activeThreadKey, let conn = connections[key.serverId] else { return }
-        await conn.interrupt(threadId: key.threadId)
-        threads[key]?.status = .ready
+        guard let key = activeThreadKey,
+              let thread = threads[key],
+              let conn = connections[key.serverId] else { return }
+        guard let turnId = thread.activeTurnId else { return }
+        await conn.interrupt(threadId: key.threadId, turnId: turnId)
     }
 
     // MARK: - Session Refresh
@@ -881,6 +936,7 @@ final class ServerManager: ObservableObject {
                 if let existing = threads[key] {
                     existing.preview = summary.preview
                     existing.cwd = summary.cwd
+                    existing.rolloutPath = summary.path ?? existing.rolloutPath
                     existing.modelProvider = summary.modelProvider
                     existing.parentThreadId = sanitizedLineageId(summary.parentThreadId) ?? existing.parentThreadId
                     existing.rootThreadId = sanitizedLineageId(summary.rootThreadId) ?? existing.rootThreadId
@@ -903,6 +959,7 @@ final class ServerManager: ObservableObject {
                     )
                     state.preview = summary.preview
                     state.cwd = summary.cwd
+                    state.rolloutPath = summary.path
                     state.modelProvider = summary.modelProvider
                     state.parentThreadId = sanitizedLineageId(summary.parentThreadId)
                     state.rootThreadId = sanitizedLineageId(summary.rootThreadId)
@@ -928,16 +985,20 @@ final class ServerManager: ObservableObject {
 
     func handleNotification(serverId: String, method: String, data: Data) {
         switch method {
-        case "account/login/completed", "account/updated":
+        case "account/login/completed", "account/updated", "account/rateLimits/updated":
             connections[serverId]?.handleAccountNotification(method: method, data: data)
 
         case "sessionConfigured":
             handleSessionConfiguredNotification(serverId: serverId, data: data)
 
+        case "thread/tokenUsage/updated":
+            handleThreadTokenUsageUpdatedNotification(serverId: serverId, data: data)
+
         case "turn/started":
             if let threadId = extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .thinking
+                threads[key]?.activeTurnId = extractTurnId(from: data)
             }
 
         case "item/agentMessage/delta":
@@ -1083,11 +1144,15 @@ final class ServerManager: ObservableObject {
             )
             thread.updatedAt = Date()
 
+        case "error", "codex/event/error":
+            handleErrorNotification(serverId: serverId, data: data)
+
         case "turn/completed", "codex/event/task_complete":
             if let threadId = extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .ready
                 threads[key]?.updatedAt = Date()
+                threads[key]?.activeTurnId = nil
                 liveItemMessageIndices[key] = nil
                 liveTurnDiffMessageIndices[key] = nil
                 if activeThreadKey == key {
@@ -1100,6 +1165,7 @@ final class ServerManager: ObservableObject {
                 for (_, thread) in threads where thread.serverId == serverId && thread.hasTurnActive {
                     thread.status = .ready
                     thread.updatedAt = Date()
+                    thread.activeTurnId = nil
                     liveItemMessageIndices[thread.key] = nil
                     liveTurnDiffMessageIndices[thread.key] = nil
                 }
@@ -1109,6 +1175,7 @@ final class ServerManager: ObservableObject {
                     }
                 }
             }
+            Task { await connections[serverId]?.fetchRateLimits() }
 
         case "turn/diff/updated":
             handleTurnDiffNotification(serverId: serverId, data: data)
@@ -1125,6 +1192,24 @@ final class ServerManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private func handleErrorNotification(serverId: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any] else { return }
+
+        let errorDict = params["error"] as? [String: Any]
+        let message = (errorDict?["message"] as? String)
+            ?? (params["message"] as? String)
+            ?? "Unknown error"
+
+        let threadId = extractString(params, keys: ["threadId", "thread_id"])
+        let key = resolveThreadKey(serverId: serverId, threadId: threadId)
+        guard let thread = threads[key] else { return }
+
+        thread.messages.append(ChatMessage(role: .system, text: message))
+        thread.status = .error(message)
+        thread.updatedAt = Date()
     }
 
     private func handleSessionConfiguredNotification(serverId: String, data: Data) {
@@ -1147,7 +1232,10 @@ final class ServerManager: ObservableObject {
         )
         let rootId = extractString(params, keys: ["rootThreadId", "root_thread_id"])
         let title = extractString(params, keys: ["threadName", "thread_name"])
+        let cwd = extractString(params, keys: ["cwd"])
+        let model = extractString(params, keys: ["model"])
         let modelProvider = extractString(params, keys: ["modelProvider", "model_provider", "modelProviderId", "model_provider_id"])
+        let reasoningEffort = extractString(params, keys: ["reasoningEffort", "reasoning_effort"])
         let agentMetadata = extractAgentMetadata(params)
 
         thread.parentThreadId = sanitizedLineageId(parentId) ?? thread.parentThreadId
@@ -1164,12 +1252,48 @@ final class ServerManager: ObservableObject {
         if let title, !title.isEmpty {
             thread.preview = title
         }
+        if let cwd, !cwd.isEmpty {
+            thread.cwd = cwd
+        }
+        if let model, !model.isEmpty {
+            thread.model = model
+        }
         if let modelProvider, !modelProvider.isEmpty {
             thread.modelProvider = modelProvider
+        }
+        if let reasoningEffort, !reasoningEffort.isEmpty {
+            thread.reasoningEffort = reasoningEffort
         }
 
         threads[key] = thread
         observeThread(thread)
+        let currentCwd = thread.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentCwd.isEmpty {
+            Task { @MainActor in
+                await refreshThreadContextWindow(for: key, cwd: currentCwd)
+            }
+        }
+    }
+
+    private func handleThreadTokenUsageUpdatedNotification(serverId: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any],
+              let threadId = extractString(params, keys: ["threadId", "thread_id"]),
+              !threadId.isEmpty else { return }
+
+        let key = resolveThreadKey(serverId: serverId, threadId: threadId)
+        guard let thread = threads[key],
+              let tokenUsage = (params["tokenUsage"] as? [String: Any]) ?? (params["token_usage"] as? [String: Any]) else {
+            return
+        }
+
+        if let modelContextWindow = extractInt64(tokenUsage, keys: ["modelContextWindow", "model_context_window"]) {
+            thread.modelContextWindow = modelContextWindow
+        }
+        if let lastUsage = (tokenUsage["last"] as? [String: Any]) ?? (tokenUsage["last_token_usage"] as? [String: Any]),
+           let contextTokens = extractInt64(lastUsage, keys: ["totalTokens", "total_tokens"]) {
+            thread.contextTokensUsed = contextTokens
+        }
     }
 
     private func handleItemNotification(serverId: String, method: String, data: Data) {
@@ -1251,6 +1375,32 @@ final class ServerManager: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func extractInt64(_ dict: [String: Any], keys: [String]) -> Int64? {
+        for key in keys {
+            if let value = extractInt64Value(dict[key]) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func extractInt64Value(_ value: Any?) -> Int64? {
+        switch value {
+        case let value as Int64:
+            return value
+        case let value as Int:
+            return Int64(value)
+        case let value as Double:
+            return Int64(value)
+        case let value as NSNumber:
+            return value.int64Value
+        case let value as String:
+            return Int64(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
     }
 
     private func extractStringValue(_ value: Any?) -> String? {
@@ -2035,6 +2185,19 @@ final class ServerManager: ObservableObject {
         return params.threadId ?? params.conversationId
     }
 
+    private func extractTurnId(from data: Data) -> String? {
+        struct Wrapper: Decodable {
+            struct Params: Decodable {
+                struct Turn: Decodable { let id: String? }
+                let turn: Turn?
+                let turnId: String?
+            }
+            let params: Params?
+        }
+        guard let params = (try? JSONDecoder().decode(Wrapper.self, from: data))?.params else { return nil }
+        return params.turn?.id ?? params.turnId
+    }
+
     func syncActiveThreadFromServer() async {
         guard let key = activeThreadKey else { return }
         await syncThreadFromServer(key)
@@ -2058,16 +2221,22 @@ final class ServerManager: ObservableObject {
             defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
             defaultAgentRole: response.thread.agentRole ?? thread.agentRole
         )
+        thread.cwd = response.cwd
+        thread.model = response.model
+        thread.modelProvider = response.modelProvider ?? response.model
+        thread.reasoningEffort = response.reasoningEffort ?? thread.reasoningEffort
+        thread.rolloutPath = response.thread.path ?? thread.rolloutPath
+        thread.parentThreadId = sanitizedLineageId(response.thread.parentThreadId) ?? thread.parentThreadId
+        thread.rootThreadId = sanitizedLineageId(response.thread.rootThreadId) ?? thread.rootThreadId
+        thread.agentNickname = sanitizedLineageId(response.thread.agentNickname) ?? thread.agentNickname
+        thread.agentRole = sanitizedLineageId(response.thread.agentRole) ?? thread.agentRole
+        await refreshThreadContextWindow(for: key, cwd: response.cwd)
+        await refreshPersistedContextUsage(for: key)
         guard !messagesEquivalent(thread.messages, restored) else { return }
         if shouldPreferLocalMessages(current: thread.messages, restored: restored) { return }
 
         thread.messages = restored
         threadTurnCounts[key] = response.thread.turns.count
-        thread.modelProvider = response.modelProvider ?? response.model
-        thread.parentThreadId = sanitizedLineageId(response.thread.parentThreadId) ?? thread.parentThreadId
-        thread.rootThreadId = sanitizedLineageId(response.thread.rootThreadId) ?? thread.rootThreadId
-        thread.agentNickname = sanitizedLineageId(response.thread.agentNickname) ?? thread.agentNickname
-        thread.agentRole = sanitizedLineageId(response.thread.agentRole) ?? thread.agentRole
         upsertAgentDirectory(
             serverId: key.serverId,
             threadId: response.thread.id,
@@ -2078,6 +2247,68 @@ final class ServerManager: ObservableObject {
         thread.updatedAt = Date()
         liveItemMessageIndices[key] = nil
         liveTurnDiffMessageIndices[key] = nil
+    }
+
+    private func refreshThreadContextWindow(for key: ThreadKey, cwd: String) async {
+        let normalizedCwd = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCwd.isEmpty,
+              let conn = connections[key.serverId],
+              conn.isConnected,
+              let response = try? await conn.readConfig(cwd: normalizedCwd),
+              let config = response.config.value as? [String: Any],
+              let modelContextWindow = extractInt64(config, keys: ["model_context_window", "modelContextWindow"]),
+              let thread = threads[key] else {
+            return
+        }
+
+        thread.modelContextWindow = modelContextWindow
+    }
+
+    private func refreshPersistedContextUsage(for key: ThreadKey) async {
+        guard let thread = threads[key],
+              let conn = connections[key.serverId],
+              conn.isConnected,
+              conn.server.source != .local else {
+            return
+        }
+
+        let rolloutPath = thread.rolloutPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rolloutPath.isEmpty else { return }
+
+        let rolloutDirectory = URL(fileURLWithPath: rolloutPath).deletingLastPathComponent().path
+        let shellScript = """
+        line=$(awk '/"type":"token_count","info":\\{/{line=$0} END { if (line) print line }' "$1")
+        [ -n "$line" ] || exit 0
+        context=$(printf '%s\n' "$line" | sed -nE 's/.*"last_token_usage":\\{[^}]*"total_tokens":([0-9]+).*/\\1/p')
+        if [ -z "$context" ]; then
+            context=$(printf '%s\n' "$line" | sed -nE 's/.*"total_token_usage":\\{[^}]*"total_tokens":([0-9]+).*/\\1/p')
+        fi
+        window=$(printf '%s\n' "$line" | sed -nE 's/.*"model_context_window":([0-9]+).*/\\1/p')
+        [ -n "$context$window" ] || exit 0
+        printf '{"contextTokens":%s,"modelContextWindow":%s}\n' "${context:-null}" "${window:-null}"
+        """
+
+        guard let response = try? await conn.execCommand(
+            ["/bin/sh", "-c", shellScript, "shitter-rollout-usage", rolloutPath],
+            cwd: rolloutDirectory
+        ),
+        response.exitCode == 0 else {
+            return
+        }
+
+        let stdout = response.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stdout.isEmpty,
+              let data = stdout.data(using: .utf8),
+              let snapshot = try? JSONDecoder().decode(PersistedContextUsageSnapshot.self, from: data) else {
+            return
+        }
+
+        if let modelContextWindow = snapshot.modelContextWindow {
+            thread.modelContextWindow = modelContextWindow
+        }
+        if let contextTokens = snapshot.contextTokens {
+            thread.contextTokensUsed = contextTokens
+        }
     }
 
     private func rollbackDepthForMessage(_ message: ChatMessage, in key: ThreadKey) throws -> Int {

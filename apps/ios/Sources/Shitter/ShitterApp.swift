@@ -1,5 +1,7 @@
 import SwiftUI
+import Combine
 import Inject
+import UIKit
 
 @main
 struct ShitterApp: App {
@@ -9,7 +11,6 @@ struct ShitterApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(serverManager)
-                .preferredColorScheme(.dark)
                 .task { await serverManager.reconnectAll() }
         }
     }
@@ -19,15 +20,11 @@ struct ContentView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
     @StateObject private var appState = AppState()
-    @State private var showAccount = false
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var isEdgeOpeningSidebar = false
+    @State private var keyboardHeight: CGFloat = 0
 
     private let sidebarAnimation = Animation.spring(response: 0.3, dampingFraction: 0.86)
-
-    private var activeAuthStatus: AuthStatus {
-        serverManager.activeConnection?.authStatus ?? .unknown
-    }
 
     private var sidebarRevealProgress: CGFloat {
         guard appState.sidebarOpen else { return 0 }
@@ -35,16 +32,29 @@ struct ContentView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
         ZStack {
             ShitterTheme.backgroundGradient.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                HeaderView()
-                Divider().background(Color(hex: "#1E1E1E"))
-                mainContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            mainContent(topInset: geometry.safeAreaInsets.top, bottomInset: keyboardHeight > 0 ? 0 : geometry.safeAreaInsets.bottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
+                .overlay(alignment: .top) {
+                    if serverManager.activeThreadKey != nil {
+                        HeaderView(topInset: geometry.safeAreaInsets.top)
+                    }
+                }
+                .overlay {
+                    if appState.showModelSelector {
+                        Color.black.opacity(0.01)
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    appState.showModelSelector = false
+                                }
+                            }
+                    }
+                }
             .offset(x: sidebarRevealProgress * 284)
             .scaleEffect(1 - (0.04 * sidebarRevealProgress), anchor: .leading)
             .clipShape(RoundedRectangle(cornerRadius: 20 * sidebarRevealProgress, style: .continuous))
@@ -54,7 +64,7 @@ struct ContentView: View {
             .animation(sidebarAnimation, value: sidebarDragOffset)
             .simultaneousGesture(edgeOpenGesture)
 
-            SidebarOverlay(dragOffset: $sidebarDragOffset)
+            SidebarOverlay(dragOffset: $sidebarDragOffset, topInset: geometry.safeAreaInsets.top)
 
             if let approval = serverManager.activePendingApproval {
                 ApprovalPromptView(approval: approval) { decision in
@@ -62,22 +72,26 @@ struct ContentView: View {
                 }
             }
         }
+        .ignoresSafeArea(.container)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                keyboardHeight = frame.height
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
+        }
         .environmentObject(appState)
         .onAppear {
-            if !serverManager.hasAnyConnection {
+            let forceDiscoveryForUITest =
+                ProcessInfo.processInfo.environment["CODEXIOS_UI_TEST_FORCE_DISCOVERY"] == "1"
+            if forceDiscoveryForUITest {
                 appState.showServerPicker = true
             }
         }
         .onChange(of: appState.sidebarOpen) { _, isOpen in
             if !isOpen { sidebarDragOffset = 0 }
-        }
-        .onChange(of: activeAuthStatus) { _, newStatus in
-            if case .notLoggedIn = newStatus {
-                showAccount = true
-            }
-        }
-        .sheet(isPresented: $showAccount) {
-            AccountView().environmentObject(serverManager)
         }
         .enableInjection()
         .sheet(isPresented: $appState.showServerPicker) {
@@ -88,7 +102,6 @@ struct ContentView: View {
                 })
                 .environmentObject(serverManager)
             }
-            .preferredColorScheme(.dark)
         }
     }
 
@@ -129,12 +142,37 @@ struct ContentView: View {
             }
     }
 
-    @ViewBuilder
-    private var mainContent: some View {
-        if serverManager.activeThreadKey != nil {
-            ConversationView()
-        } else {
-            EmptyStateView()
+    private func mainContent(topInset: CGFloat, bottomInset: CGFloat) -> some View {
+        Group {
+            if serverManager.activeThreadKey != nil {
+                ConversationView(topInset: topInset, bottomInset: bottomInset)
+            } else {
+                HomeNavigationView()
+                    .environmentObject(serverManager)
+                    .environmentObject(appState)
+            }
+        }
+    }
+}
+
+private struct HomeNavigationView: View {
+    @EnvironmentObject var serverManager: ServerManager
+    @EnvironmentObject var appState: AppState
+    @State private var showSessions = false
+
+    var body: some View {
+        NavigationStack {
+            DiscoveryView(onServerSelected: { _ in
+                showSessions = true
+            })
+            .environmentObject(serverManager)
+            .navigationDestination(isPresented: $showSessions) {
+                SessionSidebarView()
+                    .navigationTitle("Sessions")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
+            }
         }
     }
 }
@@ -174,29 +212,29 @@ private struct ApprovalPromptView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Text(title)
-                    .font(ShitterFont.monospaced(.headline))
+                    .font(ShitterFont.styled(.headline))
                     .foregroundColor(ShitterTheme.textPrimary)
 
                 if let reason = approval.reason, !reason.isEmpty {
                     Text(reason)
-                        .font(ShitterFont.monospaced(.footnote))
+                        .font(ShitterFont.styled(.footnote))
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
 
                 if let requesterLabel {
                     Text("Requester: \(requesterLabel)")
-                        .font(ShitterFont.monospaced(.caption))
+                        .font(ShitterFont.styled(.caption))
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let command = approval.command, !command.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Command")
-                            .font(ShitterFont.monospaced(.caption))
+                            .font(ShitterFont.styled(.caption))
                             .foregroundColor(ShitterTheme.textMuted)
                         ScrollView(.horizontal, showsIndicators: false) {
                             Text(command)
-                                .font(ShitterFont.monospaced(.footnote))
+                                .font(ShitterFont.styled(.footnote))
                                 .foregroundColor(ShitterTheme.textBody)
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -208,13 +246,13 @@ private struct ApprovalPromptView: View {
 
                 if let cwd = approval.cwd, !cwd.isEmpty {
                     Text("CWD: \(cwd)")
-                        .font(ShitterFont.monospaced(.caption))
+                        .font(ShitterFont.styled(.caption))
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let grantRoot = approval.grantRoot, !grantRoot.isEmpty {
                     Text("Grant Root: \(grantRoot)")
-                        .font(ShitterFont.monospaced(.caption))
+                        .font(ShitterFont.styled(.caption))
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
@@ -239,7 +277,7 @@ private struct ApprovalPromptView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .font(ShitterFont.monospaced(.callout))
+                .font(ShitterFont.styled(.callout))
             }
             .padding(16)
             .modifier(GlassRectModifier(cornerRadius: 14))
@@ -260,7 +298,7 @@ struct LaunchView: View {
             VStack(spacing: 24) {
                 BrandLogo(size: 132)
                 Text("AI coding agent on iOS")
-                    .font(ShitterFont.monospaced(.body))
+                    .font(ShitterFont.styled(.body))
                     .foregroundColor(ShitterTheme.textMuted)
             }
         }

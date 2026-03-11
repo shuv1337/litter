@@ -35,10 +35,52 @@ struct DiscoveredServer: Identifiable, Hashable {
     let port: UInt16?
     let source: ServerSource
     let hasCodexServer: Bool
+    let wakeMAC: String?
+    let sshPortForwardingEnabled: Bool
+
+    init(
+        id: String,
+        name: String,
+        hostname: String,
+        port: UInt16?,
+        source: ServerSource,
+        hasCodexServer: Bool,
+        wakeMAC: String? = nil,
+        sshPortForwardingEnabled: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.hostname = hostname
+        self.port = port
+        self.source = source
+        self.hasCodexServer = hasCodexServer
+        self.wakeMAC = Self.normalizeWakeMAC(wakeMAC)
+        self.sshPortForwardingEnabled = sshPortForwardingEnabled
+    }
 
     var connectionTarget: ConnectionTarget? {
         if source == .local { return .local }
         if hasCodexServer, let port { return .remote(host: hostname, port: port) }
         return nil
+    }
+
+    static func normalizeWakeMAC(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let compact = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ":", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        guard compact.count == 12 else { return nil }
+        guard compact.allSatisfy({ $0.isHexDigit }) else { return nil }
+        var groups: [String] = []
+        groups.reserveCapacity(6)
+        var index = compact.startIndex
+        for _ in 0..<6 {
+            let next = compact.index(index, offsetBy: 2)
+            groups.append(String(compact[index..<next]))
+            index = next
+        }
+        return groups.joined(separator: ":")
     }
 }

@@ -3,7 +3,7 @@ import Inject
 import os
 
 private let sessionSidebarSignpostLog = OSLog(
-    subsystem: Bundle.main.bundleIdentifier ?? "io.latitudes.shitter.ios",
+    subsystem: Bundle.main.bundleIdentifier ?? "com.shitter.ios",
     category: "SessionSidebar"
 )
 
@@ -11,7 +11,7 @@ struct SessionSidebarView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
-    @State private var isLoading = true
+    @State private var isLoading: Bool
     @State private var resumingKey: ThreadKey?
     @State private var showSettings = false
     @State private var directoryPickerSheet: DirectoryPickerSheetModel?
@@ -27,6 +27,7 @@ struct SessionSidebarView: View {
     @State private var collapsedSessionNodeKeys: Set<ThreadKey> = []
     @State private var pendingActiveSessionScroll = false
     @State private var sessionSearchDebounceTask: Task<Void, Never>?
+    private let autoLoadSessions: Bool
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -43,6 +44,11 @@ struct SessionSidebarView: View {
         var selectedServerId: String
     }
 
+    init(autoLoadSessions: Bool = true) {
+        self.autoLoadSessions = autoLoadSessions
+        _isLoading = State(initialValue: autoLoadSessions)
+    }
+
     var body: some View {
         let derived = makeDerivedData()
         return sidebarContent(derived: derived)
@@ -50,7 +56,7 @@ struct SessionSidebarView: View {
 
     private func sidebarContent(derived: SessionSidebarDerivedData) -> some View {
         let base = sidebarLayout(derived: derived)
-            .background(.ultraThinMaterial)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .enableInjection()
 
         let lifecycle = attachLifecycleHandlers(to: base, derived: derived)
@@ -83,7 +89,6 @@ struct SessionSidebarView: View {
                 )
                 .environmentObject(serverManager)
             }
-            .preferredColorScheme(.dark)
         }
     }
 
@@ -93,12 +98,16 @@ struct SessionSidebarView: View {
     ) -> some View {
         let primaryLifecycle = AnyView(
             content
-                .task { await loadSessions() }
+                .task {
+                    guard autoLoadSessions else { return }
+                    await loadSessions()
+                }
                 .onAppear {
                     scheduleActiveSessionScrollIfNeeded()
                 }
                 .onChange(of: serverManager.hasAnyConnection) { _, connected in
-                    if connected { Task { await loadSessions() } }
+                    guard autoLoadSessions, connected else { return }
+                    Task { await loadSessions() }
                 }
                 .onChange(of: serverManager.activeThreadKey) { _, _ in
                     scheduleActiveSessionScrollIfNeeded()
@@ -222,7 +231,7 @@ struct SessionSidebarView: View {
             } else if derived.allThreads.isEmpty {
                 Spacer()
                 Text("No sessions yet")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textMuted)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -233,18 +242,18 @@ struct SessionSidebarView: View {
                 if derived.filteredThreads.isEmpty {
                     Spacer()
                     Text("No matches for \"\(trimmedSessionSearchQuery)\"")
-                        .font(ShitterFont.monospaced(.footnote))
+                        .font(ShitterFont.styled(.footnote))
                         .foregroundColor(ShitterTheme.textMuted)
                         .frame(maxWidth: .infinity)
                     Spacer()
                 } else {
                     sessionList(derived: derived)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
 
-            Divider().background(ShitterTheme.separator)
-            settingsRow
         }
+        .accessibilityIdentifier("sidebar.container")
     }
 
     private var selectedServerFilterId: String? {
@@ -321,40 +330,37 @@ struct SessionSidebarView: View {
         return ids.first
     }
 
-    private var settingsRow: some View {
-        Button { showSettings = true } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "gear")
-                    .foregroundColor(ShitterTheme.textSecondary)
-                    .frame(width: 20)
-                Text("Settings")
-                    .font(ShitterFont.monospaced(.footnote))
-                    .foregroundColor(ShitterTheme.textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-        }
-    }
-
     private var newSessionButton: some View {
-        Button {
-            if let defaultServerId = defaultNewSessionServerId() {
-                directoryPickerSheet = DirectoryPickerSheetModel(selectedServerId: defaultServerId)
-            } else {
-                appState.showServerPicker = true
-            }
-        } label: {
-            HStack {
-                Image(systemName: "plus")
+        HStack(spacing: 10) {
+            Button { showSettings = true } label: {
+                Image(systemName: "gear")
                     .font(.system(.subheadline, weight: .medium))
-                Text("New Session")
-                    .font(ShitterFont.monospaced(.subheadline))
+                    .foregroundColor(ShitterTheme.textSecondary)
+                    .frame(width: 44, height: 44)
+                    .modifier(GlassRectModifier(cornerRadius: 10))
             }
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .modifier(GlassRectModifier(cornerRadius: 8, tint: ShitterTheme.accent))
+            .accessibilityIdentifier("sidebar.settingsButton")
+
+            Button {
+                if let defaultServerId = defaultNewSessionServerId() {
+                    directoryPickerSheet = DirectoryPickerSheetModel(selectedServerId: defaultServerId)
+                } else {
+                    appState.showServerPicker = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "plus")
+                        .font(.system(.subheadline, weight: .medium))
+                    Text("New Session")
+                        .font(ShitterFont.styled(.subheadline))
+                }
+                .foregroundColor(ShitterTheme.textOnAccent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(ShitterTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .accessibilityIdentifier("sidebar.newSessionButton")
         }
         .padding(16)
     }
@@ -368,28 +374,30 @@ struct SessionSidebarView: View {
                     .foregroundColor(ShitterTheme.textMuted)
                     .frame(width: 20)
                 Text("Not connected")
-                    .font(ShitterFont.monospaced(.footnote))
+                    .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.textMuted)
                 Spacer()
                 Button("Connect") {
                     withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
                     appState.showServerPicker = true
                 }
-                .font(ShitterFont.monospaced(.caption))
+                .accessibilityIdentifier("sidebar.connectButton")
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.accent)
             } else {
                 Image(systemName: "server.rack")
                     .foregroundColor(ShitterTheme.accent)
                     .frame(width: 20)
                 Text("\(connected.count) server\(connected.count == 1 ? "" : "s")")
-                    .font(ShitterFont.monospaced(.footnote))
-                    .foregroundColor(.white)
+                    .font(ShitterFont.styled(.footnote))
+                    .foregroundColor(ShitterTheme.textPrimary)
                 Spacer()
                 Button("Add") {
                     withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
                     appState.showServerPicker = true
                 }
-                .font(ShitterFont.monospaced(.caption))
+                .accessibilityIdentifier("sidebar.addServerButton")
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.accent)
                 if let activeThread {
                     Button {
@@ -404,7 +412,7 @@ struct SessionSidebarView: View {
                         }
                     }
                     .disabled(isForkingActiveThread || activeThread.hasTurnActive)
-                    .font(ShitterFont.monospaced(.caption))
+                    .font(ShitterFont.styled(.caption))
                     .foregroundColor(activeThread.hasTurnActive ? ShitterTheme.textMuted : ShitterTheme.accent)
                 }
             }
@@ -417,11 +425,11 @@ struct SessionSidebarView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(ShitterTheme.textMuted)
-                .font(ShitterFont.monospaced(.caption))
+                .font(ShitterFont.styled(.caption))
 
             TextField("Search sessions", text: $sessionSearchQuery)
-                .font(ShitterFont.monospaced(.footnote))
-                .foregroundColor(.white)
+                .font(ShitterFont.styled(.footnote))
+                .foregroundColor(ShitterTheme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
 
@@ -493,7 +501,7 @@ struct SessionSidebarView: View {
                     selectedServerFilterId = nil
                     showOnlyForks = false
                 }
-                .font(ShitterFont.monospaced(.caption))
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.accent)
             }
             Spacer(minLength: 0)
@@ -514,8 +522,8 @@ struct SessionSidebarView: View {
             Text(title)
                 .lineLimit(1)
         }
-        .font(ShitterFont.monospaced(.caption))
-        .foregroundColor(isActive ? .black : ShitterTheme.textSecondary)
+        .font(ShitterFont.styled(.caption))
+        .foregroundColor(isActive ? ShitterTheme.textOnAccent : ShitterTheme.textSecondary)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(isActive ? ShitterTheme.accent : ShitterTheme.surface.opacity(0.65))
@@ -528,10 +536,7 @@ struct SessionSidebarView: View {
 
     private func workspaceGroupHeader(_ group: WorkspaceSessionGroup) -> some View {
         let isCollapsed = collapsedWorkspaceGroupIDs.contains(group.id)
-        let countLabel = group.threads.count == 1 ? "1 session" : "\(group.threads.count) sessions"
-        let detailLine = group.workspacePath == group.workspaceTitle
-            ? "\(group.serverName) • \(countLabel)"
-            : "\(group.serverName) • \(group.workspacePath) • \(countLabel)"
+        let hostname = serverManager.connections[group.serverId]?.server.hostname ?? group.serverName
 
         return Button {
             if isCollapsed {
@@ -552,12 +557,17 @@ struct SessionSidebarView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.workspaceTitle)
-                        .font(ShitterFont.monospaced(.caption))
-                        .foregroundColor(.white)
+                        .font(ShitterFont.styled(.caption))
+                        .foregroundColor(ShitterTheme.textPrimary)
                         .lineLimit(1)
 
-                    Text(detailLine)
-                        .font(ShitterFont.monospaced(.caption2))
+                    Text(hostname)
+                        .font(ShitterFont.styled(.caption2))
+                        .foregroundColor(ShitterTheme.textMuted)
+                        .lineLimit(1)
+
+                    Text(abbreviateHomePath(group.workspacePath))
+                        .font(ShitterFont.styled(.caption2))
                         .foregroundColor(ShitterTheme.textMuted)
                         .lineLimit(1)
                 }
@@ -582,7 +592,7 @@ struct SessionSidebarView: View {
                     ForEach(derived.workspaceSections) { section in
                         if let title = section.title {
                             Text(title)
-                                .font(ShitterFont.monospaced(.caption2))
+                                .font(ShitterFont.styled(.caption2))
                                 .foregroundColor(ShitterTheme.textMuted)
                                 .padding(.horizontal, 2)
                         }
@@ -725,15 +735,16 @@ struct SessionSidebarView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(sessionTitle(thread))
-                                .font(ShitterFont.monospaced(.footnote))
-                                .foregroundColor(.white)
+                                .font(ShitterFont.styled(.footnote))
+                                .foregroundColor(ShitterTheme.textPrimary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
+                                .accessibilityIdentifier("sidebar.sessionTitle")
 
                             if thread.isFork {
                                 Text("Fork")
-                                    .font(ShitterFont.monospaced(.caption2))
-                                    .foregroundColor(.black)
+                                    .font(ShitterFont.styled(.caption2))
+                                    .foregroundColor(ShitterTheme.textOnAccent)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
                                     .background(ShitterTheme.accent)
@@ -749,27 +760,30 @@ struct SessionSidebarView: View {
                             }
                         }
 
-                        Text(sessionMetadataLine(thread))
-                            .font(ShitterFont.monospaced(.caption))
-                            .foregroundColor(ShitterTheme.textSecondary)
-                            .lineLimit(1)
-
-                        if let parent {
-                            Text("from \(sessionTitle(parent))")
-                                .font(ShitterFont.monospaced(.caption2))
-                                .foregroundColor(ShitterTheme.textMuted)
-                                .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(relativeDate(thread.updatedAt))
+                                .foregroundColor(ShitterTheme.textSecondary)
+                            if let provider = sessionModelLabel(thread) {
+                                Text("•")
+                                    .foregroundColor(ShitterTheme.textMuted)
+                                Text(provider)
+                                    .foregroundColor(ShitterTheme.textMuted)
+                            }
+                            if let parent {
+                                Text("•")
+                                    .foregroundColor(ShitterTheme.textMuted)
+                                Text("from \(sessionTitle(parent))")
+                                    .foregroundColor(ShitterTheme.textMuted)
+                            }
                         }
-
-                        if !thread.cwd.isEmpty {
-                            Text(thread.cwd)
-                                .font(ShitterFont.monospaced(.caption2))
-                                .foregroundColor(ShitterTheme.textMuted)
-                                .lineLimit(1)
-                        }
+                        .font(ShitterFont.styled(.caption2))
+                        .lineLimit(1)
                     }
                 }
                 .contentShape(Rectangle())
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("sidebar.sessionRow")
                 .onTapGesture(perform: onSelectSession)
             }
 
@@ -842,7 +856,7 @@ struct SessionSidebarView: View {
 
     private func lineageChip(title: String, count: Int, isInteractive: Bool) -> some View {
         Text("\(title) \(count)")
-            .font(ShitterFont.monospaced(.caption2))
+            .font(ShitterFont.styled(.caption2))
             .foregroundColor(isInteractive ? ShitterTheme.accent : ShitterTheme.textMuted)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -952,13 +966,13 @@ struct SessionSidebarView: View {
         thread.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled session" : thread.preview
     }
 
-    private func sessionMetadataLine(_ thread: ThreadState) -> String {
-        let provider = thread.modelProvider.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerLabel = provider.isEmpty ? "default" : provider
+    private func sessionModelLabel(_ thread: ThreadState) -> String? {
+        let model = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if model.isEmpty { return nil }
         if let agentLabel = thread.agentDisplayLabel {
-            return "\(relativeDate(thread.updatedAt)) • \(thread.serverName) (\(agentLabel)) • \(providerLabel)"
+            return "\(model) (\(agentLabel))"
         }
-        return "\(relativeDate(thread.updatedAt)) • \(thread.serverName) • \(providerLabel)"
+        return model
     }
 
     private func sanitizedLineageId(_ raw: String?) -> String? {
@@ -1221,7 +1235,7 @@ struct SessionSidebarView: View {
         workDir = cwd
         appState.currentCwd = cwd
         let model = appState.selectedModel.isEmpty ? nil : appState.selectedModel
-        let startedKey = await serverManager.startThread(
+        let startedKey = try? await serverManager.startThread(
             serverId: serverId,
             cwd: cwd,
             model: model,
@@ -1367,3 +1381,16 @@ struct PulsingDot: View {
             .onAppear { pulse = true }
     }
 }
+
+#if DEBUG
+#Preview("Session Sidebar") {
+    ShitterPreviewScene(
+        serverManager: ShitterPreviewData.makeSidebarManager(),
+        appState: ShitterPreviewData.makeAppState(sidebarOpen: true)
+    ) {
+        SessionSidebarView(autoLoadSessions: false)
+            .frame(width: SidebarOverlay.sidebarWidth, height: 760)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+}
+#endif

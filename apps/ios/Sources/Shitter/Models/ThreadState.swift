@@ -18,12 +18,18 @@ final class ThreadState: ObservableObject, Identifiable {
     @Published var status: ConversationStatus = .ready
     @Published var preview: String = ""
     @Published var cwd: String = ""
+    @Published var model: String = ""
     @Published var modelProvider: String = ""
+    @Published var reasoningEffort: String?
+    @Published var modelContextWindow: Int64?
+    @Published var contextTokensUsed: Int64?
+    @Published var rolloutPath: String?
     @Published var parentThreadId: String?
     @Published var rootThreadId: String?
     @Published var agentNickname: String?
     @Published var agentRole: String?
     @Published var updatedAt: Date = Date()
+    var activeTurnId: String?
 
     var hasTurnActive: Bool {
         if case .thinking = status { return true }
@@ -65,6 +71,8 @@ struct SavedServer: Codable, Identifiable {
     let port: UInt16?
     let source: String
     let hasCodexServer: Bool
+    let wakeMAC: String?
+    let sshPortForwardingEnabled: Bool?
 
     func toDiscoveredServer() -> DiscoveredServer {
         DiscoveredServer(
@@ -73,7 +81,9 @@ struct SavedServer: Codable, Identifiable {
             hostname: hostname,
             port: port,
             source: ServerSource.from(source),
-            hasCodexServer: hasCodexServer
+            hasCodexServer: hasCodexServer,
+            wakeMAC: wakeMAC,
+            sshPortForwardingEnabled: sshPortForwardingEnabled ?? false
         )
     }
 
@@ -84,7 +94,9 @@ struct SavedServer: Codable, Identifiable {
             hostname: server.hostname,
             port: server.port,
             source: server.source.rawString,
-            hasCodexServer: server.hasCodexServer
+            hasCodexServer: server.hasCodexServer,
+            wakeMAC: server.wakeMAC,
+            sshPortForwardingEnabled: server.sshPortForwardingEnabled
         )
     }
 }

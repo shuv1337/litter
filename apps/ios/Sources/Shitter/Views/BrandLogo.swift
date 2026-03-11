@@ -23,3 +23,12 @@ struct BrandLogo: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Brand Logo") {
+    ZStack {
+        ShitterTheme.backgroundGradient.ignoresSafeArea()
+        BrandLogo(size: 128)
+    }
+}
+#endif

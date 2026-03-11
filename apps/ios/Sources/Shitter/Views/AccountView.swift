@@ -35,7 +35,6 @@ struct AccountView: View {
             }
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
@@ -43,7 +42,6 @@ struct AccountView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .sheet(isPresented: $showOAuth) {
             oauthSheet
         }
@@ -61,7 +59,7 @@ struct AccountView: View {
     private var currentAccountSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("CURRENT ACCOUNT")
-                .font(ShitterFont.monospaced(.caption))
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
@@ -71,11 +69,11 @@ struct AccountView: View {
                     .frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(authTitle)
-                        .font(ShitterFont.monospaced(.subheadline))
-                        .foregroundColor(.white)
+                        .font(ShitterFont.styled(.subheadline))
+                        .foregroundColor(ShitterTheme.textPrimary)
                     if let sub = authSubtitle {
                         Text(sub)
-                            .font(ShitterFont.monospaced(.caption))
+                            .font(ShitterFont.styled(.caption))
                             .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
@@ -84,8 +82,8 @@ struct AccountView: View {
                     Button("Logout") {
                         Task { await conn?.logout() }
                     }
-                    .font(ShitterFont.monospaced(.footnote))
-                    .foregroundColor(Color(hex: "#FF5555"))
+                    .font(ShitterFont.styled(.footnote))
+                    .foregroundColor(ShitterTheme.danger)
                 }
             }
             .padding(.horizontal, 20)
@@ -99,7 +97,7 @@ struct AccountView: View {
     private var loginSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("LOGIN")
-                .font(ShitterFont.monospaced(.caption))
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
@@ -113,13 +111,13 @@ struct AccountView: View {
             } label: {
                 HStack {
                     if isWorking {
-                        ProgressView().tint(Color(hex: "#0D0D0D")).scaleEffect(0.8)
+                        ProgressView().tint(ShitterTheme.textOnAccent).scaleEffect(0.8)
                     }
                     Image(systemName: "person.crop.circle.badge.checkmark")
                     Text("Login with ChatGPT")
-                        .font(ShitterFont.monospaced(.subheadline))
+                        .font(ShitterFont.styled(.subheadline))
                 }
-                .foregroundColor(Color(hex: "#0D0D0D"))
+                .foregroundColor(ShitterTheme.textOnAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(ShitterTheme.accent)
@@ -129,14 +127,14 @@ struct AccountView: View {
             .disabled(isWorking)
 
             Text("— or use an API key —")
-                .font(ShitterFont.monospaced(.caption))
+                .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.textMuted)
                 .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 8) {
                 SecureField("sk-...", text: $apiKey)
-                    .font(ShitterFont.monospaced(.subheadline))
-                    .foregroundColor(.white)
+                    .font(ShitterFont.styled(.subheadline))
+                    .foregroundColor(ShitterTheme.textPrimary)
                     .padding(12)
                     .background(ShitterTheme.surface)
                     .cornerRadius(8)
@@ -154,7 +152,7 @@ struct AccountView: View {
                     }
                 } label: {
                     Text("Save API Key")
-                        .font(ShitterFont.monospaced(.subheadline))
+                        .font(ShitterFont.styled(.subheadline))
                         .foregroundColor(ShitterTheme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -173,20 +171,21 @@ struct AccountView: View {
     private var oauthSheet: some View {
         if let url = conn?.oauthURL {
             NavigationStack {
-                SafariView(url: url) {
+                OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
+                    conn?.forwardOAuthCallback(callbackURL)
+                }) {
                     Task { await conn?.cancelLogin() }
                 }
                 .ignoresSafeArea()
                 .navigationTitle("Login with ChatGPT")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbarColorScheme(.dark, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") {
                             Task { await conn?.cancelLogin() }
                             showOAuth = false
                         }
-                        .foregroundColor(Color(hex: "#FF5555"))
+                        .foregroundColor(ShitterTheme.danger)
                     }
                 }
             }
@@ -218,3 +217,11 @@ struct AccountView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Account") {
+    ShitterPreviewScene(includeBackground: false) {
+        AccountView()
+    }
+}
+#endif

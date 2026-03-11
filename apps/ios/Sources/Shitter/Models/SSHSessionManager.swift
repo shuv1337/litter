@@ -1,11 +1,18 @@
 import Foundation
 import Citadel
 import Crypto
+import NIO
+import NIOSSH
 
 actor SSHSessionManager {
     static let shared = SSHSessionManager()
     private var client: SSHClient?
     private var connectedHost: String?
+    private var forwardedListener: Channel?
+    private var forwardedLocalPort: UInt16?
+    private var forwardedRemotePort: UInt16?
+    private var forwardedRemoteHost: String?
+    private var launchedServerPID: Int?
     private let defaultRemotePort: UInt16 = 8390
 
     private enum ServerLaunchCommand {
@@ -13,9 +20,16 @@ actor SSHSessionManager {
         case codexAppServer(executable: String)
     }
 
+    private struct LaunchAttempt {
+        let description: String
+        let shellCommand: String
+    }
+
     var isConnected: Bool { client != nil }
 
     func connect(host: String, port: Int = 22, credentials: SSHCredentials) async throws {
+        await disconnect()
+
         var normalizedHost = host
             .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             .replacingOccurrences(of: "%25", with: "%")
@@ -56,6 +70,77 @@ actor SSHSessionManager {
         }
     }
 
+    func establishLocalPortForward(remotePort: UInt16) async throws -> UInt16 {
+        guard let client else { throw SSHError.notConnected }
+
+        let remoteHost = remoteLoopbackHost()
+        if forwardedRemotePort == remotePort,
+           forwardedRemoteHost == remoteHost,
+           let forwardedLocalPort,
+           let forwardedListener,
+           forwardedListener.isActive {
+            return forwardedLocalPort
+        }
+
+        await closeLocalPortForward()
+
+        let clientBox = SSHClientBox(client)
+        let originatorAddress = try SocketAddress(ipAddress: "127.0.0.1", port: 0)
+        let remoteTargetHost = remoteHost
+        let remoteTargetPort = Int(remotePort)
+
+        let listener = try await ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { localChannel in
+                localChannel.eventLoop.makeCompletedFuture {
+                    let localAsync = try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                        wrappingChannelSynchronously: localChannel
+                    )
+
+                    Task {
+                        do {
+                            let remoteChannel = try await clientBox.client.createDirectTCPIPChannel(
+                                using: SSHChannelType.DirectTCPIP(
+                                    targetHost: remoteTargetHost,
+                                    targetPort: remoteTargetPort,
+                                    originatorAddress: originatorAddress
+                                )
+                            ) { channel in
+                                channel.eventLoop.makeSucceededFuture(())
+                            }
+                            let remoteAsync = try await remoteChannel.eventLoop.flatSubmit {
+                                remoteChannel.eventLoop.makeCompletedFuture(
+                                    Result {
+                                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                                            wrappingChannelSynchronously: remoteChannel
+                                        )
+                                    }
+                                )
+                            }.get()
+                            try await proxyTraffic(between: localAsync, and: remoteAsync)
+                        } catch {
+                            NSLog("[SSH_PORT_FORWARD] local tunnel failed: %@", error.localizedDescription)
+                            try? await localChannel.close().get()
+                        }
+                    }
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+
+        guard let port = listener.localAddress?.port,
+              let localPort = UInt16(exactly: port) else {
+            try? await listener.close().get()
+            throw SSHError.portForwardFailed(message: "SSH tunnel bound without a usable localhost port")
+        }
+
+        forwardedListener = listener
+        forwardedLocalPort = localPort
+        forwardedRemotePort = remotePort
+        forwardedRemoteHost = remoteHost
+        return localPort
+    }
+
     func startRemoteServer() async throws -> UInt16 {
         guard let client else { throw SSHError.notConnected }
         let wantsIPv6 = (connectedHost ?? "").contains(":")
@@ -63,55 +148,92 @@ actor SSHSessionManager {
         guard let launchCommand = try await resolveServerLaunchCommand(client: client) else {
             throw SSHError.serverBinaryMissing
         }
+        if let supportsWebsocketTransport = try await supportsWebsocketTransport(
+            client: client,
+            command: launchCommand
+        ), !supportsWebsocketTransport {
+            throw SSHError.serverStartFailed(
+                message: "Remote Codex is too old for websocket app-server transport. Update Codex on the Mac and try again."
+            )
+        }
 
         var lastFailure = "Timed out waiting for remote server to start."
         for port in candidatePorts() {
             let listenAddr = wantsIPv6 ? "[::]:\(port)" : "0.0.0.0:\(port)"
             let logPath = "/tmp/codex-ios-app-server-\(port).log"
 
-            // Check if already running on this port
+            // Check if already running on this port (not launched by us)
             if let listening = try? await isPortListening(client: client, port: port), listening {
+                launchedServerPID = nil
                 return port
             }
 
-            // Start server in background on selected port.
-            let launchOutput = String(
-                buffer: try await client.executeCommand(
-                    startServerCommand(for: launchCommand, listenAddr: listenAddr, logPath: logPath)
-                )
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-            let launchedPID = Int(launchOutput)
+            var sawUnsupportedWebsocketCLI = false
+            for launchAttempt in launchAttempts(for: launchCommand, listenAddr: listenAddr, logPath: logPath) {
+                let launchOutput = String(
+                    buffer: try await client.executeCommand(launchAttempt.shellCommand)
+                ).trimmingCharacters(in: .whitespacesAndNewlines)
+                let launchedPID = Int(launchOutput)
 
-            // Poll until reachable.
-            for attempt in 0..<60 {
-                try await Task.sleep(for: .milliseconds(500))
-                if let listening = try? await isPortListening(client: client, port: port), listening {
-                    return port
-                }
-                if let pid = launchedPID, let alive = try? await isProcessAlive(client: client, pid: pid), !alive {
-                    let detail = (try? await fetchServerLogTail(client: client, logPath: logPath)) ?? ""
-                    if detail.localizedCaseInsensitiveContains("address already in use") {
-                        lastFailure = detail
-                        break
+                var shouldTryNextVariant = false
+
+                // Poll until reachable.
+                for attempt in 0..<60 {
+                    try await Task.sleep(for: .milliseconds(500))
+                    if let listening = try? await isPortListening(client: client, port: port), listening {
+                        launchedServerPID = launchedPID
+                        return port
                     }
-                    throw SSHError.serverStartFailed(
-                        message: detail.isEmpty ? "Server process exited immediately." : detail
-                    )
+                    if let pid = launchedPID, let alive = try? await isProcessAlive(client: client, pid: pid), !alive {
+                        let detail = (try? await fetchServerLogTail(client: client, logPath: logPath)) ?? ""
+                        if detail.localizedCaseInsensitiveContains("address already in use") {
+                            lastFailure = detail
+                            shouldTryNextVariant = false
+                            break
+                        }
+                        if detail.localizedCaseInsensitiveContains("unexpected argument")
+                            || detail.localizedCaseInsensitiveContains("unrecognized option")
+                            || detail.localizedCaseInsensitiveContains("for more information, try '--help'") {
+                            lastFailure = detail.isEmpty ? "Unsupported app-server launch form: \(launchAttempt.description)" : detail
+                            sawUnsupportedWebsocketCLI = true
+                            shouldTryNextVariant = true
+                            break
+                        }
+                        throw SSHError.serverStartFailed(
+                            message: detail.isEmpty ? "Server process exited immediately." : detail
+                        )
+                    }
+                    // If probing is inconclusive but process is alive, let the app try connecting.
+                    if attempt >= 8,
+                       let pid = launchedPID,
+                       let alive = try? await isProcessAlive(client: client, pid: pid),
+                       alive {
+                        launchedServerPID = launchedPID
+                        return port
+                    }
                 }
-                // If probing is inconclusive but process is alive, let the app try connecting.
-                if attempt >= 8,
-                   let pid = launchedPID,
-                   let alive = try? await isProcessAlive(client: client, pid: pid),
-                   alive {
-                    return port
+
+                let detail = (try? await fetchServerLogTail(client: client, logPath: logPath)) ?? ""
+                if detail.localizedCaseInsensitiveContains("address already in use") {
+                    lastFailure = detail
+                    shouldTryNextVariant = false
+                    break
                 }
+                if shouldTryNextVariant {
+                    continue
+                }
+                if !detail.isEmpty {
+                    lastFailure = detail
+                }
+                break
             }
-            let detail = (try? await fetchServerLogTail(client: client, logPath: logPath)) ?? ""
-            if detail.localizedCaseInsensitiveContains("address already in use") {
-                lastFailure = detail
+
+            if lastFailure.localizedCaseInsensitiveContains("address already in use") {
                 continue
             }
-            lastFailure = detail.isEmpty ? lastFailure : detail
+            if sawUnsupportedWebsocketCLI {
+                lastFailure = "Remote Codex is too old for websocket app-server transport. Update Codex on the Mac and try again."
+            }
             break
         }
         throw SSHError.serverStartFailed(
@@ -125,14 +247,18 @@ actor SSHSessionManager {
         return ports
     }
 
+    private func loginShell(_ script: String) -> String {
+        let base64 = Data(script.utf8).base64EncodedString()
+        return "$SHELL -l -c \"$(echo \(base64) | base64 -d)\""
+    }
+
     private func resolveServerLaunchCommand(client: SSHClient) async throws -> ServerLaunchCommand? {
         let script = """
-        for f in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.zprofile" "$HOME/.zshrc"; do
-          [ -f "$f" ] && . "$f" 2>/dev/null
-        done
         codex_path="$(command -v codex 2>/dev/null || true)"
         if [ -n "$codex_path" ] && [ -f "$codex_path" ] && [ -x "$codex_path" ]; then
           printf 'codex:%s' "$codex_path"
+        elif [ -x "$HOME/.bun/bin/codex" ]; then
+          printf 'codex:%s' "$HOME/.bun/bin/codex"
         elif [ -x "$HOME/.volta/bin/codex" ]; then
           printf 'codex:%s' "$HOME/.volta/bin/codex"
         elif [ -x "$HOME/.cargo/bin/codex" ]; then
@@ -146,7 +272,7 @@ actor SSHSessionManager {
           fi
         fi
         """
-        let output = String(buffer: try await client.executeCommand(script))
+        let output = String(buffer: try await client.executeCommand(loginShell(script)))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty else { return nil }
         let parts = output.split(separator: ":", maxSplits: 1).map(String.init)
@@ -158,17 +284,80 @@ actor SSHSessionManager {
         }
     }
 
-    private func startServerCommand(for command: ServerLaunchCommand, listenAddr: String, logPath: String) -> String {
+    private func launchAttempts(for command: ServerLaunchCommand, listenAddr: String, logPath: String) -> [LaunchAttempt] {
         let listenArg = shellQuote("ws://\(listenAddr)")
-        let launch: String
+        let launches: [LaunchAttempt]
         switch command {
         case .codex(let executable):
-            launch = "\(shellQuote(executable)) app-server --listen \(listenArg)"
+            launches = [
+                LaunchAttempt(
+                    description: "codex app-server --listen",
+                    shellCommand: backgroundedLaunch(
+                        "\(shellQuote(executable)) app-server --listen \(listenArg)",
+                        logPath: logPath
+                    )
+                ),
+                LaunchAttempt(
+                    description: "codex app-server serve --listen",
+                    shellCommand: backgroundedLaunch(
+                        "\(shellQuote(executable)) app-server serve --listen \(listenArg)",
+                        logPath: logPath
+                    )
+                ),
+                LaunchAttempt(
+                    description: "codex app-server <url>",
+                    shellCommand: backgroundedLaunch(
+                        "\(shellQuote(executable)) app-server \(listenArg)",
+                        logPath: logPath
+                    )
+                )
+            ]
         case .codexAppServer(let executable):
-            launch = "\(shellQuote(executable)) --listen \(listenArg)"
+            launches = [
+                LaunchAttempt(
+                    description: "codex-app-server --listen",
+                    shellCommand: backgroundedLaunch(
+                        "\(shellQuote(executable)) --listen \(listenArg)",
+                        logPath: logPath
+                    )
+                ),
+                LaunchAttempt(
+                    description: "codex-app-server serve --listen",
+                    shellCommand: backgroundedLaunch(
+                        "\(shellQuote(executable)) serve --listen \(listenArg)",
+                        logPath: logPath
+                    )
+                )
+            ]
         }
-        let profileInit = "for f in \"$HOME/.profile\" \"$HOME/.bash_profile\" \"$HOME/.bashrc\" \"$HOME/.zprofile\" \"$HOME/.zshrc\"; do [ -f \"$f\" ] && . \"$f\" 2>/dev/null; done;"
-        return "\(profileInit) nohup \(launch) </dev/null >\(shellQuote(logPath)) 2>&1 & echo $!"
+        return launches
+    }
+
+    private func supportsWebsocketTransport(client: SSHClient, command: ServerLaunchCommand) async throws -> Bool? {
+        let helpCommand: String
+        switch command {
+        case .codex(let executable):
+            helpCommand = "\(shellQuote(executable)) app-server --help 2>&1 || true"
+        case .codexAppServer(let executable):
+            helpCommand = "\(shellQuote(executable)) --help 2>&1 || true"
+        }
+
+        let helpText = String(buffer: try await client.executeCommand(loginShell(helpCommand)))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !helpText.isEmpty else { return nil }
+
+        let normalized = helpText.lowercased()
+        if normalized.contains("--listen") || normalized.contains("ws://") {
+            return true
+        }
+        if normalized.contains("app-server") {
+            return false
+        }
+        return nil
+    }
+
+    private func backgroundedLaunch(_ launch: String, logPath: String) -> String {
+        loginShell("nohup \(launch) </dev/null >\(shellQuote(logPath)) 2>&1 & echo $!")
     }
 
     private func isPortListening(client: SSHClient, port: UInt16) async throws -> Bool {
@@ -198,10 +387,50 @@ actor SSHSessionManager {
         return String(buffer: result)
     }
 
+    func discoverWakeMACAddress() async -> String? {
+        guard let client else { return nil }
+        let script = """
+        iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+        if [ -z "$iface" ]; then iface="en0"; fi
+        mac="$(ifconfig "$iface" 2>/dev/null | awk '/ether /{print $2; exit}')"
+        if [ -z "$mac" ]; then
+          mac="$(ifconfig en0 2>/dev/null | awk '/ether /{print $2; exit}')"
+        fi
+        if [ -z "$mac" ]; then
+          mac="$(ifconfig 2>/dev/null | awk '/ether /{print $2; exit}')"
+        fi
+        printf '%s' "$mac"
+        """
+        guard let output = try? await client.executeCommand(script) else { return nil }
+        let raw = String(buffer: output).trimmingCharacters(in: .whitespacesAndNewlines)
+        return DiscoveredServer.normalizeWakeMAC(raw)
+    }
+
+    func stopRemoteServer() async {
+        guard let client, let pid = launchedServerPID else { return }
+        _ = try? await client.executeCommand("kill \(pid) 2>/dev/null")
+        launchedServerPID = nil
+    }
+
     func disconnect() async {
+        await closeLocalPortForward()
         try? await client?.close()
         client = nil
         connectedHost = nil
+    }
+
+    private func closeLocalPortForward() async {
+        if let forwardedListener {
+            try? await forwardedListener.close().get()
+        }
+        forwardedListener = nil
+        forwardedLocalPort = nil
+        forwardedRemotePort = nil
+        forwardedRemoteHost = nil
+    }
+
+    private func remoteLoopbackHost() -> String {
+        (connectedHost ?? "").contains(":") ? "::1" : "127.0.0.1"
     }
 }
 
@@ -212,6 +441,7 @@ enum SSHError: LocalizedError {
     case serverStartFailed(message: String)
     case unsupportedKeyType
     case connectionFailed(host: String, port: Int, underlying: Error)
+    case portForwardFailed(message: String)
 
     var errorDescription: String? {
         switch self {
@@ -222,6 +452,41 @@ enum SSHError: LocalizedError {
         case .unsupportedKeyType: return "Unsupported SSH key type (only RSA and ED25519 are supported)"
         case .connectionFailed(let host, let port, _):
             return "Could not connect to \(host):\(port) — check that SSH is running and the host is reachable"
+        case .portForwardFailed(let message):
+            return message
+        }
+    }
+}
+
+private final class SSHClientBox: @unchecked Sendable {
+    let client: SSHClient
+
+    init(_ client: SSHClient) {
+        self.client = client
+    }
+}
+
+private func proxyTraffic(
+    between local: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
+    and remote: NIOAsyncChannel<ByteBuffer, ByteBuffer>
+) async throws {
+    try await local.executeThenClose { localInbound, localOutbound in
+        try await remote.executeThenClose { remoteInbound, remoteOutbound in
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for try await buffer in localInbound {
+                        try await remoteOutbound.write(buffer)
+                    }
+                }
+                group.addTask {
+                    for try await buffer in remoteInbound {
+                        try await localOutbound.write(buffer)
+                    }
+                }
+
+                defer { group.cancelAll() }
+                try await group.next()
+            }
         }
     }
 }

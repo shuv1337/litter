@@ -8,14 +8,14 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
-	<key>CFBundleDisplayName</key>
-	<string>Shitter</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -38,6 +38,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Codex discovers coding agents and SSH servers on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Shitter uses the microphone for voice-to-text input.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>BerkeleyMono-Regular.otf</string>
