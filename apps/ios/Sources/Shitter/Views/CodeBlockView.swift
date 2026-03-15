@@ -63,17 +63,44 @@ struct CodeBlockView: View {
 private final class CodeBlockHighlighter {
     static let shared = CodeBlockHighlighter()
 
-    private let darkHighlightr: Highlightr? = {
-        let h = Highlightr()
-        h?.setTheme(to: "atom-one-dark")
-        return h
-    }()
-    private let lightHighlightr: Highlightr? = {
-        let h = Highlightr()
-        h?.setTheme(to: "atom-one-light")
-        return h
-    }()
+    private var darkHighlightr: Highlightr?
+    private var lightHighlightr: Highlightr?
+    private var currentDarkTheme: String = ""
+    private var currentLightTheme: String = ""
     private var cache: [Int: AttributedString] = [:]
+
+    private var themeObserver: Any?
+
+    private init() {
+        darkHighlightr = Highlightr()
+        lightHighlightr = Highlightr()
+        updateThemes()
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: .themeDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.updateThemes() }
+        }
+    }
+
+    func updateThemes() {
+        let tm = ThemeManager.shared
+        let newDark = tm.darkTheme.highlightrThemeName
+        let newLight = tm.lightTheme.highlightrThemeName
+        var needsClear = false
+        if newDark != currentDarkTheme {
+            darkHighlightr?.setTheme(to: newDark)
+            currentDarkTheme = newDark
+            needsClear = true
+        }
+        if newLight != currentLightTheme {
+            lightHighlightr?.setTheme(to: newLight)
+            currentLightTheme = newLight
+            needsClear = true
+        }
+        if needsClear {
+            cache.removeAll(keepingCapacity: true)
+        }
+    }
 
     func highlight(code: String, language: String, fontSize: CGFloat) -> AttributedString? {
         let isDark = UITraitCollection.current.userInterfaceStyle == .dark

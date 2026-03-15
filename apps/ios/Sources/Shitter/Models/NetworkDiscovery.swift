@@ -25,7 +25,7 @@ final class NetworkDiscovery: ObservableObject {
     private var activeScanID = UUID()
     private var networkServerLastSeen: [String: Date] = [:]
 
-    private let cacheKey = "litter.discovery.networkServers.v1"
+    private let cacheKey = "shitter.discovery.networkServers.v1"
     private let cacheRetention: TimeInterval = 7 * 24 * 60 * 60
 
     private struct CachedNetworkServer: Codable {

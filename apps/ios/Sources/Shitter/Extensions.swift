@@ -28,26 +28,29 @@ extension UIColor {
 // MARK: - Central Theme
 
 enum ShitterTheme {
+    private static var light: ResolvedTheme { ThemeStore.shared.light }
+    private static var dark: ResolvedTheme { ThemeStore.shared.dark }
+
     static func adaptive(light: String, dark: String) -> Color {
         Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
     }
 
-    static let accent        = adaptive(light: "#4A4A4A", dark: "#B0B0B0")
-    static let accentStrong  = adaptive(light: "#00995D", dark: "#00FF9C")
-    static let textPrimary   = adaptive(light: "#1A1A1A", dark: "#FFFFFF")
-    static let textSecondary = adaptive(light: "#6B6B6B", dark: "#888888")
-    static let textMuted     = adaptive(light: "#9E9E9E", dark: "#555555")
-    static let textBody      = adaptive(light: "#2D2D2D", dark: "#E0E0E0")
-    static let textSystem    = adaptive(light: "#3A4A3F", dark: "#C6D0CA")
-    static let surface       = adaptive(light: "#F2F2F7", dark: "#1A1A1A")
-    static let surfaceLight  = adaptive(light: "#E5E5EA", dark: "#2A2A2A")
-    static let border        = adaptive(light: "#D1D1D6", dark: "#333333")
-    static let separator     = adaptive(light: "#E0E0E0", dark: "#1E1E1E")
-    static let danger        = adaptive(light: "#D32F2F", dark: "#FF5555")
-    static let success       = adaptive(light: "#2E7D32", dark: "#6EA676")
-    static let warning       = adaptive(light: "#E65100", dark: "#E2A644")
-    static let textOnAccent  = adaptive(light: "#FFFFFF", dark: "#0D0D0D")
-    static let codeBackground = adaptive(light: "#F0F0F5", dark: "#111111")
+    static var accent: Color        { adaptive(light: light.accent, dark: dark.accent) }
+    static var accentStrong: Color   { adaptive(light: light.accentStrong, dark: dark.accentStrong) }
+    static var textPrimary: Color    { adaptive(light: light.textPrimary, dark: dark.textPrimary) }
+    static var textSecondary: Color  { adaptive(light: light.textSecondary, dark: dark.textSecondary) }
+    static var textMuted: Color      { adaptive(light: light.textMuted, dark: dark.textMuted) }
+    static var textBody: Color       { adaptive(light: light.textBody, dark: dark.textBody) }
+    static var textSystem: Color     { adaptive(light: light.textSystem, dark: dark.textSystem) }
+    static var surface: Color        { adaptive(light: light.surface, dark: dark.surface) }
+    static var surfaceLight: Color   { adaptive(light: light.surfaceLight, dark: dark.surfaceLight) }
+    static var border: Color         { adaptive(light: light.border, dark: dark.border) }
+    static var separator: Color      { adaptive(light: light.separator, dark: dark.separator) }
+    static var danger: Color         { adaptive(light: light.danger, dark: dark.danger) }
+    static var success: Color        { adaptive(light: light.success, dark: dark.success) }
+    static var warning: Color        { adaptive(light: light.warning, dark: dark.warning) }
+    static var textOnAccent: Color   { adaptive(light: light.textOnAccent, dark: dark.textOnAccent) }
+    static var codeBackground: Color { adaptive(light: light.codeBackground, dark: dark.codeBackground) }
 
     static let overlayScrim: Color = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
@@ -57,11 +60,13 @@ enum ShitterTheme {
 
     static var gradientColors: [Color] {
         let isDark = UITraitCollection.current.userInterfaceStyle == .dark
-        if isDark {
-            return [Color(hex: "#0A0A0A"), Color(hex: "#0F0F0F"), Color(hex: "#080808")]
-        } else {
-            return [Color(hex: "#FFFFFF"), Color(hex: "#F8F8FA"), Color(hex: "#F5F5F7")]
-        }
+        let theme = isDark ? dark : light
+        let bg = theme.background
+        return [
+            Color(hex: bg),
+            Color(hex: ResolvedTheme.adjustBrightness(bg, by: isDark ? 0.02 : -0.01)),
+            Color(hex: ResolvedTheme.adjustBrightness(bg, by: isDark ? -0.01 : 0.01)),
+        ]
     }
 
     static var backgroundGradient: LinearGradient {
@@ -74,11 +79,9 @@ enum ShitterTheme {
 
     static var headerScrim: [Color] {
         let isDark = UITraitCollection.current.userInterfaceStyle == .dark
-        if isDark {
-            return [.black.opacity(0.5), .black.opacity(0.2), .clear]
-        } else {
-            return [.white.opacity(0.7), .white.opacity(0.3), .clear]
-        }
+        let bg = isDark ? dark.background : light.background
+        let bgColor = Color(hex: bg)
+        return [bgColor.opacity(0.7), bgColor.opacity(0.3), .clear]
     }
 }
 

@@ -70,11 +70,16 @@ struct JSONRPCNotification: Decodable {
 
 struct InitializeParams: Encodable {
     let clientInfo: ClientInfo
+    let capabilities: InitializeCapabilities?
 
     struct ClientInfo: Encodable {
         let name: String
         let version: String
         let title: String?
+    }
+
+    struct InitializeCapabilities: Encodable {
+        let experimentalApi: Bool
     }
 }
 
@@ -89,6 +94,8 @@ struct ThreadStartParams: Encodable {
     let cwd: String?
     let approvalPolicy: String?
     let sandbox: String?
+    let dynamicTools: [DynamicToolSpec]?
+    let persistExtendedHistory: Bool? = true
 }
 
 struct ThreadStartResponse: Decodable {
@@ -510,6 +517,7 @@ struct ThreadResumeParams: Encodable {
     var cwd: String?
     var approvalPolicy: String?
     var sandbox: String?
+    let persistExtendedHistory: Bool? = true
 }
 
 struct ThreadResumeResponse: Decodable {
@@ -541,11 +549,48 @@ struct ThreadResumeResponse: Decodable {
     }
 }
 
+// MARK: - Thread Read
+
+struct ThreadReadParams: Encodable {
+    let threadId: String
+    var includeTurns: Bool? = true
+}
+
+struct ThreadReadResponse: Decodable {
+    let thread: ResumedThread
+    let model: String?
+    let modelProvider: String?
+    let cwd: String?
+    let reasoningEffort: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case thread
+        case model
+        case modelProvider
+        case modelProviderSnake = "model_provider"
+        case cwd
+        case reasoningEffort
+        case reasoningEffortSnake = "reasoning_effort"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        thread = try container.decode(ResumedThread.self, forKey: .thread)
+        model = try? container.decodeIfPresent(String.self, forKey: .model)
+        modelProvider = (try? container.decodeIfPresent(String.self, forKey: .modelProvider))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .modelProviderSnake))
+        cwd = try? container.decodeIfPresent(String.self, forKey: .cwd)
+        reasoningEffort = (try? container.decodeIfPresent(String.self, forKey: .reasoningEffort))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .reasoningEffortSnake))
+    }
+}
+
 struct ThreadForkParams: Encodable {
     let threadId: String
     var cwd: String?
     var approvalPolicy: String?
     var sandbox: String?
+    let persistExtendedHistory: Bool? = true
 }
 
 struct ThreadForkResponse: Decodable {
@@ -679,21 +724,25 @@ struct ResumedThread: Decodable {
 struct ResumedTurn: Decodable {
     let id: String
     let items: [ResumedThreadItem]
+    let status: String?
 
     private enum CodingKeys: String, CodingKey {
         case id
         case items
+        case status
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? container.decode(String.self, forKey: .id)) ?? UUID().uuidString
         items = (try? container.decodeIfPresent([ResumedThreadItem].self, forKey: .items)) ?? []
+        status = try? container.decodeIfPresent(String.self, forKey: .status)
     }
 
     init(id: String, items: [ResumedThreadItem]) {
         self.id = id
         self.items = items
+        self.status = nil
     }
 }
 
@@ -730,6 +779,13 @@ enum ResumedThreadItem: Decodable {
     case imageView(path: String)
     case enteredReviewMode(review: String)
     case exitedReviewMode(review: String)
+    case dynamicToolCall(
+        tool: String,
+        arguments: AnyCodable?,
+        status: String,
+        contentItems: AnyCodable?,
+        durationMs: Int?
+    )
     case contextCompaction
     case unknown(type: String)
     case ignored
@@ -763,6 +819,8 @@ enum ResumedThreadItem: Decodable {
         case path
         case review
         case source
+        case arguments
+        case contentItems
         case agentId
         case agentIdSnake = "agent_id"
         case agentNickname
@@ -878,6 +936,14 @@ enum ResumedThreadItem: Decodable {
             self = .enteredReviewMode(review: Self.decodeString(container, forKey: .review) ?? "")
         case "exitedReviewMode":
             self = .exitedReviewMode(review: Self.decodeString(container, forKey: .review) ?? "")
+        case "dynamicToolCall":
+            self = .dynamicToolCall(
+                tool: Self.decodeString(container, forKey: .tool) ?? "",
+                arguments: try? container.decodeIfPresent(AnyCodable.self, forKey: .arguments),
+                status: Self.decodeString(container, forKey: .status) ?? "unknown",
+                contentItems: try? container.decodeIfPresent(AnyCodable.self, forKey: .contentItems),
+                durationMs: Self.decodeInt(container, forKey: .durationMs)
+            )
         case "contextCompaction":
             self = .contextCompaction
         default:

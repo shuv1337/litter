@@ -1,13 +1,19 @@
 package io.latitudes.shitter.android.ui
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -18,21 +24,66 @@ import androidx.compose.ui.unit.sp
 import io.latitudes.shitter.android.R
 
 object ShitterTheme {
-    val accent = Color(0xFFB0B0B0)
-    val accentStrong = Color(0xFF00FF9C)
-    val onAccentStrong = Color.Black
-    val textPrimary = Color.White
-    val textSecondary = Color(0xFF888888)
-    val textMuted = Color(0xFF555555)
-    val textBody = Color(0xFFE0E0E0)
-    val textSystem = Color(0xFFC6D0CA)
-    val surface = Color(0xFF1A1A1A)
-    val surfaceLight = Color(0xFF2A2A2A)
-    val border = Color(0xFF333333)
-    val divider = Color(0xFF1E1E1E)
-    val danger = Color(0xFFFF5555)
-    val success = Color(0xFF6EA676)
-    val warning = Color(0xFFE2A644)
+    private val activeTheme: ShitterResolvedTheme
+        get() = ShitterThemeManager.activeTheme
+
+    val themeKey: String
+        get() = activeTheme.slug
+
+    val isDark: Boolean
+        get() = activeTheme.type == ShitterColorThemeType.DARK
+
+    val background: Color
+        get() = activeTheme.background
+
+    val accent: Color
+        get() = activeTheme.accent
+
+    val accentStrong: Color
+        get() = activeTheme.accentStrong
+
+    val onAccentStrong: Color
+        get() = activeTheme.textOnAccent
+
+    val textPrimary: Color
+        get() = activeTheme.textPrimary
+
+    val textSecondary: Color
+        get() = activeTheme.textSecondary
+
+    val textMuted: Color
+        get() = activeTheme.textMuted
+
+    val textBody: Color
+        get() = activeTheme.textBody
+
+    val textSystem: Color
+        get() = activeTheme.textSystem
+
+    val surface: Color
+        get() = activeTheme.surface
+
+    val surfaceLight: Color
+        get() = activeTheme.surfaceLight
+
+    val border: Color
+        get() = activeTheme.border
+
+    val divider: Color
+        get() = activeTheme.separator
+
+    val danger: Color
+        get() = activeTheme.danger
+
+    val success: Color
+        get() = activeTheme.success
+
+    val warning: Color
+        get() = activeTheme.warning
+
+    val codeBackground: Color
+        get() = activeTheme.codeBackground
+
     val info = Color(0xFF7CAFD9)
     val violet = Color(0xFFC797D8)
     val amber = Color(0xFFD3A85E)
@@ -54,15 +105,22 @@ object ShitterTheme {
     val toolCallCollaboration = olive
     val toolCallImage = sand
 
-    val backgroundBrush: Brush =
-        Brush.linearGradient(
+    val backgroundBrush: Brush
+        get() =
+            Brush.linearGradient(
             colors =
                 listOf(
-                    Color(0xFF0A0A0A),
-                    Color(0xFF0F0F0F),
-                    Color(0xFF080808),
+                    background,
+                    ShitterResolvedTheme.adjustBrightness(
+                        background,
+                        if (isDark) 0.02f else -0.01f,
+                    ),
+                    ShitterResolvedTheme.adjustBrightness(
+                        background,
+                        if (isDark) -0.01f else 0.01f,
+                    ),
                 ),
-        )
+            )
 }
 
 private val Mono =
@@ -71,21 +129,6 @@ private val Mono =
         Font(R.font.berkeley_mono_oblique, weight = FontWeight.Normal, style = FontStyle.Italic),
         Font(R.font.berkeley_mono_bold, weight = FontWeight.Bold, style = FontStyle.Normal),
         Font(R.font.berkeley_mono_bold_oblique, weight = FontWeight.Bold, style = FontStyle.Italic),
-    )
-
-private val ShitterColorScheme =
-    darkColorScheme(
-        primary = ShitterTheme.accent,
-        onPrimary = Color(0xFF0D0D0D),
-        secondary = ShitterTheme.textSecondary,
-        onSecondary = ShitterTheme.textPrimary,
-        background = Color.Black,
-        onBackground = ShitterTheme.textBody,
-        surface = ShitterTheme.surface,
-        onSurface = ShitterTheme.textBody,
-        error = ShitterTheme.danger,
-        onError = Color(0xFF0D0D0D),
-        outline = ShitterTheme.border,
     )
 
 private val ShitterTypography =
@@ -154,8 +197,55 @@ private val ShitterTypography =
 
 @Composable
 fun ShitterAppTheme(content: @Composable () -> Unit) {
+    val appContext = LocalContext.current.applicationContext
+    DisposableEffect(appContext) {
+        ShitterThemeManager.initialize(appContext)
+        onDispose {}
+    }
+
+    val isSystemDark = isSystemInDarkTheme()
+    val lightThemeSlug = ShitterThemeManager.lightTheme.slug
+    val darkThemeSlug = ShitterThemeManager.darkTheme.slug
+    LaunchedEffect(isSystemDark, lightThemeSlug, darkThemeSlug) {
+        ShitterThemeManager.applySystemTheme(isSystemDark)
+    }
+
+    val activeTheme = ShitterThemeManager.activeTheme
+    val colorScheme =
+        remember(activeTheme.slug, activeTheme.type) {
+            if (activeTheme.type == ShitterColorThemeType.DARK) {
+                darkColorScheme(
+                    primary = activeTheme.accentStrong,
+                    onPrimary = activeTheme.textOnAccent,
+                    secondary = activeTheme.textSecondary,
+                    onSecondary = activeTheme.textPrimary,
+                    background = activeTheme.background,
+                    onBackground = activeTheme.textBody,
+                    surface = activeTheme.surface,
+                    onSurface = activeTheme.textBody,
+                    error = activeTheme.danger,
+                    onError = activeTheme.textOnAccent,
+                    outline = activeTheme.border,
+                )
+            } else {
+                lightColorScheme(
+                    primary = activeTheme.accentStrong,
+                    onPrimary = activeTheme.textOnAccent,
+                    secondary = activeTheme.textSecondary,
+                    onSecondary = activeTheme.textPrimary,
+                    background = activeTheme.background,
+                    onBackground = activeTheme.textBody,
+                    surface = activeTheme.surface,
+                    onSurface = activeTheme.textBody,
+                    error = activeTheme.danger,
+                    onError = activeTheme.textOnAccent,
+                    outline = activeTheme.border,
+                )
+            }
+        }
+
     MaterialTheme(
-        colorScheme = ShitterColorScheme,
+        colorScheme = colorScheme,
         typography = ShitterTypography,
         content = content,
     )
@@ -165,7 +255,7 @@ fun ShitterAppTheme(content: @Composable () -> Unit) {
 @Composable
 private fun ShitterThemePreview() {
     ShitterAppTheme {
-        Surface(color = Color.Black) {
+        Surface(color = ShitterTheme.background) {
             Text(
                 text = "Shitter Theme",
                 color = MaterialTheme.colorScheme.onBackground,

@@ -2,13 +2,167 @@ import SwiftUI
 import MarkdownUI
 import Inject
 
+// MARK: - Reusable bubble components
+
+struct UserBubble: View {
+    let text: String
+    var images: [ChatImage] = []
+    var textScale: CGFloat = 1.0
+    var compact: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Spacer(minLength: compact ? 30 : 60)
+            VStack(alignment: .trailing, spacing: compact ? 4 : 8) {
+                ForEach(images) { img in
+                    if let uiImage = UserBubble.decodeImage(from: img.data, cacheKey: "user-\(img.id.uuidString)") {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 200, maxHeight: 200)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                if !text.isEmpty {
+                    Text(text)
+                        .font(ShitterFont.styled(compact ? .footnote : .callout, scale: textScale))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.vertical, compact ? 6 : 10)
+            .modifier(GlassRectModifier(cornerRadius: compact ? 10 : 14, tint: ShitterTheme.accent.opacity(0.3)))
+        }
+    }
+
+    private static let imageCache = NSCache<NSString, UIImage>()
+
+    private static func decodeImage(from data: Data, cacheKey: String) -> UIImage? {
+        let key = cacheKey as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let image = UIImage(data: data) else { return nil }
+        imageCache.setObject(image, forKey: key)
+        return image
+    }
+}
+
+struct AssistantBubble: View, Equatable {
+    let text: String
+    var label: String? = nil
+    var textScale: CGFloat = 1.0
+    var compact: Bool = false
+    @ScaledMetric(relativeTo: .body) private var mdBodySize: CGFloat = 14
+    @ScaledMetric(relativeTo: .footnote) private var mdCodeSize: CGFloat = 13
+
+    private var bodySize: CGFloat { (compact ? 12 : mdBodySize) * textScale }
+    private var codeSize: CGFloat { (compact ? 11 : mdCodeSize) * textScale }
+
+    static func == (lhs: AssistantBubble, rhs: AssistantBubble) -> Bool {
+        lhs.text == rhs.text &&
+        lhs.label == rhs.label &&
+        lhs.textScale == rhs.textScale &&
+        lhs.compact == rhs.compact
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: compact ? 4 : 8) {
+                if let label {
+                    Text(label)
+                        .font(ShitterFont.styled(.caption2, weight: .semibold, scale: textScale))
+                        .foregroundColor(ShitterTheme.textSecondary)
+                }
+                Markdown(text)
+                    .markdownTheme(.shitter(bodySize: bodySize, codeSize: codeSize))
+                    .markdownCodeSyntaxHighlighter(.plain)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: compact ? 8 : 20)
+        }
+    }
+}
+
+struct StreamingAssistantBubble: View {
+    let text: String
+    var label: String? = nil
+    var textScale: CGFloat = 1.0
+    var onSnapshotRendered: (() -> Void)? = nil
+    @State private var renderedText: String = ""
+    @State private var pendingText: String?
+    @State private var flushWorkItem: DispatchWorkItem?
+    @State private var snapshotOpacity: Double = 1.0
+
+    private let flushInterval: TimeInterval = 0.06
+
+    var body: some View {
+        AssistantBubble(text: renderedText, label: label, textScale: textScale)
+            .equatable()
+            .opacity(snapshotOpacity)
+            .onAppear {
+                renderedText = text
+                onSnapshotRendered?()
+            }
+            .onChange(of: text) {
+                scheduleRenderUpdate(with: text)
+            }
+            .onDisappear {
+                flushWorkItem?.cancel()
+                flushWorkItem = nil
+                pendingText = nil
+                snapshotOpacity = 1.0
+            }
+    }
+
+    private func scheduleRenderUpdate(with newText: String) {
+        guard newText != renderedText else { return }
+        if renderedText.isEmpty {
+            renderedText = newText
+            return
+        }
+
+        pendingText = newText
+        guard flushWorkItem == nil else { return }
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        let work = DispatchWorkItem {
+            flushWorkItem = nil
+            guard let pendingText else { return }
+            renderedText = pendingText
+            self.pendingText = nil
+            animateSnapshotArrival()
+            onSnapshotRendered?()
+        }
+
+        flushWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + flushInterval, execute: work)
+    }
+
+    private func animateSnapshotArrival() {
+        snapshotOpacity = 0.94
+        withAnimation(.easeOut(duration: 0.14)) {
+            snapshotOpacity = 1.0
+        }
+    }
+}
+
+// MARK: - Full message bubble (used in conversation)
+
 struct MessageBubbleView: View {
     @ObserveInjection var inject
-    @EnvironmentObject var serverManager: ServerManager
     let message: ChatMessage
     let serverId: String?
+    let agentDirectoryVersion: Int
     let textScale: CGFloat
+    let isStreamingMessage: Bool
     let actionsDisabled: Bool
+    let onStreamingSnapshotRendered: (() -> Void)?
+    let resolveTargetLabel: ((String) -> String?)?
+    let onWidgetPrompt: ((String) -> Void)?
     let onEditUserMessage: ((ChatMessage) -> Void)?
     let onForkFromUserMessage: ((ChatMessage) -> Void)?
     @ScaledMetric(relativeTo: .body) private var mdBodySize: CGFloat = 14
@@ -23,33 +177,45 @@ struct MessageBubbleView: View {
     init(
         message: ChatMessage,
         serverId: String? = nil,
+        agentDirectoryVersion: Int = 0,
         textScale: CGFloat = 1.0,
+        isStreamingMessage: Bool = false,
         actionsDisabled: Bool = false,
+        onStreamingSnapshotRendered: (() -> Void)? = nil,
+        resolveTargetLabel: ((String) -> String?)? = nil,
+        onWidgetPrompt: ((String) -> Void)? = nil,
         onEditUserMessage: ((ChatMessage) -> Void)? = nil,
         onForkFromUserMessage: ((ChatMessage) -> Void)? = nil
     ) {
         self.message = message
         self.serverId = serverId
+        self.agentDirectoryVersion = agentDirectoryVersion
         self.textScale = textScale
+        self.isStreamingMessage = isStreamingMessage
         self.actionsDisabled = actionsDisabled
+        self.onStreamingSnapshotRendered = onStreamingSnapshotRendered
+        self.resolveTargetLabel = resolveTargetLabel
+        self.onWidgetPrompt = onWidgetPrompt
         self.onEditUserMessage = onEditUserMessage
         self.onForkFromUserMessage = onForkFromUserMessage
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        Group {
             if message.role == .user {
-                Spacer(minLength: 60)
-                userBubble
+                userBubbleWithActions
             } else if message.role == .assistant {
                 assistantContent
-                Spacer(minLength: 20)
             } else if isReasoning {
-                reasoningContent
-                Spacer(minLength: 20)
+                HStack(alignment: .top, spacing: 0) {
+                    reasoningContent
+                    Spacer(minLength: 20)
+                }
             } else {
-                systemBubble
-                Spacer(minLength: 20)
+                HStack(alignment: .top, spacing: 0) {
+                    systemBubble
+                    Spacer(minLength: 20)
+                }
             }
         }
         .task(id: parseRefreshToken) {
@@ -59,7 +225,8 @@ struct MessageBubbleView: View {
     }
 
     private var parseRefreshToken: String {
-        "\(message.id.uuidString)-\(message.role)-\(message.text.hashValue)-\(message.images.count)-\(serverId ?? "<nil>")-\(serverManager.agentDirectoryVersion)"
+        let contentToken = isStreamingMessage ? "streaming" : String(message.text.hashValue)
+        return "\(message.id.uuidString)-\(message.role)-\(contentToken)-\(message.images.count)-\(serverId ?? "<nil>")-\(agentDirectoryVersion)"
     }
 
     private var isReasoning: Bool {
@@ -75,67 +242,69 @@ struct MessageBubbleView: View {
             message.sourceTurnIndex != nil
     }
 
-    private var userBubble: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            ForEach(message.images) { img in
-                if let uiImage = decodedImage(from: img.data, cacheKey: "user-\(img.id.uuidString)") {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 200, maxHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-            }
-            if !message.text.isEmpty {
-                Text(message.text)
-                    .font(ShitterFont.styled(.callout, scale: textScale))
-                    .foregroundColor(ShitterTheme.textPrimary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .modifier(GlassRectModifier(cornerRadius: 14, tint: ShitterTheme.accent.opacity(0.3)))
-        .contextMenu {
-            if supportsUserActions {
-                Button("Edit Message") {
-                    onEditUserMessage?(message)
-                }
-                .disabled(actionsDisabled || onEditUserMessage == nil)
+    private var userBubbleWithActions: some View {
+        UserBubble(text: message.text, images: message.images, textScale: textScale)
+            .contextMenu {
+                if supportsUserActions {
+                    Button("Edit Message") {
+                        onEditUserMessage?(message)
+                    }
+                    .disabled(actionsDisabled || onEditUserMessage == nil)
 
-                Button("Fork From Here") {
-                    onForkFromUserMessage?(message)
+                    Button("Fork From Here") {
+                        onForkFromUserMessage?(message)
+                    }
+                    .disabled(actionsDisabled || onForkFromUserMessage == nil)
                 }
-                .disabled(actionsDisabled || onForkFromUserMessage == nil)
             }
-        }
     }
 
+    @ViewBuilder
     private var assistantContent: some View {
-        let parsed = assistantSegmentsForRendering
-        return VStack(alignment: .leading, spacing: 8) {
-            if let assistantLabel = assistantAgentLabel {
-                Text(assistantLabel)
-                    .font(ShitterFont.styled(.caption2, weight: .semibold, scale: textScale))
-                    .foregroundColor(ShitterTheme.textSecondary)
-            }
-            ForEach(parsed) { segment in
-                switch segment.kind {
-                case .text(let md):
-                    Markdown(md)
-                        .markdownTheme(.shitter(bodySize: mdBodySize * textScale, codeSize: mdCodeSize * textScale))
-                        .markdownCodeSyntaxHighlighter(.plain)
-                        .textSelection(.enabled)
-                case .image(let uiImage):
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxHeight: 300)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+        if isStreamingMessage {
+            StreamingAssistantBubble(
+                text: message.text,
+                label: assistantAgentLabel,
+                textScale: textScale,
+                onSnapshotRendered: onStreamingSnapshotRendered
+            )
+        } else {
+            let parsed = assistantSegmentsForRendering
+            let hasImages = parsed.contains { if case .image = $0.kind { return true } else { return false } }
+
+            if !hasImages {
+                // Simple text-only path — use the reusable AssistantBubble
+                AssistantBubble(text: message.text, label: assistantAgentLabel, textScale: textScale)
+            } else {
+                // Inline images — need segment-based rendering
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let assistantLabel = assistantAgentLabel {
+                            Text(assistantLabel)
+                                .font(ShitterFont.styled(.caption2, weight: .semibold, scale: textScale))
+                                .foregroundColor(ShitterTheme.textSecondary)
+                        }
+                        ForEach(parsed) { segment in
+                            switch segment.kind {
+                            case .text(let md):
+                                Markdown(md)
+                                    .markdownTheme(.shitter(bodySize: mdBodySize * textScale, codeSize: mdCodeSize * textScale))
+                                    .markdownCodeSyntaxHighlighter(.plain)
+                                    .textSelection(.enabled)
+                            case .image(let uiImage):
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxHeight: 300)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: 20)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var assistantAgentLabel: String? {
@@ -157,12 +326,36 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var systemBubble: some View {
-        let parsed = systemParseResultForRendering
-        switch parsed {
-        case .recognized(let model):
-            ToolCallCardView(model: model)
-        case .unrecognized:
-            genericSystemBubble
+        if let widget = message.widgetState {
+            WidgetContainerView(
+                widget: widget,
+                onMessage: handleWidgetMessage
+            )
+        } else {
+            let parsed = systemParseResultForRendering
+            switch parsed {
+            case .recognized(let model):
+                ToolCallCardView(model: model)
+            case .unrecognized:
+                genericSystemBubble
+            }
+        }
+    }
+
+    private func handleWidgetMessage(_ body: Any) {
+        guard let dict = body as? [String: Any],
+              let type = dict["_type"] as? String else { return }
+        switch type {
+        case "sendPrompt":
+            if let text = dict["text"] as? String, !text.isEmpty {
+                onWidgetPrompt?(text)
+            }
+        case "openLink":
+            if let urlStr = dict["url"] as? String, let url = URL(string: urlStr) {
+                UIApplication.shared.open(url)
+            }
+        default:
+            break
         }
     }
 
@@ -254,15 +447,18 @@ struct MessageBubbleView: View {
         }
         return ToolCallMessageParser.parse(
             message: message,
-            resolveTargetLabel: { target in
-                serverManager.resolvedAgentTargetLabel(for: target, serverId: serverId)
-            }
+            resolveTargetLabel: resolveTargetLabel
         )
     }
 
     private func prepareDerivedContent() {
         switch message.role {
         case .assistant:
+            guard !isStreamingMessage else {
+                didPrepareAssistantSegments = false
+                didPrepareSystemResult = false
+                return
+            }
             parsedAssistantSegments = Self.extractInlineSegments(
                 from: message.text,
                 messageId: message.id,
@@ -273,9 +469,7 @@ struct MessageBubbleView: View {
         case .system:
             parsedSystemResult = ToolCallMessageParser.parse(
                 message: message,
-                resolveTargetLabel: { target in
-                    serverManager.resolvedAgentTargetLabel(for: target, serverId: serverId)
-                }
+                resolveTargetLabel: resolveTargetLabel
             )
             didPrepareSystemResult = true
             didPrepareAssistantSegments = false

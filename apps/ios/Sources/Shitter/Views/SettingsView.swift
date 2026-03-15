@@ -30,7 +30,9 @@ struct SettingsView: View {
             ZStack {
                 ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
+                    appearanceSection
                     fontSection
+                    experimentalSection
                     accountSection
                     serversSection
                 }
@@ -56,6 +58,29 @@ struct SettingsView: View {
                 showOAuth = false
                 conn?.loginCompleted = false
             }
+        }
+    }
+
+    // MARK: - Appearance Section
+
+    private var appearanceSection: some View {
+        Section {
+            NavigationLink {
+                AppearanceSettingsView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "paintbrush")
+                        .foregroundColor(ShitterTheme.accent)
+                        .frame(width: 20)
+                    Text("Appearance")
+                        .font(ShitterFont.styled(.subheadline))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                }
+            }
+            .listRowBackground(ShitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Theme")
+                .foregroundColor(ShitterTheme.textSecondary)
         }
     }
 
@@ -88,6 +113,29 @@ struct SettingsView: View {
             }
         } header: {
             Text("Font")
+                .foregroundColor(ShitterTheme.textSecondary)
+        }
+    }
+
+    // MARK: - Experimental Section
+
+    private var experimentalSection: some View {
+        Section {
+            NavigationLink {
+                ExperimentalFeaturesView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "flask")
+                        .foregroundColor(ShitterTheme.accent)
+                        .frame(width: 20)
+                    Text("Experimental Features")
+                        .font(ShitterFont.styled(.subheadline))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                }
+            }
+            .listRowBackground(ShitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Experimental")
                 .foregroundColor(ShitterTheme.textSecondary)
         }
     }

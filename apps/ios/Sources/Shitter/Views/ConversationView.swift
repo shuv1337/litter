@@ -22,15 +22,22 @@ struct ConversationView: View {
         serverManager.activeThread?.status ?? .idle
     }
 
+    private var threadUpdatedAt: Date {
+        serverManager.activeThread?.updatedAt ?? .distantPast
+    }
+
     var body: some View {
         ConversationMessageList(
             messages: messages,
             threadStatus: threadStatus,
+            threadUpdatedAt: threadUpdatedAt,
             activeThreadKey: serverManager.activeThreadKey,
             agentDirectoryVersion: serverManager.agentDirectoryVersion,
             topInset: topInset,
             textSizeStep: $conversationTextSizeStep,
             inputFocused: $composerFocused,
+            resolveTargetLabel: resolveTargetLabel,
+            onWidgetPrompt: sendWidgetPrompt,
             onEditUserMessage: editMessage,
             onForkFromUserMessage: forkFromMessage
         )
@@ -78,6 +85,26 @@ struct ConversationView: View {
                 sandboxMode: appState.sandboxMode
             )
         }
+    }
+
+    private func sendWidgetPrompt(_ text: String) {
+        guard !text.isEmpty else { return }
+        let model = appState.selectedModel.isEmpty ? nil : appState.selectedModel
+        let effort = appState.reasoningEffort
+        Task {
+            await serverManager.send(
+                text,
+                cwd: workDir,
+                model: model,
+                effort: effort,
+                approvalPolicy: appState.approvalPolicy,
+                sandboxMode: appState.sandboxMode
+            )
+        }
+    }
+
+    private func resolveTargetLabel(_ target: String) -> String? {
+        serverManager.resolvedAgentTargetLabel(for: target, serverId: serverManager.activeThreadKey?.serverId)
     }
 
     private func editMessage(_ message: ChatMessage) {
@@ -149,37 +176,6 @@ private enum ConversationTextSize: Int, CaseIterable {
     }
 }
 
-struct ContextBadgeView: View, Equatable {
-    let percent: Int
-    let tint: Color
-
-    private let cornerRadius: CGFloat = 3.5
-    private let strokeWidth: CGFloat = 1.2
-    private let inset: CGFloat = 1.5
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(tint.opacity(0.4), lineWidth: strokeWidth)
-
-            GeometryReader { geo in
-                let inner = geo.size.width - (inset + strokeWidth) * 2
-                RoundedRectangle(cornerRadius: max(0, cornerRadius - inset))
-                    .fill(tint.opacity(0.25))
-                    .frame(width: max(0, inner * CGFloat(percent) / 100.0))
-                    .padding(.leading, inset + strokeWidth / 2)
-                    .frame(maxHeight: .infinity, alignment: .center)
-            }
-            .padding(.vertical, inset + strokeWidth / 2)
-
-            Text("\(percent)")
-                .font(.system(size: 7.5, weight: .heavy, design: .monospaced))
-                .foregroundColor(tint)
-        }
-        .frame(width: 28, height: 13)
-    }
-}
-
 struct RateLimitBadgeView: View, Equatable {
     let label: String
     let percent: Int
@@ -200,26 +196,25 @@ struct RateLimitBadgeView: View, Equatable {
     }
 }
 
-private struct BottomMarkerMaxYPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = .greatestFiniteMagnitude
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
 
 private struct ConversationMessageList: View {
     let messages: [ChatMessage]
     let threadStatus: ConversationStatus
+    let threadUpdatedAt: Date
     let activeThreadKey: ThreadKey?
     let agentDirectoryVersion: Int
     var topInset: CGFloat = 0
     @Binding var textSizeStep: Int
     let inputFocused: FocusState<Bool>.Binding
+    let resolveTargetLabel: (String) -> String?
+    let onWidgetPrompt: (String) -> Void
     let onEditUserMessage: (ChatMessage) -> Void
     let onForkFromUserMessage: (ChatMessage) -> Void
     @State private var pendingScrollWorkItem: DispatchWorkItem?
     @State private var isNearBottom = true
+    @State private var autoFollowStreaming = true
+    @State private var userIsDraggingScroll = false
+    @State private var streamingRenderTick = 0
     @State private var pinchBaseStep: Int?
     @State private var pinchAppliedDelta = 0
 
@@ -238,93 +233,170 @@ private struct ConversationMessageList: View {
         !messages.isEmpty && !isNearBottom
     }
 
+    private var isStreaming: Bool {
+        if case .thinking = threadStatus {
+            return true
+        }
+        return false
+    }
+
+    private var shouldMaintainBottomAnchor: Bool {
+        guard !userIsDraggingScroll else { return false }
+        if isStreaming {
+            return autoFollowStreaming
+        }
+        return isNearBottom
+    }
+
     var body: some View {
+
         ScrollViewReader { proxy in
             GeometryReader { viewport in
-                ZStack(alignment: .bottomTrailing) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(messages) { message in
-                                    EquatableMessageBubble(
-                                        message: message,
-                                        serverId: activeThreadKey?.serverId,
-                                        textScale: textScale,
-                                        agentDirectoryVersion: agentDirectoryVersion,
-                                        messageActionsDisabled: messageActionsDisabled,
-                                        onEditUserMessage: onEditUserMessage,
-                                        onForkFromUserMessage: onForkFromUserMessage
-                                    )
-                                        .id(message.id)
-                                }
-                                if case .thinking = threadStatus {
-                                    TypingIndicator()
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, topInset + 56)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Use a regular stack for the transcript. Lazy placement has been
+                        // implicated in both widget resizing and large streaming markdown churn.
+                        VStack(alignment: .leading, spacing: 12) {
+                            messageRows
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, topInset + 56)
 
-                            Color.clear
-                                .frame(height: 1)
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: BottomMarkerMaxYPreferenceKey.self,
-                                            value: geo.frame(in: .named("conversationScrollArea")).maxY
-                                        )
-                                    }
-                                )
-                                .id("bottom")
-                                .padding(.horizontal, 16)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                            .padding(.horizontal, 16)
                     }
-                    .defaultScrollAnchor(.bottom)
-                    .coordinateSpace(name: "conversationScrollArea")
-                    .scrollDismissesKeyboard(.interactively)
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            inputFocused.wrappedValue = false
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+                }
+                .defaultScrollAnchor(.bottom)
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        inputFocused.wrappedValue = false
+                    }
+                )
+                .background(
+                    ScrollPinchCapture { scale, state in
+                        handlePinch(scale: scale, state: state)
+                    }
+                )
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    let distanceFromBottom = geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height
+                    return distanceFromBottom <= 60
+                } action: { _, newValue in
+                    if newValue != isNearBottom {
+                        isNearBottom = newValue
+                    }
+                    if newValue {
+                        autoFollowStreaming = true
+                    } else if isStreaming && userIsDraggingScroll {
+                        autoFollowStreaming = false
+                    }
+                }
+                .onScrollPhaseChange { _, newPhase in
+                    switch newPhase {
+                    case .tracking, .interacting:
+                        pendingScrollWorkItem?.cancel()
+                        pendingScrollWorkItem = nil
+                        userIsDraggingScroll = true
+                        if isStreaming {
+                            autoFollowStreaming = false
                         }
-                    )
-                    .background(
-                        ScrollPinchCapture { scale, state in
-                            handlePinch(scale: scale, state: state)
-                        }
-                    )
-                    .onPreferenceChange(BottomMarkerMaxYPreferenceKey.self) { markerMaxY in
-                        let distanceFromBottom = markerMaxY - viewport.size.height
-                        let nextNearBottom = distanceFromBottom <= 36
-                        if nextNearBottom != isNearBottom {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                isNearBottom = nextNearBottom
-                            }
+                    case .decelerating:
+                        userIsDraggingScroll = true
+                    default:
+                        userIsDraggingScroll = false
+                        if isNearBottom {
+                            autoFollowStreaming = true
                         }
                     }
+                }
                     .onAppear {
-                        scheduleScrollToBottom(proxy, delay: 0.12, force: true, animated: false)
+                        autoFollowStreaming = true
+                        scheduleScrollToBottom(proxy, delay: 0.06, force: true, animation: nil)
                     }
                     .onChange(of: activeThreadKey) {
-                        scheduleScrollToBottom(proxy, delay: 0.12, force: true, animated: false)
+                        autoFollowStreaming = true
+                        scheduleScrollToBottom(proxy, delay: 0.06, force: true, animation: nil)
                     }
                     .onChange(of: messages.count) {
                         scheduleScrollToBottom(proxy)
+                    }
+                    .onChange(of: threadStatus) {
+                        if isStreaming {
+                            autoFollowStreaming = isNearBottom
+                            scheduleScrollToBottom(
+                                proxy,
+                                delay: 0,
+                                animation: .linear(duration: 0.12)
+                            )
+                        } else {
+                            userIsDraggingScroll = false
+                        }
+                    }
+                    .onChange(of: threadUpdatedAt) {
+                        guard isStreaming else { return }
+                        scheduleScrollToBottom(
+                            proxy,
+                            delay: 0.06,
+                            animation: .linear(duration: 0.12)
+                        )
+                    }
+                    .onChange(of: streamingRenderTick) {
+                        guard isStreaming else { return }
+                        scheduleScrollToBottom(
+                            proxy,
+                            delay: 0,
+                            replacePending: true,
+                            animation: .linear(duration: 0.09)
+                        )
                     }
                     .onDisappear {
                         pendingScrollWorkItem?.cancel()
                         pendingScrollWorkItem = nil
                     }
 
-                    if shouldShowScrollToBottom {
-                        ScrollToBottomIndicator {
-                            scheduleScrollToBottom(proxy, delay: 0, force: true, animated: true)
+                if shouldShowScrollToBottom {
+                    ScrollToBottomIndicator {
+                        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.9)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
                         }
-                        .padding(.trailing, 14)
-                        .padding(.bottom, 10)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        isNearBottom = true
+                        autoFollowStreaming = true
                     }
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageRows: some View {
+        let streamingAssistantMessageId = isStreaming ? messages.last(where: { $0.role == .assistant })?.id : nil
+        ForEach(messages) { message in
+            EquatableMessageBubble(
+                message: message,
+                serverId: activeThreadKey?.serverId,
+                agentDirectoryVersion: agentDirectoryVersion,
+                textScale: textScale,
+                isStreamingMessage: message.id == streamingAssistantMessageId,
+                messageActionsDisabled: messageActionsDisabled,
+                onStreamingSnapshotRendered: message.id == streamingAssistantMessageId ? handleStreamingSnapshotRendered : nil,
+                resolveTargetLabel: resolveTargetLabel,
+                onWidgetPrompt: onWidgetPrompt,
+                onEditUserMessage: onEditUserMessage,
+                onForkFromUserMessage: onForkFromUserMessage
+            )
+            .equatable()
+            .id(message.id)
+        }
+        if case .thinking = threadStatus {
+            TypingIndicator()
         }
     }
 
@@ -376,17 +448,32 @@ private struct ConversationMessageList: View {
         }
     }
 
+    private func handleStreamingSnapshotRendered() {
+        streamingRenderTick &+= 1
+    }
+
     private func scheduleScrollToBottom(
         _ proxy: ScrollViewProxy,
         delay: TimeInterval = 0.05,
         force: Bool = false,
-        animated: Bool = true
+        replacePending: Bool = false,
+        animation: Animation? = .interactiveSpring(response: 0.28, dampingFraction: 0.9)
     ) {
-        guard force || isNearBottom else { return }
-        pendingScrollWorkItem?.cancel()
+        guard force || shouldMaintainBottomAnchor else { return }
+        if force {
+            pendingScrollWorkItem?.cancel()
+            pendingScrollWorkItem = nil
+        } else if replacePending {
+            pendingScrollWorkItem?.cancel()
+            pendingScrollWorkItem = nil
+        } else if pendingScrollWorkItem != nil {
+            return
+        }
         let work = DispatchWorkItem {
-            if animated {
-                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.9)) {
+            pendingScrollWorkItem = nil
+            guard force || shouldMaintainBottomAnchor else { return }
+            if let animation {
+                withAnimation(animation) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             } else {
@@ -406,9 +493,13 @@ private struct ConversationMessageList: View {
 private struct EquatableMessageBubble: View, Equatable {
     let message: ChatMessage
     let serverId: String?
-    let textScale: CGFloat
     let agentDirectoryVersion: Int
+    let textScale: CGFloat
+    let isStreamingMessage: Bool
     let messageActionsDisabled: Bool
+    let onStreamingSnapshotRendered: (() -> Void)?
+    let resolveTargetLabel: (String) -> String?
+    let onWidgetPrompt: (String) -> Void
     let onEditUserMessage: (ChatMessage) -> Void
     let onForkFromUserMessage: (ChatMessage) -> Void
 
@@ -419,16 +510,23 @@ private struct EquatableMessageBubble: View, Equatable {
         lhs.message.images.count == rhs.message.images.count &&
         lhs.serverId == rhs.serverId &&
         lhs.textScale == rhs.textScale &&
+        lhs.isStreamingMessage == rhs.isStreamingMessage &&
         lhs.agentDirectoryVersion == rhs.agentDirectoryVersion &&
         lhs.messageActionsDisabled == rhs.messageActionsDisabled
     }
 
     var body: some View {
+
         MessageBubbleView(
             message: message,
             serverId: serverId,
+            agentDirectoryVersion: agentDirectoryVersion,
             textScale: textScale,
+            isStreamingMessage: isStreamingMessage,
             actionsDisabled: messageActionsDisabled,
+            onStreamingSnapshotRendered: onStreamingSnapshotRendered,
+            resolveTargetLabel: resolveTargetLabel,
+            onWidgetPrompt: onWidgetPrompt,
             onEditUserMessage: onEditUserMessage,
             onForkFromUserMessage: onForkFromUserMessage
         )
@@ -453,7 +551,7 @@ private struct ScrollToBottomIndicator: View {
             .padding(.vertical, 8)
             .modifier(GlassCapsuleModifier())
         }
-        .buttonStyle(.plain)
+        .contentShape(Capsule())
         .onAppear {
             withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
                 bob = true
@@ -945,6 +1043,8 @@ private struct ConversationInputBar: View {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(.title2))
                             .foregroundColor(ShitterTheme.accent)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
                     }
                     .padding(.trailing, 4)
                 } else if voiceManager.isRecording {
@@ -1043,8 +1143,8 @@ private struct ConversationInputBar: View {
     }
 
     private func normalizedPercent(_ raw: Double) -> Int {
-        if raw > 1 { return min(Int(raw), 100) }
-        return min(Int(raw * 100), 100)
+        let used = raw > 1 ? min(Int(raw), 100) : min(Int(raw * 100), 100)
+        return max(0, 100 - used)
     }
 
     private func formatWindowLabel(_ window: RateLimitWindow) -> String {
@@ -1070,7 +1170,7 @@ private struct ConversationInputBar: View {
         switch percent {
         case ...15: return ShitterTheme.danger
         case ...35: return ShitterTheme.warning
-        default: return ShitterTheme.accentStrong
+        default: return ShitterTheme.success
         }
     }
 

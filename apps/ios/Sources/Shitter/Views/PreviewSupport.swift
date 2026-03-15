@@ -4,7 +4,7 @@ import Foundation
 import SwiftUI
 
 enum ShitterPreviewData {
-    static let sampleCwd = "/Users/sigkitten/dev/codex-ios"
+    static let sampleCwd = "/Users/shuv/dev/shitter-ios"
 
     static let sampleServer = DiscoveredServer(
         id: "preview-remote",

@@ -1,0 +1,22 @@
+name = "shitter-push-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+routes = [{ pattern = "push.sigkitten.com", custom_domain = true }]
+
+[durable_objects]
+bindings = [
+  { name = "PUSH_REGISTRATION", class_name = "PushRegistration" },
+  { name = "RATE_LIMITER", class_name = "RateLimiter" },
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PushRegistration"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["RateLimiter"]
+
+[vars]
+APNS_ENVIRONMENT = "development"

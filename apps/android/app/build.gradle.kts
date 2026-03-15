@@ -13,10 +13,10 @@ fun projectPropOrEnv(name: String): String? =
 fun projectPropOrEnvWithLegacy(preferred: String, legacy: String): String? =
     projectPropOrEnv(preferred) ?: projectPropOrEnv(legacy)
 
-val uploadStoreFile = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_FILE", "LITTER_UPLOAD_STORE_FILE")
-val uploadStorePassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_PASSWORD", "LITTER_UPLOAD_STORE_PASSWORD")
-val uploadKeyAlias = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_ALIAS", "LITTER_UPLOAD_KEY_ALIAS")
-val uploadKeyPassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_PASSWORD", "LITTER_UPLOAD_KEY_PASSWORD")
+val uploadStoreFile = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_FILE", "SHITTER_UPLOAD_STORE_FILE")
+val uploadStorePassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_STORE_PASSWORD", "SHITTER_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_ALIAS", "SHITTER_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword = projectPropOrEnvWithLegacy("SHITTER_UPLOAD_KEY_PASSWORD", "SHITTER_UPLOAD_KEY_PASSWORD")
 val hasUploadSigning = listOf(uploadStoreFile, uploadStorePassword, uploadKeyAlias, uploadKeyPassword).all { !it.isNullOrBlank() }
 
 android {
@@ -89,6 +89,12 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("main") {
+            assets.srcDir("../../ios/Sources/Shitter/Resources/Themes")
+        }
+    }
+
     packaging {
         jniLibs {
             // Ensure native libs are extracted to a filesystem path so they can be executed.
@@ -99,9 +105,9 @@ android {
 
 play {
     defaultToAppBundles.set(true)
-    track.set(projectPropOrEnvWithLegacy("SHITTER_PLAY_TRACK", "LITTER_PLAY_TRACK") ?: "internal")
+    track.set(projectPropOrEnvWithLegacy("SHITTER_PLAY_TRACK", "SHITTER_PLAY_TRACK") ?: "internal")
     releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
-    val serviceAccountPath = projectPropOrEnvWithLegacy("SHITTER_PLAY_SERVICE_ACCOUNT_JSON", "LITTER_PLAY_SERVICE_ACCOUNT_JSON")
+    val serviceAccountPath = projectPropOrEnvWithLegacy("SHITTER_PLAY_SERVICE_ACCOUNT_JSON", "SHITTER_PLAY_SERVICE_ACCOUNT_JSON")
     if (!serviceAccountPath.isNullOrBlank()) {
         serviceAccountCredentials.set(file(serviceAccountPath))
     }
@@ -134,8 +140,12 @@ dependencies {
     implementation("com.github.mwiede:jsch:0.2.22")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    implementation(platform("com.google.firebase:firebase-bom:33.0.0"))
+    implementation("com.google.firebase:firebase-messaging")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 val downloadBundledAssets by tasks.registering(Exec::class) {

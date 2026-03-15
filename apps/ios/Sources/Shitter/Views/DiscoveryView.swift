@@ -18,7 +18,7 @@ struct DiscoveryView: View {
     @State private var connectingServer: DiscoveredServer?
     @State private var wakingServer: DiscoveredServer?
     @State private var connectError: String?
-    @State private var showSettings = false
+    @EnvironmentObject var appState: AppState
     private let autoStartDiscovery: Bool
     private let initialServers: [DiscoveredServer]
 
@@ -146,7 +146,7 @@ struct DiscoveryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { showSettings = true } label: {
+                Button { appState.showSettings = true } label: {
                     Image(systemName: "gearshape")
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
@@ -164,9 +164,6 @@ struct DiscoveryView: View {
                 .accessibilityIdentifier("discovery.refreshButton")
                 .disabled(discovery.isScanning)
             }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(serverManager)
         }
         .onAppear { handleAppear() }
         .onDisappear { handleDisappear() }
@@ -365,7 +362,7 @@ struct DiscoveryView: View {
 
     private func navigateAfterConnect(_ server: DiscoveredServer) {
         if serverManager.connections[server.id]?.authStatus == .notLoggedIn {
-            showSettings = true
+            appState.showSettings = true
         } else {
             onServerSelected?(server)
         }

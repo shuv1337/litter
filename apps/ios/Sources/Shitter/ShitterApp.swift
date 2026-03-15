@@ -3,15 +3,75 @@ import Combine
 import Inject
 import UIKit
 
+class AppDelegate: NSObject, UIApplicationDelegate {
+    private var pendingPushToken: Data?
+    weak var serverManager: ServerManager? {
+        didSet {
+            if let token = pendingPushToken {
+                serverManager?.devicePushToken = token
+                pendingPushToken = nil
+            }
+        }
+    }
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        application.registerForRemoteNotifications()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        NSLog("[push] device token received (%d bytes): %@", deviceToken.count, hex)
+        if let sm = serverManager {
+            sm.devicePushToken = deviceToken
+        } else {
+            pendingPushToken = deviceToken
+        }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NSLog("[push] registration failed: %@", error.localizedDescription)
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        NSLog("[push] background push received")
+        guard let sm = serverManager else {
+            completionHandler(.noData)
+            return
+        }
+        Task { @MainActor in
+            await sm.handleBackgroundPush()
+            completionHandler(.newData)
+        }
+    }
+}
+
 @main
 struct ShitterApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var serverManager = ServerManager()
+    @StateObject private var themeManager = ThemeManager.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(serverManager)
-                .task { await serverManager.reconnectAll() }
+                .environmentObject(themeManager)
+                .task {
+                    appDelegate.serverManager = serverManager
+                    await serverManager.reconnectAll()
+                }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .background:
+                serverManager.appDidEnterBackground()
+            case .active:
+                serverManager.appDidBecomeActive()
+            default:
+                break
+            }
         }
     }
 }
@@ -19,6 +79,7 @@ struct ShitterApp: App {
 struct ContentView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
+    @EnvironmentObject var themeManager: ThemeManager
     @StateObject private var appState = AppState()
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var isEdgeOpeningSidebar = false
@@ -39,11 +100,6 @@ struct ContentView: View {
             mainContent(topInset: geometry.safeAreaInsets.top, bottomInset: keyboardHeight > 0 ? 0 : geometry.safeAreaInsets.bottom)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
-                .overlay(alignment: .top) {
-                    if serverManager.activeThreadKey != nil {
-                        HeaderView(topInset: geometry.safeAreaInsets.top)
-                    }
-                }
                 .overlay {
                     if appState.showModelSelector {
                         Color.black.opacity(0.01)
@@ -55,13 +111,13 @@ struct ContentView: View {
                             }
                     }
                 }
-            .offset(x: sidebarRevealProgress * 284)
-            .scaleEffect(1 - (0.04 * sidebarRevealProgress), anchor: .leading)
-            .clipShape(RoundedRectangle(cornerRadius: 20 * sidebarRevealProgress, style: .continuous))
-            .shadow(color: .black.opacity(0.22 * sidebarRevealProgress), radius: 26, x: 8, y: 0)
-            .allowsHitTesting(sidebarRevealProgress < 0.01)
-            .animation(sidebarAnimation, value: appState.sidebarOpen)
-            .animation(sidebarAnimation, value: sidebarDragOffset)
+                .overlay(alignment: .top) {
+                    if serverManager.activeThreadKey != nil {
+                        HeaderView(topInset: geometry.safeAreaInsets.top)
+                    }
+                }
+            .id(themeManager.themeVersion)
+            .allowsHitTesting(!appState.sidebarOpen)
             .simultaneousGesture(edgeOpenGesture)
 
             SidebarOverlay(dragOffset: $sidebarDragOffset, topInset: geometry.safeAreaInsets.top)
@@ -101,7 +157,13 @@ struct ContentView: View {
                     appState.sidebarOpen = true
                 })
                 .environmentObject(serverManager)
+                .environmentObject(appState)
             }
+        }
+        .sheet(isPresented: $appState.showSettings) {
+            SettingsView()
+                .environmentObject(serverManager)
+                .environmentObject(appState)
         }
     }
 

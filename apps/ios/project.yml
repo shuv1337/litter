@@ -16,6 +16,7 @@ settings:
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
     OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    DEVELOPMENT_TEAM: UH66Q8ZAYG
 
 packages:
   Citadel:
@@ -44,6 +45,8 @@ targets:
       - path: Sources/Shitter/Resources/ios_system/commandDictionary.plist
       - path: Sources/Shitter/Resources/ios_system/extraCommandsDictionary.plist
       - path: Sources/Shitter/Resources/Fonts
+      - path: Sources/Shitter/Resources/Themes
+      - path: Sources/Shitter/Resources/WidgetGuidelines
     dependencies:
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
@@ -74,14 +77,27 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "18.0"
+    entitlements:
+      path: Sources/Shitter/Shitter.entitlements
+      properties:
+        aps-environment: production
+        com.apple.security.application-groups:
+          - group.io.latitudes.shitter
+    attributes:
+      SystemCapabilities:
+        com.apple.BackgroundModes:
+          enabled: true
     sources:
       - path: Sources/Shitter
         excludes:
           - "**/*.h"
+      - path: Sources/ShitterLiveActivity/CodexTurnLiveActivity.swift
     resources:
       - path: Sources/Shitter/Resources/ios_system/commandDictionary.plist
       - path: Sources/Shitter/Resources/ios_system/extraCommandsDictionary.plist
       - path: Sources/Shitter/Resources/Fonts
+      - path: Sources/Shitter/Resources/Themes
+      - path: Sources/Shitter/Resources/WidgetGuidelines
     dependencies:
       - framework: Frameworks/codex_bridge.xcframework
         embed: false
@@ -100,15 +116,38 @@ targets:
         embed: true
       - framework: Frameworks/ios_system/files.xcframework
         embed: true
+      - target: ShitterLiveActivity
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter
         INFOPLIST_FILE: Sources/Shitter/Info.plist
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shitter/Bridge/codex_bridge_objc.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_UIBackgroundModes: "fetch remote-notification"
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
+  ShitterLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    entitlements:
+      path: Sources/ShitterLiveActivity/ShitterLiveActivity.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.io.latitudes.shitter
+    sources:
+      - path: Sources/ShitterLiveActivity
+      - path: Sources/Shitter/Models/CodexTurnAttributes.swift
+      - path: Sources/Shitter/Models/ShitterPalette.swift
+      - path: Sources/Shitter/Views/LockScreenCardView.swift
+    resources:
+      - path: Sources/ShitterLiveActivity/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter.liveactivity
+        INFOPLIST_FILE: Sources/ShitterLiveActivity/Info.plist
   CodexIOSTests:
     type: bundle.unit-test
     platform: iOS

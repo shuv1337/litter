@@ -82,6 +82,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapVert
@@ -113,6 +114,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -163,16 +165,25 @@ import io.latitudes.shitter.android.core.network.DiscoverySource
 import io.latitudes.shitter.android.state.AccountState
 import io.latitudes.shitter.android.state.ApprovalDecision
 import io.latitudes.shitter.android.state.ApprovalKind
+import io.latitudes.shitter.android.state.BackendKind
 import io.latitudes.shitter.android.state.AuthStatus
 import io.latitudes.shitter.android.state.ChatMessage
 import io.latitudes.shitter.android.state.ExperimentalFeature
 import io.latitudes.shitter.android.state.FuzzyFileSearchResult
 import io.latitudes.shitter.android.state.MessageRole
 import io.latitudes.shitter.android.state.ModelOption
+import io.latitudes.shitter.android.state.OpenCodeAgentOption
+import io.latitudes.shitter.android.state.OpenCodeMcpServer
+import io.latitudes.shitter.android.state.OpenCodeStatusSnapshot
 import io.latitudes.shitter.android.state.PendingApproval
+import io.latitudes.shitter.android.state.PendingInteractionKind
+import io.latitudes.shitter.android.state.PendingQuestion
+import io.latitudes.shitter.android.state.SavedServer
 import io.latitudes.shitter.android.state.ServerConfig
 import io.latitudes.shitter.android.state.ServerConnectionStatus
 import io.latitudes.shitter.android.state.ServerSource
+import io.latitudes.shitter.android.state.SlashEntry
+import io.latitudes.shitter.android.state.SlashKind
 import io.latitudes.shitter.android.state.SkillMentionInput
 import io.latitudes.shitter.android.state.SkillMetadata
 import io.latitudes.shitter.android.state.ThreadKey
@@ -180,6 +191,7 @@ import io.latitudes.shitter.android.state.ThreadState
 import io.latitudes.shitter.android.BuildConfig
 import io.latitudes.shitter.android.R
 import io.noties.markwon.Markwon
+import io.noties.markwon.syntax.Prism4jThemeDefault
 import io.noties.markwon.syntax.Prism4jThemeDarkula
 import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.prism4j.GrammarLocator
@@ -229,6 +241,7 @@ fun ShitterAppShell(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
         ) {
             HeaderBar(
+                backendKind = uiState.activeBackendKind,
                 models = uiState.models,
                 selectedModelId = uiState.selectedModelId,
                 selectedReasoningEffort = uiState.selectedReasoningEffort,
@@ -243,7 +256,10 @@ fun ShitterAppShell(
                 EmptyState(
                     connectionStatus = uiState.connectionStatus,
                     connectedServers = uiState.connectedServers,
+                    savedServers = uiState.savedServers,
                     onOpenDiscovery = appState::openDiscovery,
+                    onReconnectSavedServer = appState::reconnectSavedServer,
+                    onReconfigureSavedServer = appState::reconfigureSavedServer,
                 )
             } else {
                 ConversationPanel(
@@ -256,6 +272,10 @@ fun ShitterAppShell(
                     models = uiState.models,
                     selectedModelId = uiState.selectedModelId,
                     selectedReasoningEffort = uiState.selectedReasoningEffort,
+                    activeBackendKind = uiState.activeBackendKind,
+                    activeSlashEntries = uiState.activeSlashEntries,
+                    activeOpenCodeAgents = uiState.activeOpenCodeAgents,
+                    selectedAgentName = uiState.selectedAgentName,
                     approvalPolicy = uiState.approvalPolicy,
                     sandboxMode = uiState.sandboxMode,
                     currentCwd = uiState.currentCwd,
@@ -265,6 +285,7 @@ fun ShitterAppShell(
                     onFileSearch = appState::searchComposerFiles,
                     onSelectModel = appState::selectModel,
                     onSelectReasoningEffort = appState::selectReasoningEffort,
+                    onSelectAgent = appState::selectAgent,
                     onUpdateComposerPermissions = appState::updateComposerPermissions,
                     onOpenNewSessionPicker = appState::openNewSessionPicker,
                     onOpenSidebar = appState::openSidebar,
@@ -273,13 +294,18 @@ fun ShitterAppShell(
                     onListExperimentalFeatures = appState::listExperimentalFeatures,
                     onSetExperimentalFeatureEnabled = appState::setExperimentalFeatureEnabled,
                     onListSkills = appState::listSkills,
+                    onShareActiveThread = appState::shareActiveThread,
+                    onUnshareActiveThread = appState::unshareActiveThread,
+                    onCompactActiveThread = appState::compactActiveThread,
+                    onUndoActiveThread = appState::undoActiveThread,
+                    onRedoActiveThread = appState::redoActiveThread,
+                    onExecuteOpenCodeCommand = appState::executeOpenCodeCommand,
+                    onLoadOpenCodeMcpStatus = appState::loadOpenCodeMcpStatus,
+                    onLoadOpenCodeStatus = appState::loadOpenCodeStatus,
                     onForkConversation = appState::forkConversation,
                     onEditMessage = appState::editMessage,
                     onForkFromMessage = appState::forkConversationFromMessage,
-                    onSend = { payloadDraft, skillMentions ->
-                        appState.updateDraft(payloadDraft)
-                        appState.sendDraft(skillMentions)
-                    },
+                    onSend = { payloadDraft, skillMentions -> appState.sendDraft(payloadDraft, skillMentions) },
                     onInterrupt = appState::interrupt,
                 )
             }
@@ -376,8 +402,12 @@ fun ShitterAppShell(
                 onDismiss = appState::dismissDiscovery,
                 onRefresh = appState::refreshDiscovery,
                 onConnectDiscovered = appState::connectDiscoveredServer,
+                onManualBackendKindChanged = appState::updateManualBackendKind,
                 onManualHostChanged = appState::updateManualHost,
                 onManualPortChanged = appState::updateManualPort,
+                onManualUsernameChanged = appState::updateManualUsername,
+                onManualPasswordChanged = appState::updateManualPassword,
+                onManualDirectoryChanged = appState::updateManualDirectory,
                 onConnectManual = appState::connectManualServer,
             )
         }
@@ -397,7 +427,7 @@ fun ShitterAppShell(
             )
         }
 
-        if (uiState.showSettings) {
+        if (uiState.showSettings && uiState.activeCapabilities.supportsAuthManagement) {
             SettingsSheet(
                 accountState = uiState.accountState,
                 connectedServers = uiState.connectedServers,
@@ -409,7 +439,7 @@ fun ShitterAppShell(
             )
         }
 
-        if (uiState.showAccount) {
+        if (uiState.showAccount && uiState.activeCapabilities.supportsAuthManagement) {
             val activeServer = uiState.connectedServers.firstOrNull { it.id == uiState.activeServerId }
             AccountSheet(
                 accountState = uiState.accountState,
@@ -426,34 +456,53 @@ fun ShitterAppShell(
             )
         }
 
-        uiState.activePendingApproval?.let { approval ->
-            PendingApprovalDialog(
-                approval = approval,
-                onAllowOnce = {
-                    appState.respondToPendingApproval(
-                        approvalId = approval.id,
-                        decision = ApprovalDecision.ACCEPT,
+        val interaction = uiState.activePendingInteraction
+        when (interaction?.kind) {
+            PendingInteractionKind.APPROVAL -> {
+                val approval = interaction.approval
+                if (approval != null) {
+                    PendingApprovalDialog(
+                        approval = approval,
+                        onAllowOnce = {
+                            appState.respondToPendingApproval(
+                                approvalId = approval.id,
+                                decision = ApprovalDecision.ACCEPT,
+                            )
+                        },
+                        onAllowForSession = {
+                            appState.respondToPendingApproval(
+                                approvalId = approval.id,
+                                decision = ApprovalDecision.ACCEPT_FOR_SESSION,
+                            )
+                        },
+                        onDeny = {
+                            appState.respondToPendingApproval(
+                                approvalId = approval.id,
+                                decision = ApprovalDecision.DECLINE,
+                            )
+                        },
+                        onAbort = {
+                            appState.respondToPendingApproval(
+                                approvalId = approval.id,
+                                decision = ApprovalDecision.CANCEL,
+                            )
+                        },
                     )
-                },
-                onAllowForSession = {
-                    appState.respondToPendingApproval(
-                        approvalId = approval.id,
-                        decision = ApprovalDecision.ACCEPT_FOR_SESSION,
+                }
+            }
+
+            PendingInteractionKind.QUESTION -> {
+                val question = interaction.question
+                if (question != null) {
+                    PendingQuestionDialog(
+                        question = question,
+                        onSubmit = { answers -> appState.respondToPendingQuestion(question.id, answers) },
+                        onReject = { appState.rejectPendingQuestion(question.id) },
                     )
-                },
-                onDeny = {
-                    appState.respondToPendingApproval(
-                        approvalId = approval.id,
-                        decision = ApprovalDecision.DECLINE,
-                    )
-                },
-                onAbort = {
-                    appState.respondToPendingApproval(
-                        approvalId = approval.id,
-                        decision = ApprovalDecision.CANCEL,
-                    )
-                },
-            )
+                }
+            }
+
+            null -> Unit
         }
 
         if (uiState.uiError != null) {
@@ -601,7 +650,107 @@ private fun PendingApprovalDialog(
 }
 
 @Composable
+private fun PendingQuestionDialog(
+    question: PendingQuestion,
+    onSubmit: (List<List<String>>) -> Unit,
+    onReject: () -> Unit,
+) {
+    val answerState =
+        remember(question.id) {
+            question.prompts.map { prompt ->
+                mutableStateListOf<String>().apply {
+                    if (!prompt.multiple && prompt.options.isNotEmpty()) {
+                        add(prompt.options.first().label)
+                    }
+                }
+            }
+        }
+    val customAnswers =
+        remember(question.id) {
+            question.prompts.map { mutableStateOf("") }
+        }
+
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = ShitterTheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("OpenCode Question", style = MaterialTheme.typography.titleLarge, color = ShitterTheme.textPrimary)
+                question.prompts.forEachIndexed { index, prompt ->
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(prompt.header.ifBlank { "Question ${index + 1}" }, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                        Text(prompt.question, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                        prompt.options.forEach { option ->
+                            val selected = answerState[index].contains(option.label)
+                            OutlinedButton(
+                                onClick = {
+                                    if (prompt.multiple) {
+                                        if (selected) answerState[index].remove(option.label) else answerState[index].add(option.label)
+                                    } else {
+                                        answerState[index].clear()
+                                        answerState[index].add(option.label)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) ShitterTheme.accent else ShitterTheme.border),
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(option.label, color = ShitterTheme.textPrimary)
+                                    if (option.description.isNotBlank()) {
+                                        Text(option.description, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                    }
+                                }
+                            }
+                        }
+                        if (prompt.custom) {
+                            OutlinedTextField(
+                                value = customAnswers[index].value,
+                                onValueChange = { customAnswers[index].value = it },
+                                label = { Text("Custom answer") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                            )
+                        }
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onReject, modifier = Modifier.weight(1f)) {
+                        Text("Reject")
+                    }
+                    Button(
+                        onClick = {
+                            onSubmit(
+                                answerState.mapIndexed { index, answers ->
+                                    val custom = customAnswers[index].value.trim()
+                                    if (custom.isEmpty()) {
+                                        answers.toList()
+                                    } else {
+                                        (answers.toList() + custom).distinct()
+                                    }
+                                },
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Submit")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun HeaderBar(
+    backendKind: BackendKind,
     models: List<ModelOption>,
     selectedModelId: String?,
     selectedReasoningEffort: String?,
@@ -624,13 +773,24 @@ private fun HeaderBar(
                 Icon(Icons.Default.Menu, contentDescription = "Toggle sidebar", tint = ShitterTheme.textSecondary)
             }
 
-            ModelSelector(
-                models = models,
-                selectedModelId = selectedModelId,
-                selectedReasoningEffort = selectedReasoningEffort,
-                onSelectModel = onSelectModel,
-                onSelectReasoningEffort = onSelectReasoningEffort,
-            )
+            if (backendKind == BackendKind.OPENCODE) {
+                OutlinedButton(
+                    onClick = {},
+                    enabled = false,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                    shape = RoundedCornerShape(22.dp),
+                ) {
+                    Text("OpenCode", color = ShitterTheme.textSecondary)
+                }
+            } else {
+                ModelSelector(
+                    models = models,
+                    selectedModelId = selectedModelId,
+                    selectedReasoningEffort = selectedReasoningEffort,
+                    onSelectModel = onSelectModel,
+                    onSelectReasoningEffort = onSelectReasoningEffort,
+                )
+            }
 
             Spacer(modifier = Modifier.weight(1f))
 
@@ -742,11 +902,15 @@ private fun StatusDot(connectionStatus: ServerConnectionStatus) {
 private fun EmptyState(
     connectionStatus: ServerConnectionStatus,
     connectedServers: List<ServerConfig>,
+    savedServers: List<SavedServer> = emptyList(),
     onOpenDiscovery: () -> Unit,
+    onReconnectSavedServer: (String) -> Unit = {},
+    onReconfigureSavedServer: (String) -> Unit = {},
 ) {
     val canConnect =
         connectionStatus == ServerConnectionStatus.DISCONNECTED ||
             connectionStatus == ServerConnectionStatus.ERROR
+    val connectedServerIds = remember(connectedServers) { connectedServers.map { it.id }.toSet() }
     val connectedServerLabels =
         remember(connectedServers) {
             connectedServers
@@ -755,6 +919,11 @@ private fun EmptyState(
                     val name = server.name.ifBlank { "server" }
                     "$name * ${serverSourceLabel(server.source)}"
                 }
+        }
+    // Saved servers that are not currently connected (offline/unreachable)
+    val offlineSavedServers =
+        remember(savedServers, connectedServerIds) {
+            savedServers.filter { !connectedServerIds.contains(it.id) }
         }
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -789,6 +958,81 @@ private fun EmptyState(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                }
+            }
+            // Show offline saved servers with reconnect / reconfigure options
+            if (offlineSavedServers.isNotEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = if (connectedServerLabels.isEmpty()) "Saved Servers" else "Offline Servers",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ShitterTheme.textSecondary,
+                    )
+                    offlineSavedServers.forEach { saved ->
+                        val kindLabel = if (saved.backendKind.lowercase() == "opencode") "OpenCode" else "Codex"
+                        val hostLabel = "${saved.host}:${saved.port}"
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            color = ShitterTheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = saved.name.ifBlank { hostLabel },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = ShitterTheme.textPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "$kindLabel · $hostLabel",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ShitterTheme.textMuted,
+                                        )
+                                    }
+                                    // Offline indicator
+                                    Text(
+                                        text = "offline",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ShitterTheme.statusError,
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { onReconnectSavedServer(saved.id) },
+                                        modifier = Modifier.weight(1f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.accent),
+                                    ) {
+                                        Text("Reconnect", color = ShitterTheme.accent)
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onReconfigureSavedServer(saved.id) },
+                                        modifier = Modifier.weight(1f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                    ) {
+                                        Text("Reconfigure", color = ShitterTheme.textSecondary)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2148,6 +2392,10 @@ private fun ConversationPanel(
     models: List<ModelOption>,
     selectedModelId: String?,
     selectedReasoningEffort: String?,
+    activeBackendKind: BackendKind,
+    activeSlashEntries: List<SlashEntry>,
+    activeOpenCodeAgents: List<OpenCodeAgentOption>,
+    selectedAgentName: String?,
     approvalPolicy: String,
     sandboxMode: String,
     currentCwd: String,
@@ -2157,6 +2405,7 @@ private fun ConversationPanel(
     onFileSearch: (String, (Result<List<FuzzyFileSearchResult>>) -> Unit) -> Unit,
     onSelectModel: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
+    onSelectAgent: (String?) -> Unit,
     onUpdateComposerPermissions: (String, String) -> Unit,
     onOpenNewSessionPicker: () -> Unit,
     onOpenSidebar: () -> Unit,
@@ -2165,6 +2414,14 @@ private fun ConversationPanel(
     onListExperimentalFeatures: ((Result<List<ExperimentalFeature>>) -> Unit) -> Unit,
     onSetExperimentalFeatureEnabled: (String, Boolean, (Result<Unit>) -> Unit) -> Unit,
     onListSkills: (String?, Boolean, (Result<List<SkillMetadata>>) -> Unit) -> Unit,
+    onShareActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onUnshareActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onCompactActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onUndoActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onRedoActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onExecuteOpenCodeCommand: (String, String, (Result<Unit>) -> Unit) -> Unit,
+    onLoadOpenCodeMcpStatus: ((Result<List<OpenCodeMcpServer>>) -> Unit) -> Unit,
+    onLoadOpenCodeStatus: ((Result<OpenCodeStatusSnapshot>) -> Unit) -> Unit,
     onForkConversation: () -> Unit,
     onEditMessage: (ChatMessage) -> Unit,
     onForkFromMessage: (ChatMessage) -> Unit,
@@ -2174,7 +2431,17 @@ private fun ConversationPanel(
     DebugRecomposeCheckpoint(name = "ConversationPanel")
     val context = LocalContext.current
     val markdownMarkwon = remember(context) { Markwon.create(context) }
-    val syntaxMarkwon = remember(context) { createSyntaxHighlightMarkwon(context) }
+    val syntaxThemeKey = ShitterTheme.themeKey
+    val syntaxThemeIsDark = ShitterTheme.isDark
+    val syntaxBackgroundArgb = ShitterTheme.codeBackground.toArgb()
+    val syntaxMarkwon =
+        remember(context, syntaxThemeKey, syntaxThemeIsDark, syntaxBackgroundArgb) {
+            createSyntaxHighlightMarkwon(
+                context = context,
+                isDark = syntaxThemeIsDark,
+                backgroundColor = syntaxBackgroundArgb,
+            )
+        }
     val textScale = remember(conversationTextSizeStep) { ConversationTextSizing.scaleForStep(conversationTextSizeStep) }
     var attachedImagePath by remember { mutableStateOf<String?>(null) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
@@ -2352,6 +2619,10 @@ private fun ConversationPanel(
             models = models,
             selectedModelId = selectedModelId,
             selectedReasoningEffort = selectedReasoningEffort,
+            activeBackendKind = activeBackendKind,
+            activeSlashEntries = activeSlashEntries,
+            activeOpenCodeAgents = activeOpenCodeAgents,
+            selectedAgentName = selectedAgentName,
             approvalPolicy = approvalPolicy,
             sandboxMode = sandboxMode,
             currentCwd = currentCwd,
@@ -2360,6 +2631,7 @@ private fun ConversationPanel(
             onFileSearch = onFileSearch,
             onSelectModel = onSelectModel,
             onSelectReasoningEffort = onSelectReasoningEffort,
+            onSelectAgent = onSelectAgent,
             onUpdateComposerPermissions = onUpdateComposerPermissions,
             onOpenNewSessionPicker = onOpenNewSessionPicker,
             onOpenSidebar = onOpenSidebar,
@@ -2368,6 +2640,14 @@ private fun ConversationPanel(
             onListExperimentalFeatures = onListExperimentalFeatures,
             onSetExperimentalFeatureEnabled = onSetExperimentalFeatureEnabled,
             onListSkills = onListSkills,
+            onShareActiveThread = onShareActiveThread,
+            onUnshareActiveThread = onUnshareActiveThread,
+            onCompactActiveThread = onCompactActiveThread,
+            onUndoActiveThread = onUndoActiveThread,
+            onRedoActiveThread = onRedoActiveThread,
+            onExecuteOpenCodeCommand = onExecuteOpenCodeCommand,
+            onLoadOpenCodeMcpStatus = onLoadOpenCodeMcpStatus,
+            onLoadOpenCodeStatus = onLoadOpenCodeStatus,
             onForkConversation = onForkConversation,
             onAttachImage = { attachmentLauncher.launch("image/*") },
             onCaptureImage = { cameraLauncher.launch(null) },
@@ -2804,11 +3084,21 @@ private fun CodeBlockCard(
     }
 }
 
-private fun createSyntaxHighlightMarkwon(context: Context): Markwon {
+private fun createSyntaxHighlightMarkwon(
+    context: Context,
+    isDark: Boolean,
+    backgroundColor: Int,
+): Markwon {
     val builder = Markwon.builder(context)
     createPrism4jLocator()?.let { locator ->
         val prism4j = Prism4j(locator)
-        builder.usePlugin(SyntaxHighlightPlugin.create(prism4j, Prism4jThemeDarkula.create()))
+        val prismTheme =
+            if (isDark) {
+                Prism4jThemeDarkula.create(backgroundColor)
+            } else {
+                Prism4jThemeDefault.create(backgroundColor)
+            }
+        builder.usePlugin(SyntaxHighlightPlugin.create(prism4j, prismTheme))
     }
     return builder.build()
 }
@@ -3248,6 +3538,10 @@ private fun InputBar(
     models: List<ModelOption>,
     selectedModelId: String?,
     selectedReasoningEffort: String?,
+    activeBackendKind: BackendKind,
+    activeSlashEntries: List<SlashEntry>,
+    activeOpenCodeAgents: List<OpenCodeAgentOption>,
+    selectedAgentName: String?,
     approvalPolicy: String,
     sandboxMode: String,
     currentCwd: String,
@@ -3256,6 +3550,7 @@ private fun InputBar(
     onFileSearch: (String, (Result<List<FuzzyFileSearchResult>>) -> Unit) -> Unit,
     onSelectModel: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
+    onSelectAgent: (String?) -> Unit,
     onUpdateComposerPermissions: (String, String) -> Unit,
     onOpenNewSessionPicker: () -> Unit,
     onOpenSidebar: () -> Unit,
@@ -3264,6 +3559,14 @@ private fun InputBar(
     onListExperimentalFeatures: ((Result<List<ExperimentalFeature>>) -> Unit) -> Unit,
     onSetExperimentalFeatureEnabled: (String, Boolean, (Result<Unit>) -> Unit) -> Unit,
     onListSkills: (String?, Boolean, (Result<List<SkillMetadata>>) -> Unit) -> Unit,
+    onShareActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onUnshareActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onCompactActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onUndoActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onRedoActiveThread: ((Result<Unit>) -> Unit) -> Unit,
+    onExecuteOpenCodeCommand: (String, String, (Result<Unit>) -> Unit) -> Unit,
+    onLoadOpenCodeMcpStatus: ((Result<List<OpenCodeMcpServer>>) -> Unit) -> Unit,
+    onLoadOpenCodeStatus: ((Result<OpenCodeStatusSnapshot>) -> Unit) -> Unit,
     onForkConversation: () -> Unit,
     onAttachImage: () -> Unit,
     onCaptureImage: () -> Unit,
@@ -3284,7 +3587,8 @@ private fun InputBar(
     var lastCommittedDraft by remember { mutableStateOf(draft) }
     var showSlashPopup by remember { mutableStateOf(false) }
     var activeSlashToken by remember { mutableStateOf<ComposerSlashQueryContext?>(null) }
-    var slashSuggestions by remember { mutableStateOf<List<ComposerSlashCommand>>(emptyList()) }
+    var codexSlashSuggestions by remember { mutableStateOf<List<ComposerSlashCommand>>(emptyList()) }
+    var openCodeSlashSuggestions by remember { mutableStateOf<List<SlashEntry>>(emptyList()) }
 
     var showFilePopup by remember { mutableStateOf(false) }
     var activeAtToken by remember { mutableStateOf<ComposerTokenContext?>(null) }
@@ -3300,6 +3604,10 @@ private fun InputBar(
     var showPermissionsSheet by remember { mutableStateOf(false) }
     var showExperimentalSheet by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
+    var showAgentsSheet by remember { mutableStateOf(false) }
+    var showMcpsSheet by remember { mutableStateOf(false) }
+    var showStatusSheet by remember { mutableStateOf(false) }
+    var showHelpSheet by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameCurrentTitle by remember { mutableStateOf("") }
     var renameDraft by remember { mutableStateOf("") }
@@ -3308,6 +3616,10 @@ private fun InputBar(
     var experimentalFeaturesLoading by remember { mutableStateOf(false) }
     var skills by remember { mutableStateOf<List<SkillMetadata>>(emptyList()) }
     var skillsLoading by remember { mutableStateOf(false) }
+    var mcps by remember { mutableStateOf<List<OpenCodeMcpServer>>(emptyList()) }
+    var mcpsLoading by remember { mutableStateOf(false) }
+    var statusSnapshot by remember { mutableStateOf<OpenCodeStatusSnapshot?>(null) }
+    var statusLoading by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
     var mentionSkillPathsByName by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var hasAttemptedSkillMentionLoad by remember { mutableStateOf(false) }
@@ -3336,7 +3648,8 @@ private fun InputBar(
     fun hideComposerPopups() {
         showSlashPopup = false
         activeSlashToken = null
-        slashSuggestions = emptyList()
+        codexSlashSuggestions = emptyList()
+        openCodeSlashSuggestions = emptyList()
         showFilePopup = false
         activeAtToken = null
         showSkillPopup = false
@@ -3400,7 +3713,8 @@ private fun InputBar(
         if (atToken != null) {
             showSlashPopup = false
             activeSlashToken = null
-            slashSuggestions = emptyList()
+            codexSlashSuggestions = emptyList()
+            openCodeSlashSuggestions = emptyList()
             showSkillPopup = false
             activeDollarToken = null
             showFilePopup = true
@@ -3425,7 +3739,8 @@ private fun InputBar(
         if (dollarToken != null && isMentionQueryValid(dollarToken.value)) {
             showSlashPopup = false
             activeSlashToken = null
-            slashSuggestions = emptyList()
+            codexSlashSuggestions = emptyList()
+            openCodeSlashSuggestions = emptyList()
             showSkillPopup = true
             if (activeDollarToken != dollarToken) {
                 activeDollarToken = dollarToken
@@ -3448,13 +3763,21 @@ private fun InputBar(
         if (slashToken == null) {
             showSlashPopup = false
             activeSlashToken = null
-            slashSuggestions = emptyList()
+            codexSlashSuggestions = emptyList()
+            openCodeSlashSuggestions = emptyList()
             return
         }
 
         activeSlashToken = slashToken
-        slashSuggestions = filterSlashCommands(slashToken.query)
-        showSlashPopup = slashSuggestions.isNotEmpty()
+        if (activeBackendKind == BackendKind.OPENCODE) {
+            openCodeSlashSuggestions = filterOpenCodeSlashEntries(activeSlashEntries, slashToken.query)
+            codexSlashSuggestions = emptyList()
+            showSlashPopup = openCodeSlashSuggestions.isNotEmpty()
+            return
+        }
+        codexSlashSuggestions = filterSlashCommands(slashToken.query)
+        openCodeSlashSuggestions = emptyList()
+        showSlashPopup = codexSlashSuggestions.isNotEmpty()
     }
 
     fun loadExperimentalFeatures() {
@@ -3488,7 +3811,33 @@ private fun InputBar(
         }
     }
 
-    fun executeSlashCommand(
+    fun loadMcpStatus() {
+        mcpsLoading = true
+        onLoadOpenCodeMcpStatus { result ->
+            mcpsLoading = false
+            result.onFailure { error ->
+                slashErrorMessage = error.message ?: "Failed to load MCP status"
+            }
+            result.onSuccess { loaded ->
+                mcps = loaded.sortedBy { it.name.lowercase(Locale.ROOT) }
+            }
+        }
+    }
+
+    fun loadStatus() {
+        statusLoading = true
+        onLoadOpenCodeStatus { result ->
+            statusLoading = false
+            result.onFailure { error ->
+                slashErrorMessage = error.message ?: "Failed to load status"
+            }
+            result.onSuccess { loaded ->
+                statusSnapshot = loaded
+            }
+        }
+    }
+
+    fun executeCodexSlashCommand(
         command: ComposerSlashCommand,
         args: String?,
     ) {
@@ -3548,11 +3897,152 @@ private fun InputBar(
         }
     }
 
-    fun applySlashSuggestion(command: ComposerSlashCommand) {
+    fun executeOpenCodeAction(
+        actionId: String,
+        args: String?,
+    ) {
+        when (actionId) {
+            "model.list" -> {
+                showModelSheet = true
+            }
+
+            "session.list" -> {
+                onOpenSidebar()
+            }
+
+            "session.new" -> {
+                onOpenNewSessionPicker()
+            }
+
+            "session.fork" -> {
+                onForkConversation()
+            }
+
+            "session.rename" -> {
+                val initialName = args?.trim().orEmpty()
+                if (initialName.isNotEmpty()) {
+                    onRenameActiveThread(initialName) { result ->
+                        result.onFailure { error ->
+                            slashErrorMessage = error.message ?: "Failed to rename thread"
+                        }
+                    }
+                } else {
+                    renameCurrentTitle = activeThreadPreview.ifBlank { "Untitled thread" }
+                    renameDraft = ""
+                    showRenameDialog = true
+                }
+            }
+
+            "prompt.skills" -> {
+                showSkillsSheet = true
+                loadSkills(forceReload = false)
+            }
+
+            "agent.list" -> {
+                showAgentsSheet = true
+            }
+
+            "mcp.list" -> {
+                showMcpsSheet = true
+                loadMcpStatus()
+            }
+
+            "session.share" -> {
+                onShareActiveThread { result ->
+                    result.onFailure { error ->
+                        slashErrorMessage = error.message ?: "Failed to share thread"
+                    }
+                }
+            }
+
+            "session.unshare" -> {
+                onUnshareActiveThread { result ->
+                    result.onFailure { error ->
+                        slashErrorMessage = error.message ?: "Failed to unshare thread"
+                    }
+                }
+            }
+
+            "session.compact" -> {
+                onCompactActiveThread { result ->
+                    result.onFailure { error ->
+                        slashErrorMessage = error.message ?: "Failed to compact thread"
+                    }
+                }
+            }
+
+            "session.undo" -> {
+                onUndoActiveThread { result ->
+                    result.onFailure { error ->
+                        slashErrorMessage = error.message ?: "Failed to undo"
+                    }
+                }
+            }
+
+            "session.redo" -> {
+                onRedoActiveThread { result ->
+                    result.onFailure { error ->
+                        slashErrorMessage = error.message ?: "Failed to redo"
+                    }
+                }
+            }
+
+            "opencode.status" -> {
+                showStatusSheet = true
+                loadStatus()
+            }
+
+            "help.show" -> {
+                showHelpSheet = true
+            }
+
+            else -> {
+                slashErrorMessage = "This slash action is not available on mobile yet"
+            }
+        }
+    }
+
+    fun applyCodexSlashSuggestion(command: ComposerSlashCommand) {
         composerValue = TextFieldValue(text = "", selection = TextRange(0))
         commitDraftIfNeeded("")
         hideComposerPopups()
-        executeSlashCommand(command, args = null)
+        executeCodexSlashCommand(command, args = null)
+    }
+
+    fun insertSlashCommand(name: String) {
+        val token = activeSlashToken
+        val replacement = "/$name "
+        val updatedText =
+            if (token == null) {
+                replacement
+            } else {
+                composerValue.text.replaceRange(
+                    startIndex = token.range.start,
+                    endIndex = token.range.end,
+                    replacement = replacement,
+                )
+            }
+        val nextCursor =
+            if (token == null) {
+                updatedText.length
+            } else {
+                token.range.start + replacement.length
+            }
+        composerValue = TextFieldValue(text = updatedText, selection = TextRange(nextCursor))
+        commitDraftIfNeeded(updatedText)
+        showSlashPopup = false
+        activeSlashToken = null
+        codexSlashSuggestions = emptyList()
+        openCodeSlashSuggestions = emptyList()
+    }
+
+    fun applyOpenCodeSlashSuggestion(entry: SlashEntry) {
+        hideComposerPopups()
+        if (entry.kind == SlashKind.COMMAND) {
+            insertSlashCommand(entry.name)
+            return
+        }
+        executeOpenCodeAction(entry.actionId ?: return, args = null)
     }
 
     fun applyFileSuggestion(match: FuzzyFileSearchResult) {
@@ -3642,23 +4132,20 @@ private fun InputBar(
         }
 
     LaunchedEffect(draft) {
-        if (draft != lastCommittedDraft) {
-            lastCommittedDraft = draft
+        if (draft == composerValue.text) {
+            if (draft != lastCommittedDraft) {
+                lastCommittedDraft = draft
+            }
+            return@LaunchedEffect
         }
-        if (draft != composerValue.text && draft == lastCommittedDraft) {
-            val cursor = composerValue.selection.start.coerceIn(0, draft.length)
-            val synced = TextFieldValue(text = draft, selection = TextRange(cursor))
-            composerValue = synced
-            refreshComposerPopups(synced)
-        }
-    }
-
-    LaunchedEffect(composerValue.text) {
-        val pendingDraft = composerValue.text
-        delay(180L)
-        if (pendingDraft == composerValue.text) {
-            commitDraftIfNeeded(pendingDraft)
-        }
+        lastCommittedDraft = draft
+        val synced =
+            TextFieldValue(
+                text = draft,
+                selection = TextRange(draft.length),
+            )
+        composerValue = synced
+        refreshComposerPopups(synced)
     }
 
     DisposableEffect(Unit) {
@@ -3907,8 +4394,17 @@ private fun InputBar(
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             items(skills, key = { "${it.path}#${it.name}" }) { skill ->
+                                val clickable =
+                                    if (activeBackendKind == BackendKind.OPENCODE) {
+                                        Modifier.clickable {
+                                            insertSlashCommand(skill.name)
+                                            showSkillsSheet = false
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
                                 Surface(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().then(clickable),
                                     color = ShitterTheme.surface.copy(alpha = 0.6f),
                                     shape = RoundedCornerShape(8.dp),
                                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
@@ -3932,6 +4428,239 @@ private fun InputBar(
                                         }
                                         Text(skill.path, color = ShitterTheme.textMuted, style = MaterialTheme.typography.labelLarge)
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAgentsSheet) {
+        ModalBottomSheet(onDismissRequest = { showAgentsSheet = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Agents", style = MaterialTheme.typography.titleMedium)
+                Surface(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelectAgent(null)
+                                showAgentsSheet = false
+                            },
+                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (selectedAgentName == null) ShitterTheme.accent else ShitterTheme.border),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("Default", color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Use the server default agent", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                        }
+                        if (selectedAgentName == null) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = ShitterTheme.accent, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+                if (activeOpenCodeAgents.isEmpty()) {
+                    Text("No agents available", color = ShitterTheme.textMuted)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(activeOpenCodeAgents, key = { it.name }) { agent ->
+                            Surface(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            onSelectAgent(agent.name)
+                                            showAgentsSheet = false
+                                        },
+                                color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(8.dp),
+                                border =
+                                    androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (agent.name == selectedAgentName) ShitterTheme.accent else ShitterTheme.border,
+                                    ),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(agent.name, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            agent.description.ifBlank { agent.mode.ifBlank { "Agent" } },
+                                            color = ShitterTheme.textSecondary,
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                    }
+                                    if (agent.name == selectedAgentName) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = ShitterTheme.accent, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showMcpsSheet) {
+        ModalBottomSheet(onDismissRequest = { showMcpsSheet = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("MCPs", style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { loadMcpStatus() }) { Text("Reload") }
+                }
+                when {
+                    mcpsLoading -> {
+                        Text("Loading...", color = ShitterTheme.textMuted)
+                    }
+
+                    mcps.isEmpty() -> {
+                        Text("No MCP servers available", color = ShitterTheme.textMuted)
+                    }
+
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.55f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            items(mcps, key = { it.name }) { item ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(item.name, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                        Text(item.status, color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
+                                        if (item.summary.isNotBlank()) {
+                                            Text(item.summary, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showStatusSheet) {
+        ModalBottomSheet(onDismissRequest = { showStatusSheet = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Status", style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { loadStatus() }) { Text("Reload") }
+                }
+                when {
+                    statusLoading -> {
+                        Text("Loading...", color = ShitterTheme.textMuted)
+                    }
+
+                    statusSnapshot == null || statusSnapshot?.sections.isNullOrEmpty() -> {
+                        Text("No status available", color = ShitterTheme.textMuted)
+                    }
+
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.65f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(statusSnapshot?.sections.orEmpty(), key = { it.title }) { section ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        Text(section.title, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                        section.lines.forEach { line ->
+                                            Text(line, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showHelpSheet) {
+        ModalBottomSheet(onDismissRequest = { showHelpSheet = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Slash Commands", style = MaterialTheme.typography.titleMedium)
+                val items = activeSlashEntries.sortedBy { it.displayName.lowercase(Locale.ROOT) }
+                if (items.isEmpty()) {
+                    Text("No slash commands available", color = ShitterTheme.textMuted)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.65f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(items, key = { it.id }) { item ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = ShitterTheme.surface.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(item.displayName.ifBlank { "/${item.name}" }, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        item.description.ifBlank { item.category.ifBlank { item.kind.name.lowercase(Locale.ROOT) } },
+                                        color = ShitterTheme.textSecondary,
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
                                 }
                             }
                         }
@@ -4074,32 +4803,63 @@ private fun InputBar(
                     border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                 ) {
                     Column {
-                        slashSuggestions.forEachIndexed { index, command ->
-                            Row(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { applySlashSuggestion(command) }
-                                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "/${command.rawValue}",
-                                    color = ShitterTheme.success,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                Text(
-                                    text = command.description,
-                                    color = ShitterTheme.textSecondary,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
+                        if (activeBackendKind == BackendKind.OPENCODE) {
+                            openCodeSlashSuggestions.forEachIndexed { index, entry ->
+                                Row(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable { applyOpenCodeSlashSuggestion(entry) }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = entry.displayName.ifBlank { "/${entry.name}" },
+                                        color = ShitterTheme.success,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        text = entry.description.ifBlank { entry.category },
+                                        color = ShitterTheme.textSecondary,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (index < openCodeSlashSuggestions.lastIndex) {
+                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                                }
                             }
-                            if (index < slashSuggestions.lastIndex) {
-                                HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                        } else {
+                            codexSlashSuggestions.forEachIndexed { index, command ->
+                                Row(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable { applyCodexSlashSuggestion(command) }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "/${command.rawValue}",
+                                        color = ShitterTheme.success,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        text = command.description,
+                                        color = ShitterTheme.textSecondary,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (index < codexSlashSuggestions.lastIndex) {
+                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                                }
                             }
                         }
                     }
@@ -4314,6 +5074,7 @@ private fun InputBar(
                         value = composerValue,
                         onValueChange = { nextValue ->
                             composerValue = nextValue
+                            commitDraftIfNeeded(nextValue.text)
                             refreshComposerPopups(nextValue)
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -4349,24 +5110,47 @@ private fun InputBar(
                             .clip(CircleShape)
                             .background(if (canSend) ShitterTheme.accent else Color.Transparent)
                             .clickable(enabled = canSend) {
-                                val trimmed = composerValue.text.trim()
+                                val currentDraft = composerValue.text
+                                val trimmed = currentDraft.trim()
                                 if (attachedImagePath == null) {
-                                    val invocation = parseSlashCommandInvocation(trimmed)
-                                    if (invocation != null) {
-                                        composerValue = TextFieldValue(text = "", selection = TextRange(0))
-                                        commitDraftIfNeeded("")
-                                        hideComposerPopups()
-                                        focusManager.clearFocus(force = true)
-                                        keyboardController?.hide()
-                                        executeSlashCommand(invocation.command, invocation.args)
-                                        return@clickable
+                                    if (activeBackendKind == BackendKind.OPENCODE) {
+                                        val invocation = parseOpenCodeSlashInvocation(trimmed, activeSlashEntries)
+                                        if (invocation != null) {
+                                            composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                            commitDraftIfNeeded("")
+                                            hideComposerPopups()
+                                            focusManager.clearFocus(force = true)
+                                            keyboardController?.hide()
+                                            if (invocation.entry.kind == SlashKind.ACTION) {
+                                                executeOpenCodeAction(invocation.entry.actionId ?: "", invocation.args)
+                                            } else {
+                                                onExecuteOpenCodeCommand(invocation.entry.name, invocation.args.orEmpty()) { result ->
+                                                    result.onFailure { error ->
+                                                        slashErrorMessage = error.message ?: "Failed to run slash command"
+                                                    }
+                                                }
+                                            }
+                                            return@clickable
+                                        }
+                                    } else {
+                                        val invocation = parseSlashCommandInvocation(trimmed)
+                                        if (invocation != null) {
+                                            composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                            commitDraftIfNeeded("")
+                                            hideComposerPopups()
+                                            focusManager.clearFocus(force = true)
+                                            keyboardController?.hide()
+                                            executeCodexSlashCommand(invocation.command, invocation.args)
+                                            return@clickable
+                                        }
                                     }
                                 }
                                 focusManager.clearFocus(force = true)
                                 keyboardController?.hide()
-                                commitDraftIfNeeded(composerValue.text)
-                                val skillMentions = collectSkillMentionsForSubmission(composerValue.text)
-                                onSend(composerValue.text, skillMentions)
+                                composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                commitDraftIfNeeded("")
+                                val skillMentions = collectSkillMentionsForSubmission(currentDraft)
+                                onSend(currentDraft, skillMentions)
                                 hideComposerPopups()
                             },
                         contentAlignment = Alignment.Center,
@@ -4450,6 +5234,30 @@ private data class ComposerSlashInvocation(
     val args: String?,
 )
 
+internal data class OpenCodeSlashInvocation(
+    val entry: SlashEntry,
+    val args: String?,
+)
+
+private val supportedOpenCodeActionIds =
+    setOf(
+        "agent.list",
+        "help.show",
+        "mcp.list",
+        "model.list",
+        "opencode.status",
+        "prompt.skills",
+        "session.compact",
+        "session.fork",
+        "session.list",
+        "session.new",
+        "session.redo",
+        "session.rename",
+        "session.share",
+        "session.undo",
+        "session.unshare",
+    )
+
 private fun filterSlashCommands(query: String): List<ComposerSlashCommand> {
     if (query.isEmpty()) {
         return ComposerSlashCommand.values().toList()
@@ -4462,6 +5270,38 @@ private fun filterSlashCommands(query: String): List<ComposerSlashCommand> {
         .sortedWith(
             compareByDescending<Pair<ComposerSlashCommand, Int>> { it.second }
                 .thenBy { it.first.rawValue },
+        )
+        .map { it.first }
+}
+
+internal fun filterOpenCodeSlashEntries(
+    entries: List<SlashEntry>,
+    query: String,
+): List<SlashEntry> {
+    val visible =
+        entries.filter { entry ->
+            entry.kind != SlashKind.ACTION || supportedOpenCodeActionIds.contains(entry.actionId)
+        }
+    if (query.isBlank()) {
+        return visible.sortedBy { it.displayName.lowercase(Locale.ROOT) }
+    }
+    return visible
+        .mapNotNull { entry ->
+            val candidates = buildList {
+                add(entry.name)
+                addAll(entry.aliases)
+                add(entry.displayName.removePrefix("/"))
+            }
+            val score = candidates.maxOfOrNull { candidate -> fuzzyScore(candidate = candidate, query = query) ?: Int.MIN_VALUE }
+            if (score == null || score == Int.MIN_VALUE) {
+                null
+            } else {
+                entry to score
+            }
+        }
+        .sortedWith(
+            compareByDescending<Pair<SlashEntry, Int>> { it.second }
+                .thenBy { it.first.displayName.lowercase(Locale.ROOT) },
         )
         .map { it.first }
 }
@@ -4578,6 +5418,34 @@ private fun parseSlashCommandInvocation(text: String): ComposerSlashInvocation? 
     val command = ComposerSlashCommand.fromRawCommand(commandName) ?: return null
     val args = body.substringAfter(' ', "").trim().ifEmpty { null }
     return ComposerSlashInvocation(command = command, args = args)
+}
+
+internal fun parseOpenCodeSlashInvocation(
+    text: String,
+    entries: List<SlashEntry>,
+): OpenCodeSlashInvocation? {
+    val firstLine = text.lineSequence().firstOrNull()?.trim().orEmpty()
+    if (!firstLine.startsWith("/")) {
+        return null
+    }
+    val body = firstLine.drop(1)
+    if (body.isEmpty()) {
+        return null
+    }
+    val commandName = body.substringBefore(' ').trim().lowercase(Locale.ROOT)
+    if (commandName.isEmpty()) {
+        return null
+    }
+    val entry =
+        entries.firstOrNull { item ->
+            item.name.lowercase(Locale.ROOT) == commandName ||
+                item.aliases.any { alias -> alias.lowercase(Locale.ROOT) == commandName }
+        } ?: return null
+    if (entry.kind == SlashKind.ACTION && !supportedOpenCodeActionIds.contains(entry.actionId)) {
+        return null
+    }
+    val args = body.substringAfter(' ', "").trim().ifEmpty { null }
+    return OpenCodeSlashInvocation(entry = entry, args = args)
 }
 
 private fun currentPrefixedToken(
@@ -5514,8 +6382,12 @@ private fun DiscoverySheet(
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
     onConnectDiscovered: (String) -> Unit,
+    onManualBackendKindChanged: (BackendKind) -> Unit,
     onManualHostChanged: (String) -> Unit,
     onManualPortChanged: (String) -> Unit,
+    onManualUsernameChanged: (String) -> Unit,
+    onManualPasswordChanged: (String) -> Unit,
+    onManualDirectoryChanged: (String) -> Unit,
     onConnectManual: () -> Unit,
 ) {
     val configuration = LocalConfiguration.current
@@ -5702,6 +6574,26 @@ private fun DiscoverySheet(
                                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                                         verticalArrangement = Arrangement.spacedBy(10.dp),
                                     ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = { onManualBackendKindChanged(BackendKind.CODEX) },
+                                                modifier = Modifier.weight(1f),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, if (state.manualBackendKind == BackendKind.CODEX) ShitterTheme.accent else ShitterTheme.border),
+                                            ) {
+                                                Text("Codex")
+                                            }
+                                            OutlinedButton(
+                                                onClick = { onManualBackendKindChanged(BackendKind.OPENCODE) },
+                                                modifier = Modifier.weight(1f),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, if (state.manualBackendKind == BackendKind.OPENCODE) ShitterTheme.accent else ShitterTheme.border),
+                                            ) {
+                                                Text("OpenCode")
+                                            }
+                                        }
+
                                         if (editingField == ManualField.HOST) {
                                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 OutlinedTextField(
@@ -5908,6 +6800,30 @@ private fun DiscoverySheet(
                                                 }
                                             }
                                         }
+
+                                        if (state.manualBackendKind == BackendKind.OPENCODE) {
+                                            OutlinedTextField(
+                                                value = state.manualUsername,
+                                                onValueChange = onManualUsernameChanged,
+                                                label = { Text("Username (optional)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                            )
+                                            OutlinedTextField(
+                                                value = state.manualPassword,
+                                                onValueChange = onManualPasswordChanged,
+                                                label = { Text("Password (optional)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                            )
+                                            OutlinedTextField(
+                                                value = state.manualDirectory,
+                                                onValueChange = onManualDirectoryChanged,
+                                                label = { Text("Directory (optional)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                            )
+                                        }
                                     }
                                 }
                                 Spacer(modifier = Modifier.weight(1f))
@@ -6039,6 +6955,25 @@ private fun DiscoverySheet(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onManualBackendKindChanged(BackendKind.CODEX) },
+                        modifier = Modifier.weight(1f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (state.manualBackendKind == BackendKind.CODEX) ShitterTheme.accent else ShitterTheme.border),
+                    ) {
+                        Text("Codex")
+                    }
+                    OutlinedButton(
+                        onClick = { onManualBackendKindChanged(BackendKind.OPENCODE) },
+                        modifier = Modifier.weight(1f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (state.manualBackendKind == BackendKind.OPENCODE) ShitterTheme.accent else ShitterTheme.border),
+                    ) {
+                        Text("OpenCode")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(
@@ -6054,6 +6989,30 @@ private fun DiscoverySheet(
                         label = { Text("Port") },
                         modifier = Modifier.width(110.dp),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                }
+
+                if (state.manualBackendKind == BackendKind.OPENCODE) {
+                    OutlinedTextField(
+                        value = state.manualUsername,
+                        onValueChange = onManualUsernameChanged,
+                        label = { Text("Username (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.manualPassword,
+                        onValueChange = onManualPasswordChanged,
+                        label = { Text("Password (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.manualDirectory,
+                        onValueChange = onManualDirectoryChanged,
+                        label = { Text("Directory (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                 }
@@ -6264,8 +7223,31 @@ private fun SettingsSheetContent(
     onRemoveServer: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var activeThemePicker by rememberSaveable { mutableStateOf<ThemePickerKind?>(null) }
+    val lightThemes = ShitterThemeManager.lightThemes
+    val darkThemes = ShitterThemeManager.darkThemes
+    val selectedLightTheme = lightThemes.firstOrNull { it.slug == ShitterThemeManager.selectedLightSlug } ?: lightThemes.firstOrNull()
+    val selectedDarkTheme = darkThemes.firstOrNull { it.slug == ShitterThemeManager.selectedDarkSlug } ?: darkThemes.firstOrNull()
+
+    activeThemePicker?.let { pickerKind ->
+        ThemePickerDialog(
+            title = pickerKind.title,
+            themes = if (pickerKind == ThemePickerKind.LIGHT) lightThemes else darkThemes,
+            selectedSlug = if (pickerKind == ThemePickerKind.LIGHT) ShitterThemeManager.selectedLightSlug else ShitterThemeManager.selectedDarkSlug,
+            onDismiss = { activeThemePicker = null },
+            onSelect = { slug ->
+                if (pickerKind == ThemePickerKind.LIGHT) {
+                    ShitterThemeManager.selectLightTheme(slug)
+                } else {
+                    ShitterThemeManager.selectDarkTheme(slug)
+                }
+                activeThemePicker = null
+            },
+        )
+    }
+
     Column(
-        modifier = modifier,
+        modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (onDismiss == null) {
@@ -6309,6 +7291,20 @@ private fun SettingsSheetContent(
                 Text("Open", color = ShitterTheme.accent, style = MaterialTheme.typography.labelLarge)
             }
         }
+
+        Text("Appearance", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+        ThemeSelectionTriggerCard(
+            label = "Light Theme",
+            entry = selectedLightTheme,
+            enabled = lightThemes.isNotEmpty(),
+            onClick = { activeThemePicker = ThemePickerKind.LIGHT },
+        )
+        ThemeSelectionTriggerCard(
+            label = "Dark Theme",
+            entry = selectedDarkTheme,
+            enabled = darkThemes.isNotEmpty(),
+            onClick = { activeThemePicker = ThemePickerKind.DARK },
+        )
 
         Text("Typography", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
         Surface(
@@ -6373,6 +7369,240 @@ private fun SettingsSheetContent(
                 }
             }
         }
+    }
+}
+
+private enum class ThemePickerKind(val title: String) {
+    LIGHT("Light Theme"),
+    DARK("Dark Theme"),
+}
+
+@Composable
+private fun ThemeSelectionTriggerCard(
+    label: String,
+    entry: ShitterThemeIndexEntry?,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        color = ShitterTheme.surface.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(label, color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+            ThemeOptionRowContent(
+                entry = entry,
+                trailingContent = {
+                    Icon(
+                        imageVector = Icons.Default.SwapVert,
+                        contentDescription = null,
+                        tint = if (enabled) ShitterTheme.textMuted else ShitterTheme.border,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemePickerDialog(
+    title: String,
+    themes: List<ShitterThemeIndexEntry>,
+    selectedSlug: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    var searchQuery by rememberSaveable(title) { mutableStateOf("") }
+    val trimmedQuery = searchQuery.trim()
+    val filteredThemes =
+        remember(themes, trimmedQuery) {
+            if (trimmedQuery.isEmpty()) {
+                themes
+            } else {
+                themes.filter { entry ->
+                    entry.name.contains(trimmedQuery, ignoreCase = true) ||
+                        entry.slug.contains(trimmedQuery, ignoreCase = true)
+                }
+            }
+        }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
+                color = ShitterTheme.surface,
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(title, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = ShitterTheme.textSecondary)
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Search themes") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = ShitterTheme.textMuted)
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear search", tint = ShitterTheme.textMuted)
+                                }
+                            }
+                        },
+                    )
+
+                    if (filteredThemes.isEmpty()) {
+                        Text(
+                            text = if (trimmedQuery.isEmpty()) "No themes available" else "No matching themes",
+                            color = ShitterTheme.textMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(filteredThemes, key = { it.slug }) { entry ->
+                                ThemePickerOptionCard(
+                                    entry = entry,
+                                    selected = entry.slug == selectedSlug,
+                                    onClick = { onSelect(entry.slug) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemePickerOptionCard(
+    entry: ShitterThemeIndexEntry,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = ShitterTheme.surface.copy(alpha = 0.72f),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) ShitterTheme.accent else ShitterTheme.border),
+    ) {
+        ThemeOptionRowContent(
+            entry = entry,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),
+            trailingContent = {
+                if (selected) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = ShitterTheme.accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ThemeOptionRowContent(
+    entry: ShitterThemeIndexEntry?,
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
+) {
+    val themeName = entry?.name ?: "No theme available"
+    val showSlug = entry != null && !entry.slug.equals(entry.name, ignoreCase = true)
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ThemePreviewBadge(entry = entry)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(themeName, color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium)
+            if (showSlug) {
+                Text(
+                    entry?.slug.orEmpty(),
+                    color = ShitterTheme.textMuted,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        trailingContent?.invoke()
+    }
+}
+
+@Composable
+private fun ThemePreviewBadge(
+    entry: ShitterThemeIndexEntry?,
+    modifier: Modifier = Modifier,
+) {
+    val backgroundColor = colorFromHex(entry?.backgroundHex, ShitterTheme.surface)
+    val foregroundColor = colorFromHex(entry?.foregroundHex, ShitterTheme.textPrimary)
+    val accentColor = colorFromHex(entry?.accentHex, ShitterTheme.accent)
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.BottomEnd,
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .width(28.dp)
+                    .height(22.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(backgroundColor)
+                    .border(1.dp, ShitterTheme.border.copy(alpha = 0.6f), RoundedCornerShape(5.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Aa", color = foregroundColor, style = MaterialTheme.typography.labelMedium)
+        }
+        Box(
+            modifier =
+                Modifier
+                    .offset(x = 1.dp, y = 1.dp)
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(accentColor),
+        )
     }
 }
 

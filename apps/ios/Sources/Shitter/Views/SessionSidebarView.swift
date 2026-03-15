@@ -13,7 +13,6 @@ struct SessionSidebarView: View {
     @EnvironmentObject var appState: AppState
     @State private var isLoading: Bool
     @State private var resumingKey: ThreadKey?
-    @State private var showSettings = false
     @State private var directoryPickerSheet: DirectoryPickerSheetModel?
     @State private var sessionSearchQuery = ""
     @State private var debouncedSessionSearchQuery = ""
@@ -168,9 +167,6 @@ struct SessionSidebarView: View {
 
     private func attachSheetAndAlerts<Content: View>(to content: Content) -> some View {
         content
-            .sheet(isPresented: $showSettings) {
-                SettingsView().environmentObject(serverManager)
-            }
             .alert("Session Action Failed", isPresented: Binding(
                 get: { sessionActionErrorMessage != nil },
                 set: { if !$0 { sessionActionErrorMessage = nil } }
@@ -332,7 +328,7 @@ struct SessionSidebarView: View {
 
     private var newSessionButton: some View {
         HStack(spacing: 10) {
-            Button { showSettings = true } label: {
+            Button { appState.showSettings = true } label: {
                 Image(systemName: "gear")
                     .font(.system(.subheadline, weight: .medium))
                     .foregroundColor(ShitterTheme.textSecondary)

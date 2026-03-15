@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+import ActivityKit
+import UIKit
+import UserNotifications
 
 struct SkillMentionSelection: Equatable {
     let name: String
@@ -63,6 +66,26 @@ final class ServerManager: ObservableObject {
     private var serversUsingItemNotifications: Set<String> = []
     private var threadTurnCounts: [ThreadKey: Int] = [:]
     private var agentDirectory = AgentDirectory()
+    private static let tsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
+    private var ts: String { Self.tsFormatter.string(from: Date()) }
+    private var backgroundedTurnKeys: Set<ThreadKey> = []
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var bgWakeCount: Int = 0
+    private var liveActivities: [ThreadKey: Activity<CodexTurnAttributes>] = [:]
+    private var liveActivityStartDates: [ThreadKey: Date] = [:]
+    private var liveActivityToolCallCounts: [ThreadKey: Int] = [:]
+    private var liveActivityOutputSnippets: [ThreadKey: String] = [:]
+    private var liveActivityLastUpdateTimes: [ThreadKey: CFAbsoluteTime] = [:]
+    private var liveActivityFileChangeCounts: [ThreadKey: Int] = [:]
+    private var notificationPermissionRequested = false
+    private let pushProxy = PushProxyClient()
+    private var pushProxyRegistrationId: String?
+    private var suppressNotifications = false
+    var devicePushToken: Data?
 
     private struct PersistedContextUsageSnapshot: Decodable {
         let contextTokens: Int64?
@@ -286,6 +309,7 @@ final class ServerManager: ObservableObject {
             ) ?? false
         }
         conn.onDisconnect = { [weak self] in
+            NSLog("[%@ ws] disconnected server=%@", self?.ts ?? "?", serverId)
             self?.removePendingApprovals(forServerId: serverId)
             self?.objectWillChange.send()
         }
@@ -346,7 +370,8 @@ final class ServerManager: ObservableObject {
         cwd: String,
         model: String? = nil,
         approvalPolicy: String = "never",
-        sandboxMode: String? = nil
+        sandboxMode: String? = nil,
+        dynamicTools: [DynamicToolSpec]? = nil
     ) async throws -> ThreadKey {
         guard let conn = connections[serverId] else {
             throw NSError(domain: "Shitter", code: 1, userInfo: [NSLocalizedDescriptionKey: "No connection for server"])
@@ -355,7 +380,8 @@ final class ServerManager: ObservableObject {
             cwd: cwd,
             model: model,
             approvalPolicy: approvalPolicy,
-            sandboxMode: sandboxMode
+            sandboxMode: sandboxMode,
+            dynamicTools: dynamicTools ?? (ExperimentalFeatures.shared.isEnabled(.generativeUI) ? GenerativeUITools.buildDynamicToolSpecs() : nil)
         )
         let threadId = resp.thread.id
         let key = ThreadKey(serverId: serverId, threadId: threadId)
@@ -750,12 +776,82 @@ final class ServerManager: ObservableObject {
                 requesterAgentRole: requester.role,
                 createdAt: Date()
             )
+        case "item/tool/call":
+            return handleDynamicToolCall(serverId: serverId, requestId: requestId, params: params)
         default:
             return false
         }
 
         pendingApprovals.append(pending)
         return true
+    }
+
+    // MARK: - Dynamic Tool Calls
+
+    private func handleDynamicToolCall(serverId: String, requestId: String, params: [String: Any]) -> Bool {
+        guard let toolCallParams = DynamicToolCallParams(from: params) else {
+            return false
+        }
+
+        let threadId = toolCallParams.threadId
+        let key = ThreadKey(serverId: serverId, threadId: threadId)
+
+        switch toolCallParams.tool {
+        case GenerativeUITools.readMeToolName:
+            handleReadMeToolCall(serverId: serverId, requestId: requestId, params: toolCallParams)
+            return true
+        case GenerativeUITools.showWidgetToolName:
+            handleShowWidgetToolCall(serverId: serverId, requestId: requestId, key: key, params: toolCallParams)
+            return true
+        default:
+            connections[serverId]?.respondToServerRequest(
+                id: requestId,
+                result: DynamicToolCallResponse.error("Unknown dynamic tool: \(toolCallParams.tool)").asDictionary
+            )
+            return true
+        }
+    }
+
+    private func handleReadMeToolCall(serverId: String, requestId: String, params: DynamicToolCallParams) {
+        let modulesArg = params.arguments["modules"] as? [String] ?? []
+        let modules = modulesArg.compactMap { WidgetGuidelineModule(rawValue: $0) }
+        let guidelines = WidgetGuidelines.getGuidelines(modules: modules.isEmpty ? [.interactive] : modules)
+        connections[serverId]?.respondToServerRequest(
+            id: requestId,
+            result: DynamicToolCallResponse.text(guidelines).asDictionary
+        )
+    }
+
+    private func handleShowWidgetToolCall(serverId: String, requestId: String, key: ThreadKey, params: DynamicToolCallParams) {
+        guard let thread = threads[key] else {
+            connections[serverId]?.respondToServerRequest(
+                id: requestId,
+                result: DynamicToolCallResponse.error("Thread not found").asDictionary
+            )
+            return
+        }
+
+        let widget = WidgetState.fromArguments(params.arguments, callId: params.callId, isFinalized: true)
+
+        // Use liveItemMessageIndices for O(1) lookup instead of linear scan
+        if let index = liveItemMessageIndices[key]?[params.callId],
+           thread.messages.indices.contains(index) {
+            thread.messages[index].widgetState = widget
+            thread.messages[index].text = "### Widget\nstatus: completed\n\nWidget: \(widget.title)"
+        } else {
+            thread.messages.append(ChatMessage(
+                role: .system,
+                text: "### Widget\nstatus: completed\n\nWidget: \(widget.title)",
+                widgetState: widget
+            ))
+        }
+
+        thread.updatedAt = Date()
+
+        connections[serverId]?.respondToServerRequest(
+            id: requestId,
+            result: DynamicToolCallResponse.text("Widget \"\(widget.title)\" rendered and shown to the user (\(Int(widget.width))x\(Int(widget.height))).").asDictionary
+        )
     }
 
     private func commandString(from params: [String: Any]) -> String? {
@@ -806,7 +902,8 @@ final class ServerManager: ObservableObject {
                     cwd: cwd,
                     model: model,
                     approvalPolicy: approvalPolicy,
-                    sandboxMode: sandboxMode
+                    sandboxMode: sandboxMode,
+                    dynamicTools: ExperimentalFeatures.shared.isEnabled(.generativeUI) ? GenerativeUITools.buildDynamicToolSpecs() : nil
                 )
             } catch {
                 let conn = connections[serverId]
@@ -830,6 +927,8 @@ final class ServerManager: ObservableObject {
         thread.messages.append(ChatMessage(role: .user, text: text, isFromUserTurnBoundary: true))
         thread.status = .thinking
         thread.updatedAt = Date()
+        requestNotificationPermissionIfNeeded()
+        startLiveActivity(key: key, model: thread.model, cwd: thread.cwd, prompt: text)
         do {
             let skillInputs = skillMentions.map { mention in
                 UserInput(type: "skill", path: mention.path, name: mention.name)
@@ -845,6 +944,7 @@ final class ServerManager: ObservableObject {
             thread.activeTurnId = resp.turnId
         } catch {
             thread.status = .error(error.localizedDescription)
+            endLiveActivity(key: key, phase: .failed)
         }
     }
 
@@ -984,6 +1084,9 @@ final class ServerManager: ObservableObject {
     // MARK: - Notification Routing
 
     func handleNotification(serverId: String, method: String, data: Data) {
+        if suppressNotifications {
+            return
+        }
         switch method {
         case "account/login/completed", "account/updated", "account/rateLimits/updated":
             connections[serverId]?.handleAccountNotification(method: method, data: data)
@@ -1002,6 +1105,7 @@ final class ServerManager: ObservableObject {
             }
 
         case "item/agentMessage/delta":
+            serversUsingItemNotifications.insert(serverId)
             struct DeltaParams: Decodable {
                 let delta: String
                 let threadId: String?
@@ -1143,6 +1247,7 @@ final class ServerManager: ObservableObject {
                 role: agentRole
             )
             thread.updatedAt = Date()
+            updateLiveActivityOutput(key: key, thread: thread)
 
         case "error", "codex/event/error":
             handleErrorNotification(serverId: serverId, data: data)
@@ -1155,25 +1260,22 @@ final class ServerManager: ObservableObject {
                 threads[key]?.activeTurnId = nil
                 liveItemMessageIndices[key] = nil
                 liveTurnDiffMessageIndices[key] = nil
-                if activeThreadKey == key {
-                    Task { @MainActor in
-                        await syncThreadFromServer(key)
-                    }
-                }
+                backgroundedTurnKeys.remove(key)
+                endLiveActivity(key: key, phase: .completed)
+                postLocalNotificationIfNeeded(model: threads[key]?.model ?? "", threadPreview: threads[key]?.preview)
+                // Skip syncThreadFromServer — client already has all messages from streaming.
+                // Sync happens on thread resume/switch instead.
             } else {
-                // Fallback: mark any thinking thread on this server as ready
                 for (_, thread) in threads where thread.serverId == serverId && thread.hasTurnActive {
                     thread.status = .ready
                     thread.updatedAt = Date()
                     thread.activeTurnId = nil
                     liveItemMessageIndices[thread.key] = nil
                     liveTurnDiffMessageIndices[thread.key] = nil
+                    backgroundedTurnKeys.remove(thread.key)
                 }
-                if let key = activeThreadKey {
-                    Task { @MainActor in
-                        await syncThreadFromServer(key)
-                    }
-                }
+                endAllLiveActivities(phase: .completed)
+                postLocalNotificationIfNeeded(model: "", threadPreview: nil)
             }
             Task { await connections[serverId]?.fetchRateLimits() }
 
@@ -1210,6 +1312,7 @@ final class ServerManager: ObservableObject {
         thread.messages.append(ChatMessage(role: .system, text: message))
         thread.status = .error(message)
         thread.updatedAt = Date()
+        endLiveActivity(key: key, phase: .failed)
     }
 
     private func handleSessionConfiguredNotification(serverId: String, data: Data) {
@@ -1311,10 +1414,54 @@ final class ServerManager: ObservableObject {
         switch method {
         case "item/started", "item/completed":
             guard let itemDict = paramsDict["item"] as? [String: Any] else { return }
+            let itemType = itemDict["type"] as? String ?? "unknown"
             // agentMessage is streamed via delta; userMessage is added locally in send()
-            if let itemType = itemDict["type"] as? String,
-               itemType == "agentMessage" || itemType == "userMessage" {
+            if itemType == "agentMessage" || itemType == "userMessage" {
                 return
+            }
+            // Handle dynamicToolCall for show_widget — create a placeholder widget message
+            if let itemType = itemDict["type"] as? String,
+               itemType == "dynamicToolCall",
+               let toolName = extractString(itemDict, keys: ["tool"]) {
+                if toolName == GenerativeUITools.showWidgetToolName {
+                    let itemId = extractString(itemDict, keys: ["id"]) ?? UUID().uuidString
+
+                    if method == "item/completed" {
+                        // On completion, preserve the existing widget message (already populated
+                        // by handleShowWidgetToolCall). Just finalize and clear live tracking.
+                        if let index = liveItemMessageIndices[key]?[itemId],
+                           thread.messages.indices.contains(index) {
+                            thread.messages[index].widgetState?.isFinalized = true
+                        }
+                        liveItemMessageIndices[key]?[itemId] = nil
+                        thread.updatedAt = Date()
+                        return
+                    }
+
+                    // item/started — create a placeholder widget with spinner
+                    let args = itemDict["arguments"] as? [String: Any] ?? [:]
+                    let widget = WidgetState.fromArguments(args, callId: itemId)
+                    let msg = ChatMessage(
+                        role: .system,
+                        text: "### Widget\nstatus: inProgress\n\nWidget: \(widget.title)",
+                        widgetState: widget
+                    )
+                    upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
+                    thread.updatedAt = Date()
+                    return
+                }
+                // visualize_read_me is invisible — skip it
+                if toolName == GenerativeUITools.readMeToolName { return }
+            }
+            if method == "item/started", let itemType = itemDict["type"] as? String {
+                let toolName: String
+                if itemType == "commandExecution" || itemType == "command_execution",
+                   let cmd = commandString(from: itemDict) {
+                    toolName = cmd
+                } else {
+                    toolName = extractString(itemDict, keys: ["name", "toolName", "tool_name"]) ?? itemType
+                }
+                updateLiveActivity(key: key, phase: .toolCall, toolName: toolName)
             }
             guard let itemData = try? JSONSerialization.data(withJSONObject: itemDict),
                   let item = try? JSONDecoder().decode(ResumedThreadItem.self, from: itemData),
@@ -1863,6 +2010,12 @@ final class ServerManager: ObservableObject {
               !diff.isEmpty else { return }
 
         let key = resolveThreadKey(serverId: serverId, threadId: notif.params.threadId)
+
+        // Count changed files for LA
+        let diffHeaders = diff.components(separatedBy: "diff --git ").count - 1
+        let fileChangeCount = max(diffHeaders, 1)
+        liveActivityFileChangeCounts[key] = fileChangeCount
+
         guard let thread = threads[key],
               let msg = systemMessage(title: "File Diff", body: "```diff\n\(diff)\n```") else { return }
 
@@ -1913,6 +2066,8 @@ final class ServerManager: ObservableObject {
             let itemId = extractString(eventPayload, keys: ["call_id", "callId"])
             let command = extractCommandText(eventPayload)
             let cwd = extractString(eventPayload, keys: ["cwd"]) ?? ""
+
+            updateLiveActivity(key: key, phase: .toolCall, toolName: command.isEmpty ? "shell" : command)
 
             var lines: [String] = ["Status: inProgress"]
             if !cwd.isEmpty { lines.append("Directory: \(cwd)") }
@@ -2203,24 +2358,58 @@ final class ServerManager: ObservableObject {
         await syncThreadFromServer(key)
     }
 
-    private func syncThreadFromServer(_ key: ThreadKey) async {
+    private func syncThreadFromServer(_ key: ThreadKey, force: Bool = false) async {
         guard let conn = connections[key.serverId], conn.isConnected,
-              let thread = threads[key] else { return }
-        if thread.hasTurnActive { return }
+              let thread = threads[key] else {
+            if force {
+                NSLog("[%@ sync] bail: server %@ connected=%d thread=%d", ts, key.serverId, connections[key.serverId]?.isConnected == true ? 1 : 0, threads[key] != nil ? 1 : 0)
+                // Can't reach server — reset stuck thinking state so UI isn't frozen
+                if let thread = threads[key], thread.hasTurnActive {
+                    NSLog("[%@ sync] resetting %@ to ready (can't reach server)", ts, key.threadId)
+                    thread.status = .ready
+                    thread.activeTurnId = nil
+                }
+            }
+            return
+        }
+        let wasActive = thread.hasTurnActive
+        if !force && wasActive { return }
 
         let cwd = thread.cwd.isEmpty ? "/tmp" : thread.cwd
+        if force { NSLog("[%@ sync] resumeThread %@ (wasActive=%d)", ts, key.threadId, wasActive ? 1 : 0) }
         guard let response = try? await conn.resumeThread(
             threadId: key.threadId,
             cwd: cwd,
             approvalPolicy: "never",
             sandboxMode: "workspace-write"
-        ) else { return }
-        let restored = restoredMessages(
+        ) else {
+            if force {
+                NSLog("[%@ sync] resumeThread FAILED for %@, resetting to ready", ts, key.threadId)
+                if wasActive {
+                    thread.status = .ready
+                    thread.activeTurnId = nil
+                }
+            }
+            return
+        }
+        if force { NSLog("[%@ sync] resumeThread OK for %@, turns=%d", ts, key.threadId, response.thread.turns.count) }
+
+        // resumeThread re-subscribes to events. If a turn is still active,
+        // the server will keep sending notifications. Don't reset status.
+        if force {
+            NSLog("[%@ sync] after resume: wasActive=%d hasTurnActive=%d", ts, wasActive ? 1 : 0, thread.hasTurnActive ? 1 : 0)
+        }
+
+        var restored = restoredMessages(
             from: response.thread.turns,
             serverId: key.serverId,
             defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
             defaultAgentRole: response.thread.agentRole ?? thread.agentRole
         )
+
+        // Suspend forwarding during batch update to avoid N separate objectWillChange publishes
+        threadSubscriptions[key]?.cancel()
+
         thread.cwd = response.cwd
         thread.model = response.model
         thread.modelProvider = response.modelProvider ?? response.model
@@ -2232,11 +2421,36 @@ final class ServerManager: ObservableObject {
         thread.agentRole = sanitizedLineageId(response.thread.agentRole) ?? thread.agentRole
         await refreshThreadContextWindow(for: key, cwd: response.cwd)
         await refreshPersistedContextUsage(for: key)
-        guard !messagesEquivalent(thread.messages, restored) else { return }
-        if shouldPreferLocalMessages(current: thread.messages, restored: restored) { return }
 
-        thread.messages = restored
-        threadTurnCounts[key] = response.thread.turns.count
+        let needsMessageUpdate: Bool
+        if messagesEquivalent(thread.messages, restored) {
+            needsMessageUpdate = false
+        } else if shouldPreferLocalMessages(current: thread.messages, restored: restored) {
+            needsMessageUpdate = false
+        } else {
+            // Preserve IDs from matching existing messages so SwiftUI doesn't destroy/recreate cells
+            let existing = thread.messages
+            for i in restored.indices {
+                if i < existing.count,
+                   existing[i].role == restored[i].role,
+                   existing[i].text == restored[i].text {
+                    restored[i].id = existing[i].id
+                    if restored[i].widgetState == nil, existing[i].widgetState != nil {
+                        restored[i].widgetState = existing[i].widgetState
+                    }
+                }
+            }
+            thread.messages = restored
+            needsMessageUpdate = true
+        }
+
+        if needsMessageUpdate {
+            threadTurnCounts[key] = response.thread.turns.count
+        }
+
+        // Reconnect forwarding and send a single publish
+        observeThread(thread)
+        objectWillChange.send()
         upsertAgentDirectory(
             serverId: key.serverId,
             threadId: response.thread.id,
@@ -2393,6 +2607,333 @@ final class ServerManager: ObservableObject {
         return threads.values
             .first { $0.serverId == serverId && $0.hasTurnActive }?
             .key ?? ThreadKey(serverId: serverId, threadId: "")
+    }
+
+    // MARK: - Background / Foreground Lifecycle
+
+    func appDidEnterBackground() {
+        let activeTurnKeys = threads.compactMap { (key, thread) -> ThreadKey? in
+            thread.hasTurnActive ? key : nil
+        }
+        NSLog("[%@ bg] entering background, activeTurnKeys=%d liveActivities=%d", ts, activeTurnKeys.count, liveActivities.count)
+
+        guard !activeTurnKeys.isEmpty else { return }
+        backgroundedTurnKeys = Set(activeTurnKeys)
+        bgWakeCount = 0
+
+        for key in activeTurnKeys {
+            if liveActivities[key] == nil, let thread = threads[key] {
+                startLiveActivity(key: key, model: thread.model, cwd: thread.cwd, prompt: thread.preview ?? "")
+            }
+        }
+
+        registerPushProxy()
+
+        var bgID = UIBackgroundTaskIdentifier.invalid
+        bgID = UIApplication.shared.beginBackgroundTask {
+            NSLog("[bg] background task expiring")
+            UIApplication.shared.endBackgroundTask(bgID)
+        }
+        backgroundTaskID = bgID
+    }
+
+    private func registerPushProxy() {
+        guard let tokenData = devicePushToken else {
+            NSLog("[%@ push] no device push token, skipping proxy register", ts)
+            return
+        }
+        guard pushProxyRegistrationId == nil else { return }
+        let token = tokenData.map { String(format: "%02x", $0) }.joined()
+        Task {
+            do {
+                let regId = try await pushProxy.register(pushToken: token, interval: 30, ttl: 7200)
+                pushProxyRegistrationId = regId
+                NSLog("[%@ push] registered → %@", ts, regId)
+            } catch {
+                NSLog("[%@ push] register failed: %@", ts, error.localizedDescription)
+            }
+        }
+    }
+
+    private func deregisterPushProxy() {
+        guard let regId = pushProxyRegistrationId else { return }
+        pushProxyRegistrationId = nil
+        Task { try? await pushProxy.deregister(registrationId: regId) }
+    }
+
+    func appDidBecomeActive() {
+        NSLog("[%@ bg] becoming active, backgroundedTurnKeys=%d liveActivities=%d bgWakes=%d", ts, backgroundedTurnKeys.count, liveActivities.count, bgWakeCount)
+        deregisterPushProxy()
+        endBackgroundTaskIfNeeded()
+
+        let keysToSync = backgroundedTurnKeys.union(
+            threads.compactMap { $0.value.hasTurnActive ? $0.key : nil }
+        )
+        backgroundedTurnKeys.removeAll()
+
+        Task {
+            for (serverId, conn) in connections {
+                NSLog("[%@ bg] reconnecting server %@", ts, serverId)
+                conn.disconnect()
+                await conn.connect()
+            }
+
+            // First pass: read-only sync to get clean state without event subscription
+            for key in keysToSync {
+                guard let conn = connections[key.serverId], conn.isConnected,
+                      let thread = threads[key] else { continue }
+                if let response = try? await conn.readThread(threadId: key.threadId) {
+                    let restored = restoredMessages(
+                        from: response.thread.turns,
+                        serverId: key.serverId,
+                        defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
+                        defaultAgentRole: response.thread.agentRole ?? thread.agentRole
+                    )
+                    thread.messages = restored
+                    if let model = response.model { thread.model = model }
+                    if let cwd = response.cwd { thread.cwd = cwd }
+                    let turnDone = response.thread.turns.last?.status == "completed"
+                        || response.thread.turns.last?.status == "failed"
+                        || response.thread.turns.last?.status == "interrupted"
+                    if turnDone {
+                        thread.status = .ready
+                        thread.activeTurnId = nil
+                    }
+                    NSLog("[%@ bg] read %@ msgs=%d lastStatus=%@", ts, key.threadId, restored.count, response.thread.turns.last?.status ?? "nil")
+                }
+            }
+
+            // Second pass: resume threads that are still active to get live updates
+            suppressNotifications = true
+            for key in keysToSync where threads[key]?.hasTurnActive == true {
+                await syncThreadFromServer(key, force: true)
+            }
+            if let activeKey = activeThreadKey, !keysToSync.contains(activeKey) {
+                await syncThreadFromServer(activeKey, force: true)
+            }
+            suppressNotifications = false
+
+            for key in liveActivities.keys {
+                if threads[key]?.hasTurnActive != true {
+                    endLiveActivity(key: key, phase: .completed)
+                }
+            }
+        }
+    }
+
+    func handleBackgroundPush() async {
+        bgWakeCount += 1
+        let keys = backgroundedTurnKeys
+        NSLog("[%@ push-wake] #%d keys=%d", ts, bgWakeCount, keys.count)
+        guard !keys.isEmpty else { return }
+
+        let serverIds = Set(keys.map(\.serverId))
+        for serverId in serverIds {
+            guard let conn = connections[serverId] else {
+                NSLog("[%@ push-wake] no connection object for %@", ts, serverId)
+                continue
+            }
+            NSLog("[%@ push-wake] server %@ isConnected=%d, reconnecting", ts, serverId, conn.isConnected ? 1 : 0)
+            conn.disconnect()
+            await conn.connect()
+            NSLog("[%@ push-wake] server %@ after connect: isConnected=%d", ts, serverId, conn.isConnected ? 1 : 0)
+        }
+
+        for key in keys {
+            guard let conn = connections[key.serverId], conn.isConnected,
+                  let thread = threads[key] else { continue }
+            do {
+                let response = try await conn.readThread(threadId: key.threadId)
+                let restored = restoredMessages(
+                    from: response.thread.turns,
+                    serverId: key.serverId,
+                    defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
+                    defaultAgentRole: response.thread.agentRole ?? thread.agentRole
+                )
+                thread.messages = restored
+                if let model = response.model { thread.model = model }
+                if let cwd = response.cwd { thread.cwd = cwd }
+                let lastTurn = response.thread.turns.last
+                let lastTurnStatus = lastTurn?.status
+                let turnCount = response.thread.turns.count
+                NSLog("[%@ push-wake] read %@ turns=%d lastStatus=%@ msgs=%d", ts, key.threadId, turnCount, lastTurnStatus ?? "nil", restored.count)
+                let turnDone = lastTurnStatus == "completed" || lastTurnStatus == "failed" || lastTurnStatus == "interrupted"
+                if turnDone {
+                    thread.status = .ready
+                    thread.activeTurnId = nil
+                }
+
+                if turnDone {
+                    backgroundedTurnKeys.remove(key)
+                    endLiveActivity(key: key, phase: .completed)
+                    postLocalNotificationIfNeeded(model: thread.model, threadPreview: thread.preview)
+                } else {
+                    updateLiveActivityBGWake(key: key)
+                }
+            } catch {
+                NSLog("[%@ push-wake] readThread failed for %@: %@", ts, key.threadId, error.localizedDescription)
+            }
+        }
+
+        for serverId in serverIds {
+            connections[serverId]?.disconnect()
+        }
+
+        if backgroundedTurnKeys.isEmpty {
+            deregisterPushProxy()
+        }
+    }
+
+
+    private func endBackgroundTaskIfNeeded() {
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
+    }
+
+    // MARK: - Live Activity
+
+    private func startLiveActivity(key: ThreadKey, model: String, cwd: String, prompt: String) {
+        guard liveActivities[key] == nil, ActivityAuthorizationInfo().areActivitiesEnabled else {
+            NSLog("[%@ la] start SKIP key=%@ (exists=%d enabled=%d)", ts, key.threadId, liveActivities[key] != nil ? 1 : 0, ActivityAuthorizationInfo().areActivitiesEnabled ? 1 : 0)
+            return
+        }
+        let now = Date()
+        let attributes = CodexTurnAttributes(threadId: key.threadId, model: model, cwd: cwd, startDate: now, prompt: String(prompt.prefix(120)))
+        let state = CodexTurnAttributes.ContentState(phase: .thinking, elapsedSeconds: 0, toolCallCount: 0, activeThreadCount: 0, fileChangeCount: 0, contextPercent: 0)
+        liveActivityStartDates[key] = now
+        liveActivityToolCallCounts[key] = 0
+        liveActivityFileChangeCounts[key] = 0
+        do {
+            liveActivities[key] = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: nil))
+            NSLog("[%@ la] STARTED key=%@ activityId=%@", ts, key.threadId, liveActivities[key]?.id ?? "nil")
+        } catch {
+            NSLog("[%@ la] FAILED to start: %@", ts, error.localizedDescription)
+        }
+    }
+
+    private func updateLiveActivity(key: ThreadKey, phase: CodexTurnAttributes.ContentState.Phase, toolName: String? = nil) {
+        guard let activity = liveActivities[key] else {
+            NSLog("[%@ la] updatePhase SKIP key=%@ (no activity)", ts, key.threadId)
+            return
+        }
+        if phase == .toolCall {
+            liveActivityToolCallCounts[key, default: 0] += 1
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        let sinceLastUpdate = now - (liveActivityLastUpdateTimes[key] ?? 0)
+        guard sinceLastUpdate > 2.0 else { return }
+        let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
+        let ctxPercent = contextPercent(for: key)
+        let state = CodexTurnAttributes.ContentState(phase: phase, toolName: toolName, elapsedSeconds: elapsed, toolCallCount: liveActivityToolCallCounts[key, default: 0], activeThreadCount: liveActivities.count, outputSnippet: liveActivityOutputSnippets[key], fileChangeCount: liveActivityFileChangeCounts[key, default: 0], contextPercent: ctxPercent)
+        liveActivityLastUpdateTimes[key] = now
+        NSLog("[%@ la] UPDATE phase=%@ tool=%@ elapsed=%d", ts, phase.rawValue, toolName ?? "-", elapsed)
+        Task { await activity.update(.init(state: state, staleDate: Date(timeIntervalSinceNow: 60))) }
+    }
+
+    private func updateLiveActivityOutput(key: ThreadKey, thread: ThreadState) {
+        guard let activity = liveActivities[key] else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        let sinceLastUpdate = now - (liveActivityLastUpdateTimes[key] ?? 0)
+        guard sinceLastUpdate > 2.0 else { return }
+        guard let lastMsg = thread.messages.last, lastMsg.role == .assistant else { return }
+        let snippet = snippetText(lastMsg.text)
+        guard !snippet.isEmpty, snippet != liveActivityOutputSnippets[key] else { return }
+        liveActivityOutputSnippets[key] = snippet
+        let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
+        let ctxPercent = contextPercent(for: key)
+        let state = CodexTurnAttributes.ContentState(phase: .thinking, elapsedSeconds: elapsed, toolCallCount: liveActivityToolCallCounts[key, default: 0], activeThreadCount: liveActivities.count, outputSnippet: snippet, fileChangeCount: liveActivityFileChangeCounts[key, default: 0], contextPercent: ctxPercent)
+        liveActivityLastUpdateTimes[key] = now
+        NSLog("[%@ la] UPDATE output elapsed=%d snippet=%@", ts, elapsed, String(snippet.prefix(40)))
+        Task { await activity.update(.init(state: state, staleDate: Date(timeIntervalSinceNow: 60))) }
+    }
+
+    private func endLiveActivity(key: ThreadKey, phase: CodexTurnAttributes.ContentState.Phase) {
+        guard let activity = liveActivities[key] else {
+            NSLog("[%@ la] END SKIP key=%@ (no activity)", ts, key.threadId)
+            return
+        }
+        let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
+        NSLog("[%@ la] END key=%@ phase=%@ elapsed=%d activityId=%@", ts, key.threadId, phase.rawValue, elapsed, activity.id)
+        let ctxPercent = contextPercent(for: key)
+        let state = CodexTurnAttributes.ContentState(phase: phase, elapsedSeconds: elapsed, toolCallCount: liveActivityToolCallCounts[key, default: 0], activeThreadCount: liveActivities.count - 1, fileChangeCount: liveActivityFileChangeCounts[key, default: 0], contextPercent: ctxPercent)
+        let content = ActivityContent(state: state, staleDate: Date(timeIntervalSinceNow: 60))
+        Task { await activity.end(content, dismissalPolicy: .after(.now + 4)) }
+        liveActivities.removeValue(forKey: key)
+        liveActivityStartDates.removeValue(forKey: key)
+        liveActivityToolCallCounts.removeValue(forKey: key)
+        liveActivityOutputSnippets.removeValue(forKey: key)
+        liveActivityLastUpdateTimes.removeValue(forKey: key)
+        liveActivityFileChangeCounts.removeValue(forKey: key)
+    }
+
+    private func updateLiveActivityBGWake(key: ThreadKey) {
+        guard let activity = liveActivities[key] else { return }
+        let thread = threads[key]
+        let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
+
+        let toolCount = liveActivityToolCallCounts[key, default: 0]
+
+        if let lastAssistant = thread?.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
+            liveActivityOutputSnippets[key] = snippetText(lastAssistant.text)
+        }
+
+        let phase: CodexTurnAttributes.ContentState.Phase = thread?.hasTurnActive == true ? .thinking : .completed
+        let ctxPercent = contextPercent(for: key)
+
+        let state = CodexTurnAttributes.ContentState(
+            phase: phase,
+            elapsedSeconds: elapsed,
+            toolCallCount: toolCount,
+            activeThreadCount: liveActivities.count,
+            outputSnippet: liveActivityOutputSnippets[key],
+            pushCount: bgWakeCount,
+            fileChangeCount: liveActivityFileChangeCounts[key, default: 0],
+            contextPercent: ctxPercent
+        )
+        NSLog("[%@ la] BG WAKE UPDATE #%d elapsed=%d tools=%d snippet=%@", ts, bgWakeCount, elapsed, toolCount, liveActivityOutputSnippets[key] ?? "nil")
+        liveActivityLastUpdateTimes[key] = CFAbsoluteTimeGetCurrent()
+        Task { await activity.update(.init(state: state, staleDate: Date(timeIntervalSinceNow: 60))) }
+    }
+
+    private func snippetText(_ text: String) -> String {
+        String(text.prefix(120))
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func contextPercent(for key: ThreadKey) -> Int {
+        guard let t = threads[key],
+              let window = t.modelContextWindow, window > 0,
+              let used = t.contextTokensUsed else { return 0 }
+        return min(100, Int(Double(used) / Double(window) * 100))
+    }
+
+    private func endAllLiveActivities(phase: CodexTurnAttributes.ContentState.Phase) {
+        for key in liveActivities.keys {
+            endLiveActivity(key: key, phase: phase)
+        }
+    }
+
+    // MARK: - Local Notifications
+
+    private func requestNotificationPermissionIfNeeded() {
+        guard !notificationPermissionRequested else { return }
+        notificationPermissionRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func postLocalNotificationIfNeeded(model: String, threadPreview: String? = nil) {
+        guard UIApplication.shared.applicationState != .active else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Turn completed"
+        var bodyParts: [String] = []
+        if let preview = threadPreview, !preview.isEmpty { bodyParts.append(preview) }
+        if !model.isEmpty { bodyParts.append(model) }
+        content.body = bodyParts.joined(separator: " - ")
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Persistence
@@ -2785,6 +3326,30 @@ final class ServerManager: ObservableObject {
         case .exitedReviewMode(let review):
             return withTurnMetadata(
                 systemMessage(title: "Review Mode", body: "Exited review: \(review)"),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex
+            )
+        case .dynamicToolCall(let tool, let arguments, let status, _, let durationMs):
+            if tool == GenerativeUITools.readMeToolName {
+                return nil
+            }
+            if tool == GenerativeUITools.showWidgetToolName {
+                guard let args = arguments?.value as? [String: Any],
+                      let code = args["widget_code"] as? String, !code.isEmpty else { return nil }
+                let widget = WidgetState.fromArguments(args, callId: UUID().uuidString, isFinalized: true)
+                var msg = ChatMessage(
+                    role: .system,
+                    text: "### Widget\nstatus: completed\n\nWidget: \(widget.title)",
+                    widgetState: widget
+                )
+                msg.sourceTurnId = sourceTurnId
+                msg.sourceTurnIndex = sourceTurnIndex
+                return msg
+            }
+            var lines: [String] = ["Status: \(status)", "Tool: \(tool)"]
+            if let durationMs { lines.append("Duration: \(durationMs) ms") }
+            return withTurnMetadata(
+                systemMessage(title: "Dynamic Tool Call", body: lines.joined(separator: "\n")),
                 sourceTurnId: sourceTurnId,
                 sourceTurnIndex: sourceTurnIndex
             )

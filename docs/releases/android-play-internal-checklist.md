@@ -14,7 +14,7 @@
 - `SHITTER_UPLOAD_KEY_PASSWORD` = key password
 - Optional: `SHITTER_PLAY_TRACK` (default: `internal`)
 
-Legacy `LITTER_*` names are still accepted for backward compatibility.
+Legacy `SHITTER_*` names are still accepted for backward compatibility.
 
 ## Upload Command
 ```bash
