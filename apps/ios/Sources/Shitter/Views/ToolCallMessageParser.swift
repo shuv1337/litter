@@ -85,15 +85,6 @@ enum ToolCallStatus: Equatable {
         case .unknown: return "Unknown"
         }
     }
-
-    var summarySuffix: String {
-        switch self {
-        case .inProgress: return "in progress"
-        case .completed: return "completed"
-        case .failed: return "failed"
-        case .unknown: return "unknown"
-        }
-    }
 }
 
 struct ToolCallKeyValue: Equatable {
@@ -189,6 +180,19 @@ enum ToolCallMessageParser {
                 sections: allSections
             )
         )
+    }
+
+    static func usesResolvedTargets(_ message: ChatMessage) -> Bool {
+        guard message.role == .system,
+              let system = parseSystemEnvelope(message.text),
+              ToolCallKind.from(title: system.title) != nil else {
+            return false
+        }
+
+        return system.body.range(
+            of: #"(?im)^targets(?:\s*:)?(?:\s|$)"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private struct ParsedSystemMessage {
@@ -643,16 +647,7 @@ enum ToolCallMessageParser {
         switch kind {
         case .commandExecution, .commandOutput:
             if let command = commandSummary(from: body.primarySections) {
-                var result = stripShellWrapper(command)
-                if status == .completed {
-                    result += " ✓"
-                } else if status != .unknown {
-                    result += " (\(status.summarySuffix))"
-                }
-                if let duration, !duration.isEmpty {
-                    result += " \(duration)"
-                }
-                return result
+                return stripShellWrapper(command)
             }
         case .fileChange, .fileDiff:
             if let first = body.filePaths.first {
@@ -664,12 +659,6 @@ enum ToolCallMessageParser {
             }
         case .mcpToolCall, .mcpToolProgress:
             if let tool = body.metadataValue(for: "tool"), !tool.isEmpty {
-                if status == .completed {
-                    return "\(tool) ✓"
-                }
-                if status != .unknown {
-                    return "\(tool) (\(status.summarySuffix))"
-                }
                 return tool
             }
         case .webSearch:
@@ -692,12 +681,6 @@ enum ToolCallMessageParser {
             break
         }
 
-        if let duration, !duration.isEmpty, status != .unknown {
-            return "\(title) (\(status.summarySuffix), \(duration))"
-        }
-        if status != .unknown {
-            return "\(title) (\(status.summarySuffix))"
-        }
         return title
     }
 

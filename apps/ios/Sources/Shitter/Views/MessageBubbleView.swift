@@ -1,5 +1,5 @@
 import SwiftUI
-import MarkdownUI
+import Textual
 import Inject
 
 // MARK: - Reusable bubble components
@@ -48,21 +48,55 @@ struct UserBubble: View {
 }
 
 struct AssistantBubble: View, Equatable {
-    let text: String
+    let markdownString: String
+    let markdownIdentity: Int
     var label: String? = nil
     var textScale: CGFloat = 1.0
     var compact: Bool = false
+    var themeVersion: Int = 0
     @ScaledMetric(relativeTo: .body) private var mdBodySize: CGFloat = 14
     @ScaledMetric(relativeTo: .footnote) private var mdCodeSize: CGFloat = 13
 
     private var bodySize: CGFloat { (compact ? 12 : mdBodySize) * textScale }
     private var codeSize: CGFloat { (compact ? 11 : mdCodeSize) * textScale }
 
+    init(
+        text: String,
+        label: String? = nil,
+        textScale: CGFloat = 1.0,
+        compact: Bool = false,
+        themeVersion: Int = 0
+    ) {
+        self.markdownString = text
+        self.markdownIdentity = text.hashValue
+        self.label = label
+        self.textScale = textScale
+        self.compact = compact
+        self.themeVersion = themeVersion
+    }
+
+    init(
+        markdownString: String,
+        markdownIdentity: Int,
+        label: String? = nil,
+        textScale: CGFloat = 1.0,
+        compact: Bool = false,
+        themeVersion: Int = 0
+    ) {
+        self.markdownString = markdownString
+        self.markdownIdentity = markdownIdentity
+        self.label = label
+        self.textScale = textScale
+        self.compact = compact
+        self.themeVersion = themeVersion
+    }
+
     static func == (lhs: AssistantBubble, rhs: AssistantBubble) -> Bool {
-        lhs.text == rhs.text &&
+        lhs.markdownIdentity == rhs.markdownIdentity &&
         lhs.label == rhs.label &&
         lhs.textScale == rhs.textScale &&
-        lhs.compact == rhs.compact
+        lhs.compact == rhs.compact &&
+        lhs.themeVersion == rhs.themeVersion
     }
 
     var body: some View {
@@ -73,10 +107,11 @@ struct AssistantBubble: View, Equatable {
                         .font(ShitterFont.styled(.caption2, weight: .semibold, scale: textScale))
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
-                Markdown(text)
-                    .markdownTheme(.shitter(bodySize: bodySize, codeSize: codeSize))
-                    .markdownCodeSyntaxHighlighter(.plain)
-                    .textSelection(.enabled)
+                StructuredText(markdown: markdownString)
+                    .font(.custom(ShitterFont.markdownFontName, size: bodySize))
+                    .foregroundStyle(ShitterTheme.textBody)
+                    .textual.structuredTextStyle(ShitterStructuredStyle(bodySize: bodySize, codeSize: codeSize))
+                    .textual.textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -89,6 +124,7 @@ struct StreamingAssistantBubble: View {
     let text: String
     var label: String? = nil
     var textScale: CGFloat = 1.0
+    var themeVersion: Int = 0
     var onSnapshotRendered: (() -> Void)? = nil
     @State private var renderedText: String = ""
     @State private var pendingText: String?
@@ -98,7 +134,13 @@ struct StreamingAssistantBubble: View {
     private let flushInterval: TimeInterval = 0.06
 
     var body: some View {
-        AssistantBubble(text: renderedText, label: label, textScale: textScale)
+        AssistantBubble(
+            markdownString: renderedText,
+            markdownIdentity: renderedText.hashValue,
+            label: label,
+            textScale: textScale,
+            themeVersion: themeVersion
+        )
             .equatable()
             .opacity(snapshotOpacity)
             .onAppear {
@@ -154,6 +196,7 @@ struct StreamingAssistantBubble: View {
 
 struct MessageBubbleView: View {
     @ObserveInjection var inject
+    private let renderCache = MessageRenderCache.shared
     let message: ChatMessage
     let serverId: String?
     let agentDirectoryVersion: Int
@@ -169,10 +212,6 @@ struct MessageBubbleView: View {
     @ScaledMetric(relativeTo: .footnote) private var mdCodeSize: CGFloat = 13
     @ScaledMetric(relativeTo: .footnote) private var mdSystemBodySize: CGFloat = 13
     @ScaledMetric(relativeTo: .caption2) private var mdSystemCodeSize: CGFloat = 12
-    @State private var parsedAssistantSegments: [ContentSegment] = []
-    @State private var didPrepareAssistantSegments = false
-    @State private var parsedSystemResult: ToolCallParseResult = .unrecognized
-    @State private var didPrepareSystemResult = false
 
     init(
         message: ChatMessage,
@@ -218,15 +257,16 @@ struct MessageBubbleView: View {
                 }
             }
         }
-        .task(id: parseRefreshToken) {
-            prepareDerivedContent()
-        }
         .enableInjection()
     }
 
-    private var parseRefreshToken: String {
-        let contentToken = isStreamingMessage ? "streaming" : String(message.text.hashValue)
-        return "\(message.id.uuidString)-\(message.role)-\(contentToken)-\(message.images.count)-\(serverId ?? "<nil>")-\(agentDirectoryVersion)"
+    private var renderRevisionKey: MessageRenderCache.RevisionKey {
+        MessageRenderCache.makeRevisionKey(
+            for: message,
+            serverId: serverId,
+            agentDirectoryVersion: agentDirectoryVersion,
+            isStreaming: isStreamingMessage
+        )
     }
 
     private var isReasoning: Bool {
@@ -273,8 +313,17 @@ struct MessageBubbleView: View {
             let hasImages = parsed.contains { if case .image = $0.kind { return true } else { return false } }
 
             if !hasImages {
-                // Simple text-only path — use the reusable AssistantBubble
-                AssistantBubble(text: message.text, label: assistantAgentLabel, textScale: textScale)
+                if let first = parsed.first,
+                   case let .markdown(content, identity) = first.kind {
+                    AssistantBubble(
+                        markdownString: content,
+                        markdownIdentity: identity,
+                        label: assistantAgentLabel,
+                        textScale: textScale
+                    )
+                } else {
+                    AssistantBubble(text: message.text, label: assistantAgentLabel, textScale: textScale)
+                }
             } else {
                 // Inline images — need segment-based rendering
                 HStack(alignment: .top, spacing: 0) {
@@ -286,11 +335,12 @@ struct MessageBubbleView: View {
                         }
                         ForEach(parsed) { segment in
                             switch segment.kind {
-                            case .text(let md):
-                                Markdown(md)
-                                    .markdownTheme(.shitter(bodySize: mdBodySize * textScale, codeSize: mdCodeSize * textScale))
-                                    .markdownCodeSyntaxHighlighter(.plain)
-                                    .textSelection(.enabled)
+                            case .markdown(let content, _):
+                                StructuredText(markdown: content)
+                                    .font(.custom(ShitterFont.markdownFontName, size: mdBodySize * textScale))
+                                    .foregroundStyle(ShitterTheme.textBody)
+                                    .textual.structuredTextStyle(ShitterStructuredStyle(bodySize: mdBodySize * textScale, codeSize: mdCodeSize * textScale))
+                                    .textual.textSelection(.enabled)
                             case .image(let uiImage):
                                 Image(uiImage: uiImage)
                                     .resizable()
@@ -329,13 +379,14 @@ struct MessageBubbleView: View {
         if let widget = message.widgetState {
             WidgetContainerView(
                 widget: widget,
-                onMessage: handleWidgetMessage
+                onMessage: handleWidgetMessage,
+                textScale: textScale
             )
         } else {
             let parsed = systemParseResultForRendering
             switch parsed {
             case .recognized(let model):
-                ToolCallCardView(model: model)
+                ToolCallCardView(model: model, textScale: textScale)
             case .unrecognized:
                 genericSystemBubble
             }
@@ -367,7 +418,7 @@ struct MessageBubbleView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle.fill")
-                    .font(.system(.caption2, weight: .semibold))
+                    .font(.system(size: 11 * textScale, weight: .semibold))
                     .foregroundColor(ShitterTheme.accent)
                 Text(displayTitle.uppercased())
                     .font(ShitterFont.styled(.caption2, weight: .bold, scale: textScale))
@@ -376,10 +427,11 @@ struct MessageBubbleView: View {
             }
 
             if !markdown.isEmpty {
-                Markdown(markdown)
-                    .markdownTheme(.shitterSystem(bodySize: mdSystemBodySize * textScale, codeSize: mdSystemCodeSize * textScale))
-                    .markdownCodeSyntaxHighlighter(.plain)
-                    .textSelection(.enabled)
+                StructuredText(markdown: markdown)
+                    .font(.custom(ShitterFont.markdownFontName, size: mdSystemBodySize * textScale))
+                    .foregroundStyle(ShitterTheme.textSystem)
+                    .textual.structuredTextStyle(ShitterSystemStructuredStyle(bodySize: mdSystemBodySize * textScale, codeSize: mdSystemCodeSize * textScale))
+                    .textual.textSelection(.enabled)
                     .padding(.top, 8)
             }
         }
@@ -418,344 +470,209 @@ struct MessageBubbleView: View {
             .joined(separator: "\n")
     }
 
-    // MARK: - Inline image extraction
-
-    private struct ContentSegment: Identifiable {
-        enum Kind {
-            case text(String)
-            case image(UIImage)
-        }
-
-        let id: String
-        let kind: Kind
-    }
-
-    private var assistantSegmentsForRendering: [ContentSegment] {
-        if didPrepareAssistantSegments {
-            return parsedAssistantSegments
-        }
-        return Self.extractInlineSegments(
-            from: message.text,
-            messageId: message.id,
-            decodeImage: decodedImage(from:cacheKey:)
+    private var assistantSegmentsForRendering: [MessageRenderCache.AssistantSegment] {
+        renderCache.assistantSegments(
+            for: message,
+            key: renderRevisionKey
         )
     }
 
     private var systemParseResultForRendering: ToolCallParseResult {
-        if didPrepareSystemResult {
-            return parsedSystemResult
-        }
-        return ToolCallMessageParser.parse(
-            message: message,
+        renderCache.systemParseResult(
+            for: message,
+            key: renderRevisionKey,
             resolveTargetLabel: resolveTargetLabel
         )
     }
+}
 
-    private func prepareDerivedContent() {
-        switch message.role {
-        case .assistant:
-            guard !isStreamingMessage else {
-                didPrepareAssistantSegments = false
-                didPrepareSystemResult = false
-                return
+// MARK: - Shitter Textual Styles
+
+struct ShitterHeadingStyle: StructuredText.HeadingStyle {
+    let fontScales: [CGFloat]
+    let topMargins: [CGFloat]
+    let bottomMargins: [CGFloat]
+
+    func makeBody(configuration: Configuration) -> some View {
+        let level = min(configuration.headingLevel, 3) - 1
+        let scale = level < fontScales.count ? fontScales[level] : 1.0
+        let top = level < topMargins.count ? topMargins[level] : 8
+        let bottom = level < bottomMargins.count ? bottomMargins[level] : 4
+
+        configuration.label
+            .textual.fontScale(scale)
+            .fontWeight(level == 0 ? .bold : .semibold)
+            .foregroundStyle(ShitterTheme.textPrimary)
+            .textual.blockSpacing(.init(top: top, bottom: bottom))
+    }
+}
+
+struct ShitterBlockQuoteStyle: StructuredText.BlockQuoteStyle {
+    let topBottom: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(ShitterTheme.textSecondary)
+            .italic()
+            .padding(.leading, 12)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(ShitterTheme.border)
+                    .frame(width: 3)
             }
-            parsedAssistantSegments = Self.extractInlineSegments(
-                from: message.text,
-                messageId: message.id,
-                decodeImage: decodedImage(from:cacheKey:)
+            .textual.blockSpacing(.init(top: topBottom, bottom: topBottom))
+    }
+}
+
+struct ShitterCodeBlockStyle: StructuredText.CodeBlockStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            configuration.label
+                .monospaced()
+                .textual.textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(ShitterTheme.codeBackground.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .modifier(GlassRectModifier(cornerRadius: 8))
+        .textual.blockSpacing(.init(top: 8, bottom: 8))
+    }
+}
+
+struct ShitterSystemCodeBlockStyle: StructuredText.CodeBlockStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            configuration.label
+                .monospaced()
+                .textual.textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(ShitterTheme.codeBackground.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .modifier(GlassRectModifier(cornerRadius: 8))
+        .textual.blockSpacing(.init(top: 6, bottom: 6))
+    }
+}
+
+struct ShitterThematicBreakStyle: StructuredText.ThematicBreakStyle {
+    let topBottom: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        Divider()
+            .overlay(ShitterTheme.border)
+            .textual.blockSpacing(.init(top: topBottom, bottom: topBottom))
+    }
+}
+
+struct ShitterListItemStyle: StructuredText.ListItemStyle {
+    let topBottom: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            configuration.marker
+            configuration.block
+        }
+        .textual.blockSpacing(.init(top: topBottom, bottom: topBottom))
+    }
+}
+
+struct ShitterStructuredStyle: StructuredText.Style {
+    let bodySize: CGFloat
+    let codeSize: CGFloat
+
+    var inlineStyle: InlineStyle {
+        InlineStyle()
+            .code(
+                .monospaced,
+                .fontScale(codeSize / bodySize),
+                .foregroundColor(ShitterTheme.accent),
+                .backgroundColor(ShitterTheme.surface)
             )
-            didPrepareAssistantSegments = true
-            didPrepareSystemResult = false
-        case .system:
-            parsedSystemResult = ToolCallMessageParser.parse(
-                message: message,
-                resolveTargetLabel: resolveTargetLabel
+            .strong(.fontWeight(.semibold), .foregroundColor(ShitterTheme.textPrimary))
+            .emphasis(.italic)
+            .link(.foregroundColor(ShitterTheme.accent))
+    }
+
+    var headingStyle: ShitterHeadingStyle {
+        ShitterHeadingStyle(
+            fontScales: [1.43, 1.21, 1.07],
+            topMargins: [16, 12, 10],
+            bottomMargins: [8, 6, 4]
+        )
+    }
+
+    var paragraphStyle: StructuredText.DefaultParagraphStyle { .default }
+
+    var blockQuoteStyle: ShitterBlockQuoteStyle {
+        ShitterBlockQuoteStyle(topBottom: 8)
+    }
+
+    var codeBlockStyle: ShitterCodeBlockStyle {
+        ShitterCodeBlockStyle()
+    }
+
+    var listItemStyle: ShitterListItemStyle {
+        ShitterListItemStyle(topBottom: 4)
+    }
+
+    var unorderedListMarker: StructuredText.SymbolListMarker { .disc }
+    var orderedListMarker: StructuredText.DecimalListMarker { .decimal }
+    var tableStyle: StructuredText.DefaultTableStyle { .default }
+    var tableCellStyle: StructuredText.DefaultTableCellStyle { .default }
+
+    var thematicBreakStyle: ShitterThematicBreakStyle {
+        ShitterThematicBreakStyle(topBottom: 12)
+    }
+}
+
+struct ShitterSystemStructuredStyle: StructuredText.Style {
+    let bodySize: CGFloat
+    let codeSize: CGFloat
+
+    var inlineStyle: InlineStyle {
+        InlineStyle()
+            .code(
+                .monospaced,
+                .fontScale(codeSize / bodySize),
+                .foregroundColor(ShitterTheme.accent),
+                .backgroundColor(ShitterTheme.surface)
             )
-            didPrepareSystemResult = true
-            didPrepareAssistantSegments = false
-        case .user:
-            didPrepareAssistantSegments = false
-            didPrepareSystemResult = false
-        }
+            .strong(.fontWeight(.semibold), .foregroundColor(ShitterTheme.textPrimary))
+            .emphasis(.italic)
+            .link(.foregroundColor(ShitterTheme.accent))
     }
 
-    private static let decodedImageCache = NSCache<NSString, UIImage>()
-
-    private func decodedImage(from data: Data, cacheKey: String) -> UIImage? {
-        let key = cacheKey as NSString
-        if let cached = Self.decodedImageCache.object(forKey: key) {
-            return cached
-        }
-        guard let image = UIImage(data: data) else {
-            return nil
-        }
-        Self.decodedImageCache.setObject(image, forKey: key)
-        return image
+    var headingStyle: ShitterHeadingStyle {
+        ShitterHeadingStyle(
+            fontScales: [1.31, 1.15, 1.08],
+            topMargins: [12, 10, 8],
+            bottomMargins: [6, 4, 4]
+        )
     }
 
-    private static let inlineImagePattern = "!\\[[^\\]]*\\]\\(data:image/[^;]+;base64,([A-Za-z0-9+/=\\s]+)\\)|(?<![\\(])data:image/[^;]+;base64,([A-Za-z0-9+/=\\s]+)"
-    private static let inlineImageRegex = try? NSRegularExpression(pattern: inlineImagePattern, options: [])
+    var paragraphStyle: StructuredText.DefaultParagraphStyle { .default }
 
-    private static func extractInlineSegments(
-        from text: String,
-        messageId: UUID,
-        decodeImage: (Data, String) -> UIImage?
-    ) -> [ContentSegment] {
-        // Fast path to avoid regex work on normal markdown text.
-        if !text.contains("data:image/") {
-            return [ContentSegment(
-                id: "text-0-\(text.count)",
-                kind: .text(text)
-            )]
-        }
-
-        // Match markdown images with data URIs: ![...](data:image/...;base64,...)
-        // Also match bare data URIs: data:image/...;base64,...
-        guard let regex = inlineImageRegex else {
-            return [ContentSegment(
-                id: "text-0-\(text.count)",
-                kind: .text(text)
-            )]
-        }
-
-        var segments: [ContentSegment] = []
-        var lastEnd = text.startIndex
-        let nsRange = NSRange(text.startIndex..., in: text)
-
-        for match in regex.matches(in: text, range: nsRange) {
-            guard let matchRange = Range(match.range, in: text) else { continue }
-            let matchLower = text.distance(from: text.startIndex, to: matchRange.lowerBound)
-            let matchUpper = text.distance(from: text.startIndex, to: matchRange.upperBound)
-
-            // Add preceding text
-            if lastEnd < matchRange.lowerBound {
-                let preceding = String(text[lastEnd..<matchRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !preceding.isEmpty {
-                    segments.append(ContentSegment(
-                        id: "text-\(text.distance(from: text.startIndex, to: lastEnd))-\(matchLower)",
-                        kind: .text(preceding)
-                    ))
-                }
-            }
-
-            // Try capture group 1 (markdown image) then group 2 (bare data URI)
-            let base64String: String?
-            if match.range(at: 1).location != NSNotFound, let r = Range(match.range(at: 1), in: text) {
-                base64String = String(text[r])
-            } else if match.range(at: 2).location != NSNotFound, let r = Range(match.range(at: 2), in: text) {
-                base64String = String(text[r])
-            } else {
-                base64String = nil
-            }
-
-            if let b64 = base64String,
-               let data = Data(base64Encoded: b64.filter { !$0.isWhitespace }, options: .ignoreUnknownCharacters),
-               let uiImage = decodeImage(data, "assistant-\(messageId.uuidString)-\(matchLower)-\(matchUpper)") {
-                segments.append(ContentSegment(
-                    id: "image-\(matchLower)-\(matchUpper)",
-                    kind: .image(uiImage)
-                ))
-            }
-
-            lastEnd = matchRange.upperBound
-        }
-
-        // Add remaining text
-        if lastEnd < text.endIndex {
-            let remaining = String(text[lastEnd...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !remaining.isEmpty {
-                segments.append(ContentSegment(
-                    id: "text-\(text.distance(from: text.startIndex, to: lastEnd))-\(text.count)",
-                    kind: .text(remaining)
-                ))
-            }
-        }
-
-        return segments.isEmpty
-            ? [ContentSegment(id: "text-0-\(text.count)", kind: .text(text))]
-            : segments
-    }
-}
-
-// MARK: - Plain syntax highlighter (no highlighting, just monospace)
-
-struct PlainSyntaxHighlighter: CodeSyntaxHighlighter {
-    func highlightCode(_ code: String, language: String?) -> Text {
-        Text(code)
-    }
-}
-
-extension CodeSyntaxHighlighter where Self == PlainSyntaxHighlighter {
-    static var plain: PlainSyntaxHighlighter { PlainSyntaxHighlighter() }
-}
-
-// MARK: - Shitter Markdown Theme
-
-extension MarkdownUI.Theme {
-    static func shitter(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
-        Theme()
-            .text {
-                ForegroundColor(ShitterTheme.textBody)
-                FontFamily(.custom(ShitterFont.markdownFontName))
-                FontSize(bodySize)
-            }
-            .heading1 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.bold)
-                        FontSize(bodySize * 1.43)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 16, bottom: 8)
-            }
-            .heading2 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.semibold)
-                        FontSize(bodySize * 1.21)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 12, bottom: 6)
-            }
-            .heading3 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.semibold)
-                        FontSize(bodySize * 1.07)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 10, bottom: 4)
-            }
-            .strong {
-                FontWeight(.semibold)
-                ForegroundColor(ShitterTheme.textPrimary)
-            }
-            .emphasis {
-                FontStyle(.italic)
-            }
-            .link {
-                ForegroundColor(ShitterTheme.accent)
-            }
-            .code {
-                FontFamily(.custom(ShitterFont.markdownFontName))
-                FontSize(codeSize)
-                ForegroundColor(ShitterTheme.accent)
-                BackgroundColor(ShitterTheme.surface)
-            }
-            .codeBlock { configuration in
-                CodeBlockView(
-                    language: configuration.language ?? "",
-                    code: configuration.content,
-                    fontSize: codeSize
-                )
-                .markdownMargin(top: 8, bottom: 8)
-            }
-            .listItem { configuration in
-                configuration.label
-                    .markdownMargin(top: 4, bottom: 4)
-            }
-            .blockquote { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        ForegroundColor(ShitterTheme.textSecondary)
-                        FontStyle(.italic)
-                    }
-                    .padding(.leading, 12)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(ShitterTheme.border)
-                            .frame(width: 3)
-                    }
-                    .markdownMargin(top: 8, bottom: 8)
-            }
-            .thematicBreak {
-                Divider()
-                    .overlay(ShitterTheme.border)
-                    .markdownMargin(top: 12, bottom: 12)
-            }
+    var blockQuoteStyle: ShitterBlockQuoteStyle {
+        ShitterBlockQuoteStyle(topBottom: 6)
     }
 
-    static func shitterSystem(bodySize: CGFloat, codeSize: CGFloat) -> Theme {
-        Theme()
-            .text {
-                ForegroundColor(ShitterTheme.textSystem)
-                FontFamily(.custom(ShitterFont.markdownFontName))
-                FontSize(bodySize)
-            }
-            .heading1 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.bold)
-                        FontSize(bodySize * 1.31)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 12, bottom: 6)
-            }
-            .heading2 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.semibold)
-                        FontSize(bodySize * 1.15)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 10, bottom: 4)
-            }
-            .heading3 { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        FontWeight(.semibold)
-                        FontSize(bodySize * 1.08)
-                        ForegroundColor(ShitterTheme.textPrimary)
-                    }
-                    .markdownMargin(top: 8, bottom: 4)
-            }
-            .strong {
-                FontWeight(.semibold)
-                ForegroundColor(ShitterTheme.textPrimary)
-            }
-            .emphasis {
-                FontStyle(.italic)
-            }
-            .link {
-                ForegroundColor(ShitterTheme.accent)
-            }
-            .code {
-                FontFamily(.custom(ShitterFont.markdownFontName))
-                FontSize(codeSize)
-                ForegroundColor(ShitterTheme.accent)
-                BackgroundColor(ShitterTheme.surface)
-            }
-            .codeBlock { configuration in
-                CodeBlockView(
-                    language: configuration.language ?? "",
-                    code: configuration.content,
-                    fontSize: codeSize
-                )
-                .markdownMargin(top: 6, bottom: 6)
-            }
-            .listItem { configuration in
-                configuration.label
-                    .markdownMargin(top: 3, bottom: 3)
-            }
-            .blockquote { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        ForegroundColor(ShitterTheme.textSecondary)
-                        FontStyle(.italic)
-                    }
-                    .padding(.leading, 12)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(ShitterTheme.border)
-                            .frame(width: 3)
-                    }
-                    .markdownMargin(top: 6, bottom: 6)
-            }
-            .thematicBreak {
-                Divider()
-                    .overlay(ShitterTheme.border)
-                    .markdownMargin(top: 8, bottom: 8)
-            }
+    var codeBlockStyle: ShitterSystemCodeBlockStyle {
+        ShitterSystemCodeBlockStyle()
+    }
+
+    var listItemStyle: ShitterListItemStyle {
+        ShitterListItemStyle(topBottom: 3)
+    }
+
+    var unorderedListMarker: StructuredText.SymbolListMarker { .disc }
+    var orderedListMarker: StructuredText.DecimalListMarker { .decimal }
+    var tableStyle: StructuredText.DefaultTableStyle { .default }
+    var tableCellStyle: StructuredText.DefaultTableCellStyle { .default }
+
+    var thematicBreakStyle: ShitterThematicBreakStyle {
+        ShitterThematicBreakStyle(topBottom: 8)
     }
 }
 

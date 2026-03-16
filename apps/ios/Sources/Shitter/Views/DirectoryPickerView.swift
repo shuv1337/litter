@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import os
+import Observation
 
 struct DirectoryPickerServerOption: Identifiable, Hashable {
     let id: String
@@ -54,16 +55,17 @@ private let directoryPickerSignpostLog = OSLog(
 )
 
 @MainActor
-private final class DirectoryPickerSheetModel: ObservableObject {
-    @Published var currentPath = ""
-    @Published var allEntries: [String] = []
-    @Published var recentEntries: [RecentDirectoryEntry] = []
-    @Published var isLoading = true
-    @Published var errorMessage: String?
-    @Published var showHiddenDirectories = false
-    @Published var searchQuery = ""
+@Observable
+private final class DirectoryPickerSheetModel {
+    var currentPath = ""
+    var allEntries: [String] = []
+    var recentEntries: [RecentDirectoryEntry] = []
+    var isLoading = true
+    var errorMessage: String?
+    var showHiddenDirectories = false
+    var searchQuery = ""
 
-    private var lastLoadedServerId = ""
+    @ObservationIgnored private var lastLoadedServerId = ""
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -345,8 +347,8 @@ struct DirectoryPickerView: View {
     var onDirectorySelected: ((String, String) -> Void)?
     var onDismissRequested: (() -> Void)?
 
-    @EnvironmentObject var serverManager: ServerManager
-    @StateObject private var model = DirectoryPickerSheetModel()
+    @Environment(ServerManager.self) private var serverManager
+    @State private var model = DirectoryPickerSheetModel()
     @State private var showClearRecentsConfirmation = false
 
     private var selectedServerOption: DirectoryPickerServerOption? {
@@ -367,6 +369,13 @@ struct DirectoryPickerView: View {
 
     private var mostRecentEntry: RecentDirectoryEntry? {
         model.recentEntries.first
+    }
+
+    private var searchQueryBinding: Binding<String> {
+        Binding(
+            get: { model.searchQuery },
+            set: { model.searchQuery = $0 }
+        )
     }
 
     var body: some View {
@@ -456,7 +465,7 @@ struct DirectoryPickerView: View {
                     .foregroundColor(ShitterTheme.textMuted)
                 TextField(
                     DirectoryPickerStrings.searchFolders,
-                    text: $model.searchQuery
+                    text: searchQueryBinding
                 )
                 .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.textPrimary)
@@ -781,6 +790,6 @@ struct DirectoryPickerView: View {
             selectedServerId: .constant(""),
             onDismissRequested: {}
         )
-        .environmentObject(ServerManager())
+        .environment(ServerManager())
     }
 }

@@ -2,18 +2,21 @@ import SwiftUI
 import Inject
 import os
 
-private let sessionSidebarSignpostLog = OSLog(
-    subsystem: Bundle.main.bundleIdentifier ?? "com.shitter.ios",
-    category: "SessionSidebar"
+private let sessionsScreenSignpostLog = OSLog(
+    subsystem: Bundle.main.bundleIdentifier ?? "io.latitudes.shitter.ios",
+    category: "SessionsScreen"
 )
 
-struct SessionSidebarView: View {
+struct SessionsScreen: View {
     @ObserveInjection var inject
-    @EnvironmentObject var serverManager: ServerManager
-    @EnvironmentObject var appState: AppState
+    @Environment(ServerManager.self) private var serverManager
+    @Environment(AppState.self) private var appState
+    @Environment(ConversationWarmupCoordinator.self) private var conversationWarmup
+    @State private var sessionsModel = SessionsModel()
     @State private var isLoading: Bool
     @State private var resumingKey: ThreadKey?
-    @State private var directoryPickerSheet: DirectoryPickerSheetModel?
+    @State private var isStartingNewSession = false
+    @State private var directoryPickerSheet: SessionLaunchSupport.DirectoryPickerSheetModel?
     @State private var sessionSearchQuery = ""
     @State private var debouncedSessionSearchQuery = ""
     @State private var isForkingActiveThread = false
@@ -26,35 +29,31 @@ struct SessionSidebarView: View {
     @State private var collapsedSessionNodeKeys: Set<ThreadKey> = []
     @State private var pendingActiveSessionScroll = false
     @State private var sessionSearchDebounceTask: Task<Void, Never>?
+    @State private var hasLoadedInitialSessions = false
     private let autoLoadSessions: Bool
+    private let onOpenConversation: (ThreadKey) -> Void
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
-    private static let absoluteDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
-    private struct DirectoryPickerSheetModel: Identifiable, Equatable {
-        let id: UUID = UUID()
-        var selectedServerId: String
-    }
 
-    init(autoLoadSessions: Bool = true) {
+    init(
+        autoLoadSessions: Bool = true,
+        onOpenConversation: @escaping (ThreadKey) -> Void
+    ) {
         self.autoLoadSessions = autoLoadSessions
+        self.onOpenConversation = onOpenConversation
         _isLoading = State(initialValue: autoLoadSessions)
     }
 
     var body: some View {
-        let derived = makeDerivedData()
-        return sidebarContent(derived: derived)
+        screenContent(derived: sessionsModel.derivedData)
     }
 
-    private func sidebarContent(derived: SessionSidebarDerivedData) -> some View {
-        let base = sidebarLayout(derived: derived)
+
+    private func screenContent(derived: SessionsDerivedData) -> some View {
+        let base = screenLayout(derived: derived)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .enableInjection()
 
@@ -86,71 +85,58 @@ struct SessionSidebarView: View {
                         directoryPickerSheet = nil
                     }
                 )
-                .environmentObject(serverManager)
             }
+            .environment(serverManager)
         }
     }
 
     private func attachLifecycleHandlers<Content: View>(
         to content: Content,
-        derived: SessionSidebarDerivedData
+        derived: SessionsDerivedData
     ) -> some View {
-        let primaryLifecycle = AnyView(
-            content
-                .task {
-                    guard autoLoadSessions else { return }
-                    await loadSessions()
-                }
-                .onAppear {
-                    scheduleActiveSessionScrollIfNeeded()
-                }
-                .onChange(of: serverManager.hasAnyConnection) { _, connected in
-                    guard autoLoadSessions, connected else { return }
-                    Task { await loadSessions() }
-                }
-                .onChange(of: serverManager.activeThreadKey) { _, _ in
-                    scheduleActiveSessionScrollIfNeeded()
-                }
-                .onChange(of: appState.sidebarOpen) { _, isOpen in
-                    if isOpen {
-                        scheduleActiveSessionScrollIfNeeded()
-                    } else {
-                        sessionSearchQuery = ""
-                        debouncedSessionSearchQuery = ""
-                        pendingActiveSessionScroll = false
-                    }
-                }
-        )
-
-        let secondaryLifecycle = AnyView(
-            primaryLifecycle
-                .onChange(of: connectedServerIds) { _, ids in
-                    guard let pickerSheet = directoryPickerSheet else {
-                        if let filterId = selectedServerFilterId, !ids.contains(filterId) {
-                            selectedServerFilterId = nil
-                        }
-                        return
-                    }
-                    guard let fallbackServerId = defaultNewSessionServerId(preferredServerId: pickerSheet.selectedServerId) else {
-                        directoryPickerSheet = nil
-                        appState.showServerPicker = true
-                        return
-                    }
-                    if pickerSheet.selectedServerId != fallbackServerId {
-                        var nextSheet = pickerSheet
-                        nextSheet.selectedServerId = fallbackServerId
-                        directoryPickerSheet = nextSheet
-                    }
+        content
+            .task {
+                sessionsModel.bind(serverManager: serverManager, appState: appState)
+                sessionsModel.updateSearchQuery(debouncedSessionSearchQuery)
+                await loadSessionsIfNeeded()
+            }
+            .onAppear {
+                scheduleActiveSessionScrollIfNeeded()
+            }
+            .onChange(of: serverManager.hasAnyConnection) { _, connected in
+                guard autoLoadSessions, connected else { return }
+                Task { await loadSessionsIfNeeded(force: true) }
+            }
+            .onChange(of: serverManager.activeThreadKey) { _, _ in
+                scheduleActiveSessionScrollIfNeeded()
+            }
+            .onChange(of: connectedServerIds) { _, ids in
+                guard let pickerSheet = directoryPickerSheet else {
                     if let filterId = selectedServerFilterId, !ids.contains(filterId) {
                         selectedServerFilterId = nil
                     }
+                    return
                 }
-                .onChange(of: sessionSearchQuery) { _, next in
-                    scheduleSessionSearchDebounce(for: next)
+                guard let fallbackServerId = defaultNewSessionServerId(preferredServerId: pickerSheet.selectedServerId) else {
+                    directoryPickerSheet = nil
+                    appState.showServerPicker = true
+                    return
                 }
-        )
-
-        return secondaryLifecycle
+                if pickerSheet.selectedServerId != fallbackServerId {
+                    var nextSheet = pickerSheet
+                    nextSheet.selectedServerId = fallbackServerId
+                    directoryPickerSheet = nextSheet
+                }
+                if let filterId = selectedServerFilterId, !ids.contains(filterId) {
+                    selectedServerFilterId = nil
+                }
+            }
+            .onChange(of: sessionSearchQuery) { _, next in
+                scheduleSessionSearchDebounce(for: next)
+            }
+            .onChange(of: debouncedSessionSearchQuery) { _, next in
+                sessionsModel.updateSearchQuery(next)
+            }
             .onChange(of: derived.workspaceGroupIDs) { _, ids in
                 let idSet: Set<String> = Set(ids)
                 collapsedWorkspaceGroupIDs = collapsedWorkspaceGroupIDs.intersection(idSet)
@@ -204,7 +190,7 @@ struct SessionSidebarView: View {
                 titleVisibility: Visibility.visible,
                 presenting: archiveTargetThread
             ) { thread in
-                Button("Delete \"\(sessionTitle(thread))\"", role: .destructive) {
+                Button("Delete \"\(thread.sessionTitle)\"", role: .destructive) {
                     Task { await confirmArchiveSession() }
                 }
                 Button("Cancel", role: .cancel) { archiveTargetKey = nil }
@@ -213,7 +199,7 @@ struct SessionSidebarView: View {
             }
     }
 
-    private func sidebarLayout(derived: SessionSidebarDerivedData) -> some View {
+    private func screenLayout(derived: SessionsDerivedData) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             newSessionButton
             Divider().background(ShitterTheme.separator)
@@ -249,22 +235,22 @@ struct SessionSidebarView: View {
             }
 
         }
-        .accessibilityIdentifier("sidebar.container")
+        .accessibilityIdentifier("sessions.container")
     }
 
     private var selectedServerFilterId: String? {
-        get { appState.sessionSidebarSelectedServerFilterId }
-        nonmutating set { appState.sessionSidebarSelectedServerFilterId = newValue }
+        get { appState.sessionsSelectedServerFilterId }
+        nonmutating set { appState.sessionsSelectedServerFilterId = newValue }
     }
 
     private var showOnlyForks: Bool {
-        get { appState.sessionSidebarShowOnlyForks }
-        nonmutating set { appState.sessionSidebarShowOnlyForks = newValue }
+        get { appState.sessionsShowOnlyForks }
+        nonmutating set { appState.sessionsShowOnlyForks = newValue }
     }
 
     private var workspaceSortMode: WorkspaceSortMode {
-        get { WorkspaceSortMode(rawValue: appState.sessionSidebarWorkspaceSortModeRaw) ?? .mostRecent }
-        nonmutating set { appState.sessionSidebarWorkspaceSortModeRaw = newValue.rawValue }
+        get { WorkspaceSortMode(rawValue: appState.sessionsWorkspaceSortModeRaw) ?? .mostRecent }
+        nonmutating set { appState.sessionsWorkspaceSortModeRaw = newValue.rawValue }
     }
 
     private var connectedServerIds: [String] {
@@ -275,28 +261,17 @@ struct SessionSidebarView: View {
         sessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var trimmedDebouncedSessionSearchQuery: String {
-        debouncedSessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private var archiveTargetThread: ThreadState? {
         guard let archiveTargetKey else { return nil }
         return serverManager.threads[archiveTargetKey]
     }
 
     private var connectedServerOptions: [DirectoryPickerServerOption] {
-        serverManager.connections.values
-            .filter { $0.isConnected }
-            .sorted {
-                $0.server.name.localizedCaseInsensitiveCompare($1.server.name) == .orderedAscending
-            }
-            .map {
-                DirectoryPickerServerOption(
-                    id: $0.id,
-                    name: $0.server.name,
-                    sourceLabel: $0.server.source.rawString
-                )
-            }
+        sessionsModel.connectedServerOptions
+    }
+
+    private var ephemeralStateByThreadKey: [ThreadKey: SessionsModel.ThreadEphemeralState] {
+        sessionsModel.ephemeralStateByThreadKey
     }
 
     private func scheduleSessionSearchDebounce(for nextQuery: String) {
@@ -312,18 +287,11 @@ struct SessionSidebarView: View {
     }
 
     private func defaultNewSessionServerId(preferredServerId: String? = nil) -> String? {
-        let ids = connectedServerIds
-        if ids.isEmpty { return nil }
-        if let preferredServerId, ids.contains(preferredServerId) {
-            return preferredServerId
-        }
-        if let activeServerId = serverManager.activeThreadKey?.serverId, ids.contains(activeServerId) {
-            return activeServerId
-        }
-        if ids.count == 1 {
-            return ids.first
-        }
-        return ids.first
+        SessionLaunchSupport.defaultConnectedServerId(
+            connectedServerIds: connectedServerIds,
+            activeThreadKey: serverManager.activeThreadKey,
+            preferredServerId: preferredServerId
+        )
     }
 
     private var newSessionButton: some View {
@@ -335,20 +303,26 @@ struct SessionSidebarView: View {
                     .frame(width: 44, height: 44)
                     .modifier(GlassRectModifier(cornerRadius: 10))
             }
-            .accessibilityIdentifier("sidebar.settingsButton")
+            .accessibilityIdentifier("sessions.settingsButton")
 
             Button {
                 if let defaultServerId = defaultNewSessionServerId() {
-                    directoryPickerSheet = DirectoryPickerSheetModel(selectedServerId: defaultServerId)
+                    directoryPickerSheet = SessionLaunchSupport.DirectoryPickerSheetModel(selectedServerId: defaultServerId)
                 } else {
                     appState.showServerPicker = true
                 }
             } label: {
                 HStack {
-                    Image(systemName: "plus")
-                        .font(.system(.subheadline, weight: .medium))
-                    Text("New Session")
-                        .font(ShitterFont.styled(.subheadline))
+                    if isStartingNewSession {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(ShitterTheme.textOnAccent)
+                    } else {
+                        Image(systemName: "plus")
+                            .font(.system(.subheadline, weight: .medium))
+                        Text("New Session")
+                            .font(ShitterFont.styled(.subheadline))
+                    }
                 }
                 .foregroundColor(ShitterTheme.textOnAccent)
                 .frame(maxWidth: .infinity)
@@ -356,7 +330,8 @@ struct SessionSidebarView: View {
                 .background(ShitterTheme.accent)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .accessibilityIdentifier("sidebar.newSessionButton")
+            .disabled(isStartingNewSession)
+            .accessibilityIdentifier("sessions.newSessionButton")
         }
         .padding(16)
     }
@@ -365,6 +340,7 @@ struct SessionSidebarView: View {
         HStack(spacing: 10) {
             let connected = serverManager.connections.values.filter { $0.isConnected }
             let activeThread = serverManager.activeThread
+            let activeThreadEphemeralState = activeThread.flatMap { ephemeralStateByThreadKey[$0.key] }
             if connected.isEmpty {
                 Image(systemName: "xmark.circle")
                     .foregroundColor(ShitterTheme.textMuted)
@@ -374,10 +350,9 @@ struct SessionSidebarView: View {
                     .foregroundColor(ShitterTheme.textMuted)
                 Spacer()
                 Button("Connect") {
-                    withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
                     appState.showServerPicker = true
                 }
-                .accessibilityIdentifier("sidebar.connectButton")
+                .accessibilityIdentifier("sessions.connectButton")
                 .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.accent)
             } else {
@@ -389,10 +364,9 @@ struct SessionSidebarView: View {
                     .foregroundColor(ShitterTheme.textPrimary)
                 Spacer()
                 Button("Add") {
-                    withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
                     appState.showServerPicker = true
                 }
-                .accessibilityIdentifier("sidebar.addServerButton")
+                .accessibilityIdentifier("sessions.addServerButton")
                 .font(ShitterFont.styled(.caption))
                 .foregroundColor(ShitterTheme.accent)
                 if let activeThread {
@@ -407,9 +381,9 @@ struct SessionSidebarView: View {
                             Text("Fork")
                         }
                     }
-                    .disabled(isForkingActiveThread || activeThread.hasTurnActive)
+                    .disabled(isForkingActiveThread || (activeThreadEphemeralState?.hasTurnActive ?? activeThread.hasTurnActive))
                     .font(ShitterFont.styled(.caption))
-                    .foregroundColor(activeThread.hasTurnActive ? ShitterTheme.textMuted : ShitterTheme.accent)
+                    .foregroundColor((activeThreadEphemeralState?.hasTurnActive ?? activeThread.hasTurnActive) ? ShitterTheme.textMuted : ShitterTheme.accent)
                 }
             }
         }
@@ -532,7 +506,6 @@ struct SessionSidebarView: View {
 
     private func workspaceGroupHeader(_ group: WorkspaceSessionGroup) -> some View {
         let isCollapsed = collapsedWorkspaceGroupIDs.contains(group.id)
-        let hostname = serverManager.connections[group.serverId]?.server.hostname ?? group.serverName
 
         return Button {
             if isCollapsed {
@@ -557,7 +530,7 @@ struct SessionSidebarView: View {
                         .foregroundColor(ShitterTheme.textPrimary)
                         .lineLimit(1)
 
-                    Text(hostname)
+                    Text(group.serverHost)
                         .font(ShitterFont.styled(.caption2))
                         .foregroundColor(ShitterTheme.textMuted)
                         .lineLimit(1)
@@ -581,7 +554,7 @@ struct SessionSidebarView: View {
         .buttonStyle(.plain)
     }
 
-    private func sessionList(derived: SessionSidebarDerivedData) -> some View {
+    private func sessionList(derived: SessionsDerivedData) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
@@ -605,6 +578,7 @@ struct SessionSidebarView: View {
                                         thread,
                                         isActive: thread.key == serverManager.activeThreadKey,
                                         derived: derived,
+                                        ephemeralState: ephemeralStateByThreadKey[thread.key],
                                         depth: row.depth,
                                         hasChildren: row.hasChildren,
                                         isCollapsed: isCollapsed,
@@ -671,7 +645,7 @@ struct SessionSidebarView: View {
     private func sessionRowContextMenu(_ thread: ThreadState) -> some View {
         Button {
             renamingThreadKey = thread.key
-            renameCurrentTitle = sessionTitle(thread)
+            renameCurrentTitle = thread.sessionTitle
             renameDraft = ""
         } label: {
             Label("Rename", systemImage: "pencil")
@@ -693,7 +667,8 @@ struct SessionSidebarView: View {
     private func sessionRow(
         _ thread: ThreadState,
         isActive: Bool,
-        derived: SessionSidebarDerivedData,
+        derived: SessionsDerivedData,
+        ephemeralState: SessionsModel.ThreadEphemeralState?,
         depth: Int,
         hasChildren: Bool,
         isCollapsed: Bool,
@@ -701,6 +676,8 @@ struct SessionSidebarView: View {
         onSelectSession: @escaping () -> Void
     ) -> some View {
         let parent = derived.parentByKey[thread.key]
+        let hasTurnActive = ephemeralState?.hasTurnActive ?? thread.hasTurnActive
+        let updatedAt = ephemeralState?.updatedAt ?? thread.updatedAt
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 6) {
@@ -722,7 +699,7 @@ struct SessionSidebarView: View {
                 .padding(.top, 2)
 
                 HStack(alignment: .top, spacing: 6) {
-                    if thread.hasTurnActive {
+                    if hasTurnActive {
                         PulsingDot().padding(.top, 3)
                     } else {
                         Circle().fill(Color.clear).frame(width: 8, height: 8).padding(.top, 3)
@@ -730,12 +707,12 @@ struct SessionSidebarView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(sessionTitle(thread))
+                            Text(thread.sessionTitle)
                                 .font(ShitterFont.styled(.footnote))
                                 .foregroundColor(ShitterTheme.textPrimary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
-                                .accessibilityIdentifier("sidebar.sessionTitle")
+                                .accessibilityIdentifier("sessions.sessionTitle")
 
                             if thread.isFork {
                                 Text("Fork")
@@ -757,9 +734,9 @@ struct SessionSidebarView: View {
                         }
 
                         HStack(spacing: 4) {
-                            Text(relativeDate(thread.updatedAt))
+                            Text(relativeDate(updatedAt))
                                 .foregroundColor(ShitterTheme.textSecondary)
-                            if let provider = sessionModelLabel(thread) {
+                            if let provider = thread.sessionModelLabel {
                                 Text("•")
                                     .foregroundColor(ShitterTheme.textMuted)
                                 Text(provider)
@@ -768,7 +745,7 @@ struct SessionSidebarView: View {
                             if let parent {
                                 Text("•")
                                     .foregroundColor(ShitterTheme.textMuted)
-                                Text("from \(sessionTitle(parent))")
+                                Text("from \(parent.sessionTitle)")
                                     .foregroundColor(ShitterTheme.textMuted)
                             }
                         }
@@ -779,7 +756,7 @@ struct SessionSidebarView: View {
                 .contentShape(Rectangle())
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("sidebar.sessionRow")
+                .accessibilityIdentifier("sessions.sessionRow")
                 .onTapGesture(perform: onSelectSession)
             }
 
@@ -798,7 +775,7 @@ struct SessionSidebarView: View {
         }
     }
 
-    private func lineageSummary(for thread: ThreadState, derived: SessionSidebarDerivedData) -> some View {
+    private func lineageSummary(for thread: ThreadState, derived: SessionsDerivedData) -> some View {
         let parent = derived.parentByKey[thread.key]
         let siblings = derived.siblingsByKey[thread.key] ?? []
         let children = derived.childrenByKey[thread.key] ?? []
@@ -822,7 +799,7 @@ struct SessionSidebarView: View {
                         if !siblings.isEmpty {
                             Menu {
                                 ForEach(siblings) { sibling in
-                                    Button(sessionTitle(sibling)) {
+                                    Button(sibling.sessionTitle) {
                                         Task { await resumeSession(sibling) }
                                     }
                                 }
@@ -834,7 +811,7 @@ struct SessionSidebarView: View {
                         if !children.isEmpty {
                             Menu {
                                 ForEach(children) { child in
-                                    Button(sessionTitle(child)) {
+                                    Button(child.sessionTitle) {
                                         Task { await resumeSession(child) }
                                     }
                                 }
@@ -889,19 +866,19 @@ struct SessionSidebarView: View {
     }
 
     private func scheduleActiveSessionScrollIfNeeded() {
-        guard appState.sidebarOpen, serverManager.activeThreadKey != nil else { return }
+        guard serverManager.activeThreadKey != nil else { return }
         pendingActiveSessionScroll = true
     }
 
-    private func scrollToActiveSessionIfNeeded(derived: SessionSidebarDerivedData, proxy: ScrollViewProxy) {
-        guard pendingActiveSessionScroll, appState.sidebarOpen, let activeKey = serverManager.activeThreadKey else { return }
+    private func scrollToActiveSessionIfNeeded(derived: SessionsDerivedData, proxy: ScrollViewProxy) {
+        guard pendingActiveSessionScroll, let activeKey = serverManager.activeThreadKey else { return }
 
         guard let activeThread = derived.filteredThreads.first(where: { $0.key == activeKey }) else {
             pendingActiveSessionScroll = false
             return
         }
 
-        let activeWorkspaceGroupID = workspaceGroupID(for: activeThread)
+        let activeWorkspaceGroupID = derived.workspaceGroupIDByThreadKey[activeThread.key] ?? workspaceGroupID(for: activeThread)
         if collapsedWorkspaceGroupIDs.contains(activeWorkspaceGroupID) {
             collapsedWorkspaceGroupIDs.remove(activeWorkspaceGroupID)
             return
@@ -920,7 +897,7 @@ struct SessionSidebarView: View {
         }
     }
 
-    private func ancestorThreadKeys(for key: ThreadKey, derived: SessionSidebarDerivedData) -> [ThreadKey] {
+    private func ancestorThreadKeys(for key: ThreadKey, derived: SessionsDerivedData) -> [ThreadKey] {
         var ancestors: [ThreadKey] = []
         var visited: Set<ThreadKey> = []
         var cursor: ThreadState? = derived.parentByKey[key]
@@ -934,275 +911,18 @@ struct SessionSidebarView: View {
         return ancestors
     }
 
-    private func workspaceGroupID(for thread: ThreadState) -> String {
-        "\(thread.serverId)::\(normalizedWorkspacePath(thread.cwd))"
-    }
-
-    private func normalizedWorkspacePath(_ raw: String) -> String {
-        var path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if path.isEmpty {
-            return "/"
-        }
-        path = path.replacingOccurrences(of: "/+", with: "/", options: .regularExpression)
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
-        }
-        return path.isEmpty ? "/" : path
-    }
-
-    private func workspaceTitle(for workspacePath: String) -> String {
-        if workspacePath == "/" {
-            return "/"
-        }
-        let name = URL(fileURLWithPath: workspacePath).lastPathComponent
-        return name.isEmpty ? workspacePath : name
-    }
-
-    private func sessionTitle(_ thread: ThreadState) -> String {
-        thread.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled session" : thread.preview
-    }
-
-    private func sessionModelLabel(_ thread: ThreadState) -> String? {
-        let model = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if model.isEmpty { return nil }
-        if let agentLabel = thread.agentDisplayLabel {
-            return "\(model) (\(agentLabel))"
-        }
-        return model
-    }
-
-    private func sanitizedLineageId(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func sortWorkspaceGroups(_ groups: [WorkspaceSessionGroup]) -> [WorkspaceSessionGroup] {
-        groups.sorted { (lhs: WorkspaceSessionGroup, rhs: WorkspaceSessionGroup) in
-            switch workspaceSortMode {
-            case .mostRecent:
-                if lhs.latestUpdatedAt != rhs.latestUpdatedAt {
-                    return lhs.latestUpdatedAt > rhs.latestUpdatedAt
-                }
-                return lhs.workspaceTitle.localizedCaseInsensitiveCompare(rhs.workspaceTitle) == .orderedAscending
-            case .name:
-                let titleOrder = lhs.workspaceTitle.localizedCaseInsensitiveCompare(rhs.workspaceTitle)
-                if titleOrder != .orderedSame {
-                    return titleOrder == .orderedAscending
-                }
-                let pathOrder = lhs.workspacePath.localizedCaseInsensitiveCompare(rhs.workspacePath)
-                if pathOrder != .orderedSame {
-                    return pathOrder == .orderedAscending
-                }
-                let serverOrder = lhs.serverName.localizedCaseInsensitiveCompare(rhs.serverName)
-                if serverOrder != .orderedSame {
-                    return serverOrder == .orderedAscending
-                }
-                return lhs.latestUpdatedAt > rhs.latestUpdatedAt
-            case .date:
-                if lhs.latestUpdatedAt != rhs.latestUpdatedAt {
-                    return lhs.latestUpdatedAt > rhs.latestUpdatedAt
-                }
-                let titleOrder = lhs.workspaceTitle.localizedCaseInsensitiveCompare(rhs.workspaceTitle)
-                if titleOrder != .orderedSame {
-                    return titleOrder == .orderedAscending
-                }
-                let pathOrder = lhs.workspacePath.localizedCaseInsensitiveCompare(rhs.workspacePath)
-                if pathOrder != .orderedSame {
-                    return pathOrder == .orderedAscending
-                }
-                return lhs.serverName.localizedCaseInsensitiveCompare(rhs.serverName) == .orderedAscending
-            }
-        }
-    }
-
-    private func workspaceSections(for groups: [WorkspaceSessionGroup]) -> [WorkspaceGroupSection] {
-        guard workspaceSortMode == .date else {
-            guard !groups.isEmpty else { return [] }
-            return [WorkspaceGroupSection(id: "all", title: nil, groups: groups)]
-        }
-
-        let calendar = Calendar.current
-        var groupsByDay: [Date: [WorkspaceSessionGroup]] = [:]
-        for group in groups {
-            let dayStart = calendar.startOfDay(for: group.latestUpdatedAt)
-            groupsByDay[dayStart, default: []].append(group)
-        }
-
-        return groupsByDay.keys
-            .sorted(by: >)
-            .map { dayStart in
-                WorkspaceGroupSection(
-                    id: "day-\(Int(dayStart.timeIntervalSince1970))",
-                    title: workspaceDateSectionLabel(for: dayStart),
-                    groups: groupsByDay[dayStart] ?? []
-                )
-            }
-    }
-
-    private func workspaceDateSectionLabel(for date: Date) -> String {
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: date)
-        let nowStart = calendar.startOfDay(for: Date())
-        let dayDelta = max(calendar.dateComponents([.day], from: dayStart, to: nowStart).day ?? 0, 0)
-
-        switch dayDelta {
-        case 0:
-            return "Today"
-        case 1:
-            return "Yesterday"
-        case 2 ... 6:
-            return "\(dayDelta) days ago"
-        default:
-            return Self.absoluteDateFormatter.string(from: dayStart)
-        }
-    }
-
-    private func makeDerivedData() -> SessionSidebarDerivedData {
-        let allThreads = serverManager.sortedThreads
-
-        var threadsByServerAndId: [String: [String: ThreadState]] = [:]
-        var childrenByServerAndParentId: [String: [String: [ThreadState]]] = [:]
-        var parentIdByThreadKey: [ThreadKey: String] = [:]
-
-        for thread in allThreads {
-            threadsByServerAndId[thread.serverId, default: [:]][thread.threadId] = thread
-            if let parentId = sanitizedLineageId(thread.parentThreadId) {
-                parentIdByThreadKey[thread.key] = parentId
-                childrenByServerAndParentId[thread.serverId, default: [:]][parentId, default: []].append(thread)
-            }
-        }
-
-        let sortedChildrenByServerAndParentId = childrenByServerAndParentId.mapValues { parentMap in
-            parentMap.mapValues { children in
-                children.sorted { $0.updatedAt > $1.updatedAt }
-            }
-        }
-
-        var parentByKey: [ThreadKey: ThreadState] = [:]
-        var siblingsByKey: [ThreadKey: [ThreadState]] = [:]
-        var childrenByKey: [ThreadKey: [ThreadState]] = [:]
-
-        for thread in allThreads {
-            let serverThreads = threadsByServerAndId[thread.serverId] ?? [:]
-            if let parentId = parentIdByThreadKey[thread.key],
-               let parent = serverThreads[parentId] {
-                parentByKey[thread.key] = parent
-                let siblingCandidates = sortedChildrenByServerAndParentId[thread.serverId]?[parentId] ?? []
-                siblingsByKey[thread.key] = siblingCandidates.filter { $0.threadId != thread.threadId }
-            } else {
-                siblingsByKey[thread.key] = []
-            }
-            childrenByKey[thread.key] = sortedChildrenByServerAndParentId[thread.serverId]?[thread.threadId] ?? []
-        }
-
-        let query = trimmedDebouncedSessionSearchQuery
-        let filteredThreads = allThreads.filter { thread in
-            if let selectedServerFilterId, thread.serverId != selectedServerFilterId {
-                return false
-            }
-            if showOnlyForks && !thread.isFork {
-                return false
-            }
-            if query.isEmpty {
-                return true
-            }
-            let parentTitle = parentByKey[thread.key].map(sessionTitle) ?? ""
-            return sessionTitle(thread).localizedCaseInsensitiveContains(query) ||
-                thread.cwd.localizedCaseInsensitiveContains(query) ||
-                thread.serverName.localizedCaseInsensitiveContains(query) ||
-                thread.modelProvider.localizedCaseInsensitiveContains(query) ||
-                parentTitle.localizedCaseInsensitiveContains(query)
-        }
-
-        let groupedByWorkspace = Dictionary(grouping: filteredThreads) { workspaceGroupID(for: $0) }
-        let groupedWorkspaceGroups = groupedByWorkspace
-            .compactMap { (groupID: String, threads: [ThreadState]) -> WorkspaceSessionGroup? in
-                let sortedThreads = threads.sorted { $0.updatedAt > $1.updatedAt }
-                guard let first = sortedThreads.first else { return nil }
-                let workspacePath = normalizedWorkspacePath(first.cwd)
-                let treeRoots = buildSessionTree(for: sortedThreads, parentByKey: parentByKey)
-                return WorkspaceSessionGroup(
-                    id: groupID,
-                    serverId: first.serverId,
-                    serverName: first.serverName,
-                    workspacePath: workspacePath,
-                    workspaceTitle: workspaceTitle(for: workspacePath),
-                    latestUpdatedAt: first.updatedAt,
-                    threads: sortedThreads,
-                    treeRoots: treeRoots
-                )
-            }
-        let sortedWorkspaceGroups = sortWorkspaceGroups(groupedWorkspaceGroups)
-        let workspaceSections = workspaceSections(for: sortedWorkspaceGroups)
-
-        return SessionSidebarDerivedData(
-            allThreads: allThreads,
-            allThreadKeys: allThreads.map(\.key),
-            filteredThreads: filteredThreads,
-            filteredThreadKeys: filteredThreads.map(\.key),
-            workspaceSections: workspaceSections,
-            workspaceGroupIDs: sortedWorkspaceGroups.map { $0.id },
-            parentByKey: parentByKey,
-            siblingsByKey: siblingsByKey,
-            childrenByKey: childrenByKey
-        )
-    }
-
-    private func buildSessionTree(
-        for threads: [ThreadState],
-        parentByKey: [ThreadKey: ThreadState]
-    ) -> [SessionTreeNode] {
-        let threadsByKey = Dictionary(uniqueKeysWithValues: threads.map { ($0.key, $0) })
-        var childrenByParentKey: [ThreadKey: [ThreadState]] = [:]
-
-        for thread in threads {
-            guard let parent = parentByKey[thread.key], threadsByKey[parent.key] != nil else { continue }
-            childrenByParentKey[parent.key, default: []].append(thread)
-        }
-        childrenByParentKey = childrenByParentKey.mapValues { children in
-            children.sorted { $0.updatedAt > $1.updatedAt }
-        }
-
-        var emitted: Set<ThreadKey> = []
-
-        func makeNode(_ thread: ThreadState, path: inout Set<ThreadKey>) -> SessionTreeNode {
-            path.insert(thread.key)
-            let children = (childrenByParentKey[thread.key] ?? []).compactMap { child -> SessionTreeNode? in
-                guard !path.contains(child.key), emitted.insert(child.key).inserted else { return nil }
-                return makeNode(child, path: &path)
-            }
-            path.remove(thread.key)
-            return SessionTreeNode(thread: thread, children: children)
-        }
-
-        let roots = threads.filter { thread in
-            guard let parent = parentByKey[thread.key] else { return true }
-            return threadsByKey[parent.key] == nil
-        }
-
-        var treeRoots: [SessionTreeNode] = []
-        for root in roots {
-            guard emitted.insert(root.key).inserted else { continue }
-            var path: Set<ThreadKey> = []
-            treeRoots.append(makeNode(root, path: &path))
-        }
-
-        for thread in threads where !emitted.contains(thread.key) {
-            emitted.insert(thread.key)
-            var path: Set<ThreadKey> = []
-            treeRoots.append(makeNode(thread, path: &path))
-        }
-
-        return treeRoots
-    }
-
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
 
+    private func loadSessionsIfNeeded(force: Bool = false) async {
+        guard autoLoadSessions else { return }
+        guard force || !hasLoadedInitialSessions else { return }
+        await loadSessions()
+    }
+
     private func loadSessions() async {
-        let signpostID = OSSignpostID(log: sessionSidebarSignpostLog)
-        os_signpost(.begin, log: sessionSidebarSignpostLog, name: "LoadSessions", signpostID: signpostID)
-        defer { os_signpost(.end, log: sessionSidebarSignpostLog, name: "LoadSessions", signpostID: signpostID) }
+        let signpostID = OSSignpostID(log: sessionsScreenSignpostLog)
+        os_signpost(.begin, log: sessionsScreenSignpostLog, name: "LoadSessions", signpostID: signpostID)
+        defer { os_signpost(.end, log: sessionsScreenSignpostLog, name: "LoadSessions", signpostID: signpostID) }
 
         guard serverManager.hasAnyConnection else {
             isLoading = false
@@ -1210,24 +930,41 @@ struct SessionSidebarView: View {
         }
         isLoading = true
         await serverManager.refreshAllSessions()
+        hasLoadedInitialSessions = true
         isLoading = false
     }
 
     private func resumeSession(_ thread: ThreadState) async {
         guard resumingKey == nil else { return }
         resumingKey = thread.key
+        sessionActionErrorMessage = nil
+        await conversationWarmup.prewarmIfNeeded()
         workDir = thread.cwd
         appState.currentCwd = thread.cwd
-        await serverManager.viewThread(
+        let opened = await serverManager.viewThread(
             thread.key,
             approvalPolicy: appState.approvalPolicy,
             sandboxMode: appState.sandboxMode
         )
         resumingKey = nil
-        withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
+        guard opened else {
+            if let selectedThread = serverManager.threads[thread.key],
+               case .error(let message) = selectedThread.status {
+                sessionActionErrorMessage = message
+            } else {
+                sessionActionErrorMessage = "Failed to open conversation."
+            }
+            return
+        }
+        onOpenConversation(thread.key)
     }
 
     private func startNewSession(serverId: String, cwd: String) async {
+        guard !isStartingNewSession else { return }
+        isStartingNewSession = true
+        defer { isStartingNewSession = false }
+        sessionActionErrorMessage = nil
+        await conversationWarmup.prewarmIfNeeded()
         workDir = cwd
         appState.currentCwd = cwd
         let model = appState.selectedModel.isEmpty ? nil : appState.selectedModel
@@ -1238,10 +975,12 @@ struct SessionSidebarView: View {
             approvalPolicy: appState.approvalPolicy,
             sandboxMode: appState.sandboxMode
         )
-        if startedKey != nil {
+        if let startedKey {
+            onOpenConversation(startedKey)
             _ = RecentDirectoryStore.shared.record(path: cwd, for: serverId)
+        } else {
+            sessionActionErrorMessage = "Failed to start a new session."
         }
-        withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
     }
 
     private func forkThread(_ thread: ThreadState) async {
@@ -1249,7 +988,7 @@ struct SessionSidebarView: View {
         isForkingActiveThread = true
         defer { isForkingActiveThread = false }
         do {
-            _ = try await serverManager.forkThread(
+            let nextKey = try await serverManager.forkThread(
                 thread.key,
                 cwd: thread.cwd,
                 approvalPolicy: appState.approvalPolicy,
@@ -1259,7 +998,7 @@ struct SessionSidebarView: View {
                 workDir = nextCwd
                 appState.currentCwd = nextCwd
             }
-            withAnimation(.easeInOut(duration: 0.25)) { appState.sidebarOpen = false }
+            onOpenConversation(nextKey)
         } catch {
             sessionActionErrorMessage = error.localizedDescription
         }
@@ -1301,67 +1040,12 @@ struct SessionSidebarView: View {
     }
 }
 
-private enum WorkspaceSortMode: String, CaseIterable, Identifiable {
-    case mostRecent
-    case name
-    case date
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .mostRecent:
-            return "Most Recent"
-        case .name:
-            return "Name"
-        case .date:
-            return "Date"
-        }
-    }
-}
-
-private struct WorkspaceSessionGroup: Identifiable {
-    let id: String
-    let serverId: String
-    let serverName: String
-    let workspacePath: String
-    let workspaceTitle: String
-    let latestUpdatedAt: Date
-    let threads: [ThreadState]
-    let treeRoots: [SessionTreeNode]
-}
-
-private struct WorkspaceGroupSection: Identifiable {
-    let id: String
-    let title: String?
-    let groups: [WorkspaceSessionGroup]
-}
-
-private struct SessionTreeNode: Identifiable {
-    let thread: ThreadState
-    let children: [SessionTreeNode]
-
-    var id: ThreadKey { thread.key }
-}
-
 private struct SessionTreeRow: Identifiable {
     let thread: ThreadState
     let depth: Int
     let hasChildren: Bool
 
     var id: ThreadKey { thread.key }
-}
-
-private struct SessionSidebarDerivedData {
-    let allThreads: [ThreadState]
-    let allThreadKeys: [ThreadKey]
-    let filteredThreads: [ThreadState]
-    let filteredThreadKeys: [ThreadKey]
-    let workspaceSections: [WorkspaceGroupSection]
-    let workspaceGroupIDs: [String]
-    let parentByKey: [ThreadKey: ThreadState]
-    let siblingsByKey: [ThreadKey: [ThreadState]]
-    let childrenByKey: [ThreadKey: [ThreadState]]
 }
 
 struct PulsingDot: View {
@@ -1379,14 +1063,14 @@ struct PulsingDot: View {
 }
 
 #if DEBUG
-#Preview("Session Sidebar") {
+#Preview("Sessions Screen") {
     ShitterPreviewScene(
         serverManager: ShitterPreviewData.makeSidebarManager(),
-        appState: ShitterPreviewData.makeAppState(sidebarOpen: true)
+        appState: ShitterPreviewData.makeAppState()
     ) {
-        SessionSidebarView(autoLoadSessions: false)
-            .frame(width: SidebarOverlay.sidebarWidth, height: 760)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        NavigationStack {
+            SessionsScreen(autoLoadSessions: false, onOpenConversation: { _ in })
+        }
     }
 }
 #endif

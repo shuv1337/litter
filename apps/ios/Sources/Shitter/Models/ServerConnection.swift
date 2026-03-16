@@ -1,7 +1,34 @@
 import Foundation
+import Observation
+import SwiftUI
+
+enum ConnectionHealth: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case unresponsive
+
+    var settingsLabel: String {
+        switch self {
+        case .disconnected: "Disconnected"
+        case .connecting: "Connecting…"
+        case .connected: "Connected"
+        case .unresponsive: "Unresponsive"
+        }
+    }
+
+    var settingsColor: Color {
+        switch self {
+        case .connected: ShitterTheme.accent
+        case .connecting, .unresponsive: .orange
+        case .disconnected: ShitterTheme.textSecondary
+        }
+    }
+}
 
 @MainActor
-final class ServerConnection: ObservableObject, Identifiable {
+@Observable
+final class ServerConnection: Identifiable {
     private static let defaultSandboxMode = "workspace-write"
     private static let fallbackSandboxMode = "danger-full-access"
 
@@ -9,22 +36,29 @@ final class ServerConnection: ObservableObject, Identifiable {
     let server: DiscoveredServer
     let target: ConnectionTarget
 
-    @Published var isConnected = false
-    @Published var connectionPhase: String = ""
-    @Published var authStatus: AuthStatus = .unknown
-    @Published var oauthURL: URL? = nil
-    @Published var loginCompleted = false
-    @Published var models: [CodexModel] = []
-    @Published var modelsLoaded = false
-    @Published var rateLimits: RateLimitSnapshot?
+    var connectionHealth: ConnectionHealth = .disconnected
+    var isConnected: Bool { connectionHealth == .connected }
+    var connectionPhase: String = ""
+    var authStatus: AuthStatus = .unknown
+    var oauthURL: URL? = nil
+    var loginCompleted = false {
+        didSet {
+            guard loginCompleted else { return }
+            onLoginCompleted?()
+        }
+    }
+    var models: [CodexModel] = []
+    var modelsLoaded = false
+    var rateLimits: RateLimitSnapshot?
 
-    let client = JSONRPCClient()
-    private var serverURL: URL?
-    private var pendingLoginId: String?
+    @ObservationIgnored let client = JSONRPCClient()
+    @ObservationIgnored private var serverURL: URL?
+    @ObservationIgnored private var pendingLoginId: String?
 
-    var onNotification: ((String, Data) -> Void)?
-    var onServerRequest: ((_ requestId: String, _ method: String, _ data: Data) -> Bool)?
-    var onDisconnect: (() -> Void)?
+    @ObservationIgnored var onNotification: ((String, Data) -> Void)?
+    @ObservationIgnored var onServerRequest: ((_ requestId: String, _ method: String, _ data: Data) -> Bool)?
+    @ObservationIgnored var onDisconnect: (() -> Void)?
+    @ObservationIgnored var onLoginCompleted: (() -> Void)?
 
     init(server: DiscoveredServer, target: ConnectionTarget) {
         self.id = server.id
@@ -40,13 +74,15 @@ final class ServerConnection: ObservableObject, Identifiable {
     }
 
     func connect() async {
-        guard !isConnected else { return }
+        guard connectionHealth != .connected else { return }
+        connectionHealth = .connecting
         connectionPhase = "start"
         do {
             switch target {
             case .local:
                 guard OnDeviceCodexFeature.isEnabled else {
                     connectionPhase = OnDeviceCodexFeature.compiledIn ? "local-disabled" : "local-unavailable"
+                    connectionHealth = .disconnected
                     return
                 }
                 connectionPhase = "local-starting"
@@ -56,24 +92,28 @@ final class ServerConnection: ObservableObject, Identifiable {
             case .remote(let host, let port):
                 guard let url = websocketURL(host: host, port: port) else {
                     connectionPhase = "invalid-url"
+                    connectionHealth = .disconnected
                     return
                 }
                 serverURL = url
                 connectionPhase = "remote-url"
             case .sshThenRemote:
                 connectionPhase = "sshThenRemote-not-supported"
+                connectionHealth = .disconnected
                 return
             }
             guard serverURL != nil else {
                 connectionPhase = "no-url"
+                connectionHealth = .disconnected
                 return
             }
             connectionPhase = "setup-notifications"
             await setupNotifications()
             await setupDisconnectHandler()
+            await setupHealthHandler()
             connectionPhase = "connect-and-initialize"
             try await connectAndInitialize()
-            isConnected = true
+            connectionHealth = .connected
             connectionPhase = "ready"
             Task { [weak self] in
                 await self?.checkAuth()
@@ -81,12 +121,13 @@ final class ServerConnection: ObservableObject, Identifiable {
             }
         } catch {
             connectionPhase = "error: \(error.localizedDescription)"
+            connectionHealth = .disconnected
         }
     }
 
     func disconnect() {
         Task { await client.disconnect() }
-        isConnected = false
+        connectionHealth = .disconnected
         serverURL = nil
         rateLimits = nil
     }
@@ -247,6 +288,8 @@ final class ServerConnection: ObservableObject, Identifiable {
     func sendTurn(
         threadId: String,
         text: String,
+        approvalPolicy: String? = nil,
+        sandboxMode: String? = nil,
         model: String? = nil,
         effort: String? = nil,
         additionalInput: [UserInput] = []
@@ -255,7 +298,14 @@ final class ServerConnection: ObservableObject, Identifiable {
         inputs.append(contentsOf: additionalInput)
         return try await client.sendRequest(
             method: "turn/start",
-            params: TurnStartParams(threadId: threadId, input: inputs, model: model, effort: effort),
+            params: TurnStartParams(
+                threadId: threadId,
+                input: inputs,
+                approvalPolicy: approvalPolicy,
+                sandboxPolicy: TurnSandboxPolicy(mode: sandboxMode),
+                model: model,
+                effort: effort
+            ),
             responseType: TurnStartResponse.self
         )
     }
@@ -606,19 +656,37 @@ final class ServerConnection: ObservableObject, Identifiable {
     private func setupDisconnectHandler() async {
         await client.setDisconnectHandler { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.isConnected else {
+                guard let self, self.connectionHealth == .connected || self.connectionHealth == .unresponsive else {
                     NSLog("[ws] disconnect handler: already disconnected id=%@", self?.id ?? "?")
                     return
                 }
                 NSLog("[ws] socket died, auto-reconnecting id=%@", self.id)
-                self.isConnected = false
+                self.connectionHealth = .connecting
                 self.onDisconnect?()
                 do {
                     try await self.connectAndInitialize()
-                    self.isConnected = true
+                    self.connectionHealth = .connected
                     NSLog("[ws] auto-reconnect SUCCESS id=%@", self.id)
                 } catch {
+                    self.connectionHealth = .disconnected
                     NSLog("[ws] auto-reconnect FAILED id=%@ err=%@", self.id, error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func setupHealthHandler() async {
+        await client.setHealthChangeHandler { [weak self] healthy in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if healthy {
+                    if self.connectionHealth == .unresponsive {
+                        self.connectionHealth = .connected
+                    }
+                } else {
+                    if self.connectionHealth == .connected {
+                        self.connectionHealth = .unresponsive
+                    }
                 }
             }
         }

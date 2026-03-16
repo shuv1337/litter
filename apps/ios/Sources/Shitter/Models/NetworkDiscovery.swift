@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import UIKit
 
 private let codexDiscoveryPorts: [UInt16] = [8390, 4222]
@@ -14,16 +15,18 @@ private struct DiscoveryCandidate: Hashable {
 private struct CandidateReachability: Sendable {
     let candidate: DiscoveryCandidate
     let codexPort: UInt16?
+    let sshPort: UInt16?
 }
 
 @MainActor
-final class NetworkDiscovery: ObservableObject {
-    @Published var servers: [DiscoveredServer] = []
-    @Published var isScanning = false
+@Observable
+final class NetworkDiscovery {
+    var servers: [DiscoveredServer] = []
+    var isScanning = false
 
-    private var scanTask: Task<Void, Never>?
-    private var activeScanID = UUID()
-    private var networkServerLastSeen: [String: Date] = [:]
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var activeScanID = UUID()
+    @ObservationIgnored private var networkServerLastSeen: [String: Date] = [:]
 
     private let cacheKey = "shitter.discovery.networkServers.v1"
     private let cacheRetention: TimeInterval = 7 * 24 * 60 * 60
@@ -33,6 +36,7 @@ final class NetworkDiscovery: ObservableObject {
         let name: String
         let hostname: String
         let port: UInt16?
+        let sshPort: UInt16?
         let source: String
         let hasCodexServer: Bool
         let wakeMAC: String?
@@ -184,21 +188,31 @@ final class NetworkDiscovery: ObservableObject {
                 name: candidate.name ?? candidate.ip,
                 hostname: candidate.ip,
                 port: state.codexPort,
+                sshPort: state.sshPort,
                 source: candidate.source,
                 hasCodexServer: state.codexPort != nil,
                 wakeMAC: servers.first(where: { $0.id == id })?.wakeMAC
             )
 
             if let index = servers.firstIndex(where: { $0.id == id }) {
-                // Prefer the candidate with better source rank or codex endpoint.
                 let existing = servers[index]
-                let betterSource = Self.sourceRank(candidate.source) < Self.sourceRank(existing.source)
-                let hasCodexUpgrade = discovered.hasCodexServer && !existing.hasCodexServer
-                let betterCodexPort = discovered.hasCodexServer && existing.hasCodexServer && discovered.port != existing.port
-                let betterName = (existing.name == existing.hostname) && (discovered.name != discovered.hostname)
-                if betterSource || hasCodexUpgrade || betterCodexPort || betterName {
-                    servers[index] = discovered
-                }
+                let preferredSource = Self.sourceRank(candidate.source) <= Self.sourceRank(existing.source)
+                    ? candidate.source
+                    : existing.source
+                let preferredName = (existing.name == existing.hostname) && (discovered.name != discovered.hostname)
+                    ? discovered.name
+                    : existing.name
+                servers[index] = DiscoveredServer(
+                    id: existing.id,
+                    name: preferredName,
+                    hostname: discovered.hostname,
+                    port: discovered.port,
+                    sshPort: discovered.sshPort ?? existing.sshPort,
+                    source: preferredSource,
+                    hasCodexServer: discovered.hasCodexServer,
+                    wakeMAC: existing.wakeMAC ?? discovered.wakeMAC,
+                    sshPortForwardingEnabled: existing.sshPortForwardingEnabled
+                )
             } else {
                 servers.append(discovered)
             }
@@ -268,15 +282,16 @@ final class NetworkDiscovery: ObservableObject {
             guard now.timeIntervalSince1970 - entry.lastSeenAt <= maxAge else { continue }
             let source = ServerSource.from(entry.source)
             guard source != .local else { continue }
-            let server = DiscoveredServer(
-                id: entry.id,
-                name: entry.name,
-                hostname: entry.hostname,
-                port: entry.port,
-                source: source,
-                hasCodexServer: entry.hasCodexServer,
-                wakeMAC: entry.wakeMAC
-            )
+                let server = DiscoveredServer(
+                    id: entry.id,
+                    name: entry.name,
+                    hostname: entry.hostname,
+                    port: entry.port,
+                    sshPort: entry.sshPort,
+                    source: source,
+                    hasCodexServer: entry.hasCodexServer,
+                    wakeMAC: entry.wakeMAC
+                )
             loaded.append(server)
             pruned.append(entry)
             networkServerLastSeen[entry.id] = Date(timeIntervalSince1970: entry.lastSeenAt)
@@ -300,6 +315,7 @@ final class NetworkDiscovery: ObservableObject {
                     name: server.name,
                     hostname: server.hostname,
                     port: server.port,
+                    sshPort: server.sshPort,
                     source: server.source.rawString,
                     hasCodexServer: server.hasCodexServer,
                     wakeMAC: server.wakeMAC,
@@ -450,7 +466,11 @@ final class NetworkDiscovery: ObservableObject {
                     guard hasSSH || codexPort != nil || includeOnBonjourSignal else {
                         return nil
                     }
-                    return CandidateReachability(candidate: candidate, codexPort: codexPort)
+                    return CandidateReachability(
+                        candidate: candidate,
+                        codexPort: codexPort,
+                        sshPort: hasSSH ? 22 : nil
+                    )
                 }
             }
             var reachable: [CandidateReachability] = []

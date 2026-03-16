@@ -5,6 +5,8 @@ import Security
 actor JSONRPCClient {
     private var connection: NWConnection?
     private var receiveTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var lastPongReceived: Date?
     private let queue = DispatchQueue(label: "Shitter.JSONRPCClient.Network")
     private var readBuffer = Data()
     private var nextId: Int = 1
@@ -12,6 +14,7 @@ actor JSONRPCClient {
     private var notificationHandler: ((String, Data) -> Void)?
     private var requestHandler: ((String, String, Data) -> Void)?
     private var onDisconnect: (() -> Void)?
+    private var onHealthChange: ((Bool) -> Void)?
 
     func connect(url: URL) async throws {
         guard url.scheme == "ws", let host = url.host else {
@@ -40,9 +43,15 @@ actor JSONRPCClient {
             guard let self else { return }
             await self.startReceiving(on: conn)
         }
+
+        lastPongReceived = Date()
+        startHeartbeat(on: conn)
     }
 
     func disconnect() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        lastPongReceived = nil
         receiveTask?.cancel()
         receiveTask = nil
         connection?.stateUpdateHandler = nil
@@ -65,6 +74,10 @@ actor JSONRPCClient {
 
     func setDisconnectHandler(_ handler: @escaping () -> Void) {
         onDisconnect = handler
+    }
+
+    func setHealthChangeHandler(_ handler: @escaping (Bool) -> Void) {
+        onHealthChange = handler
     }
 
     func sendResult(id: String, result: Any) {
@@ -207,6 +220,41 @@ actor JSONRPCClient {
         }
     }
 
+    private func startHeartbeat(on conn: NWConnection) {
+        heartbeatTask?.cancel()
+        let interval: Duration = .seconds(10)
+        let timeout: TimeInterval = 25
+        heartbeatTask = Task { [weak self] in
+            guard let self else { return }
+            var wasHealthy = true
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: interval)
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled else { break }
+                do {
+                    try await self.sendFrame(opcode: 0x9, payload: Data([0x70, 0x69, 0x6E, 0x67]), on: conn)
+                } catch {
+                    break
+                }
+                if let lastPong = await self.lastPongReceived,
+                   Date().timeIntervalSince(lastPong) > timeout {
+                    if wasHealthy {
+                        wasHealthy = false
+                        await self.onHealthChange?(false)
+                    }
+                    await self.onDisconnect?()
+                    break
+                } else if !wasHealthy {
+                    wasHealthy = true
+                    await self.onHealthChange?(true)
+                }
+            }
+        }
+    }
+
     private func startReceiving(on conn: NWConnection) async {
         do {
             while !Task.isCancelled {
@@ -233,7 +281,7 @@ actor JSONRPCClient {
             case 0x9:
                 try await sendFrame(opcode: 0xA, payload: frame.payload, on: conn)
             case 0xA:
-                break
+                lastPongReceived = Date()
             default:
                 break
             }

@@ -1,6 +1,6 @@
 import Foundation
-import Combine
 import ActivityKit
+import Observation
 import UIKit
 import UserNotifications
 
@@ -50,43 +50,50 @@ enum AgentLabelFormatter {
 }
 
 @MainActor
-final class ServerManager: ObservableObject {
-    @Published var connections: [String: ServerConnection] = [:]
-    @Published var threads: [ThreadKey: ThreadState] = [:]
-    @Published var activeThreadKey: ThreadKey?
-    @Published var pendingApprovals: [PendingApproval] = []
-    @Published var composerPrefillRequest: ComposerPrefillRequest?
-    @Published private(set) var agentDirectoryVersion: Int = 0
+@Observable
+final class ServerManager {
+    var connections: [String: ServerConnection] = [:]
+    var threads: [ThreadKey: ThreadState] = [:]
+    var activeThreadKey: ThreadKey?
+    var pendingApprovals: [PendingApproval] = []
+    var pendingUserInputRequests: [PendingUserInputRequest] = []
+    var composerPrefillRequest: ComposerPrefillRequest?
+    private(set) var agentDirectoryVersion: Int = 0
 
-    private var connectionSubscriptions: [String: AnyCancellable] = [:]
-    private let savedServersKey = "codex_saved_servers"
-    private var threadSubscriptions: [ThreadKey: AnyCancellable] = [:]
-    private var liveItemMessageIndices: [ThreadKey: [String: Int]] = [:]
-    private var liveTurnDiffMessageIndices: [ThreadKey: [String: Int]] = [:]
-    private var serversUsingItemNotifications: Set<String> = []
-    private var threadTurnCounts: [ThreadKey: Int] = [:]
-    private var agentDirectory = AgentDirectory()
+    @ObservationIgnored private let savedServersKey = "codex_saved_servers"
+    @ObservationIgnored private var liveItemMessageIndices: [ThreadKey: [String: Int]] = [:]
+    @ObservationIgnored private var liveTurnDiffMessageIndices: [ThreadKey: [String: Int]] = [:]
+    @ObservationIgnored private var serversUsingItemNotifications: Set<String> = []
+    @ObservationIgnored private var threadTurnCounts: [ThreadKey: Int] = [:]
+    @ObservationIgnored private var agentDirectory = AgentDirectory()
     private static let tsFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
         return f
     }()
-    private var ts: String { Self.tsFormatter.string(from: Date()) }
-    private var backgroundedTurnKeys: Set<ThreadKey> = []
-    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-    private var bgWakeCount: Int = 0
-    private var liveActivities: [ThreadKey: Activity<CodexTurnAttributes>] = [:]
-    private var liveActivityStartDates: [ThreadKey: Date] = [:]
-    private var liveActivityToolCallCounts: [ThreadKey: Int] = [:]
-    private var liveActivityOutputSnippets: [ThreadKey: String] = [:]
-    private var liveActivityLastUpdateTimes: [ThreadKey: CFAbsoluteTime] = [:]
-    private var liveActivityFileChangeCounts: [ThreadKey: Int] = [:]
-    private var notificationPermissionRequested = false
-    private let pushProxy = PushProxyClient()
-    private var pushProxyRegistrationId: String?
-    private var suppressNotifications = false
-    var devicePushToken: Data?
-
+    @ObservationIgnored private var ts: String { Self.tsFormatter.string(from: Date()) }
+    @ObservationIgnored private var backgroundedTurnKeys: Set<ThreadKey> = []
+    @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var bgWakeCount: Int = 0
+    @ObservationIgnored private var liveActivities: [ThreadKey: Activity<CodexTurnAttributes>] = [:]
+    @ObservationIgnored private var liveActivityStartDates: [ThreadKey: Date] = [:]
+    @ObservationIgnored private var liveActivityToolCallCounts: [ThreadKey: Int] = [:]
+    @ObservationIgnored private var liveActivityOutputSnippets: [ThreadKey: String] = [:]
+    @ObservationIgnored private var liveActivityLastUpdateTimes: [ThreadKey: CFAbsoluteTime] = [:]
+    @ObservationIgnored private var liveActivityFileChangeCounts: [ThreadKey: Int] = [:]
+    @ObservationIgnored private var notificationPermissionRequested = false
+    @ObservationIgnored private var deferredThreadMetadataRefreshTasks: [ThreadKey: Task<Void, Never>] = [:]
+    @ObservationIgnored private var deferredThreadMetadataRefreshTokens: [ThreadKey: UUID] = [:]
+    @ObservationIgnored private var deferredThreadMessageHydrationTasks: [ThreadKey: Task<Void, Never>] = [:]
+    @ObservationIgnored private let pushProxy = PushProxyClient()
+    @ObservationIgnored private var pushProxyRegistrationId: String?
+    @ObservationIgnored private var suppressNotifications = false
+    @ObservationIgnored var devicePushToken: Data?
+    @ObservationIgnored private let notificationDecodeQueue = DispatchQueue(label: "Shitter.ServerManager.NotificationDecode", qos: .userInitiated)
+    @ObservationIgnored private var notificationWorkTask: Task<Void, Never>?
+    @ObservationIgnored private let networkMonitor = NetworkMonitor()
+    @ObservationIgnored private let initialHydratedMessageCount = 48
+    @ObservationIgnored private let hydrationChunkSize = 96
     private struct PersistedContextUsageSnapshot: Decodable {
         let contextTokens: Int64?
         let modelContextWindow: Int64?
@@ -154,19 +161,31 @@ final class ServerManager: ObservableObject {
         let text: String
     }
 
-    /// Call after inserting a new ThreadState into `threads` to forward its changes.
-    private func observeThread(_ thread: ThreadState) {
-        threadSubscriptions[thread.key] = thread.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+    struct PendingUserInputOption: Equatable {
+        let label: String
+        let description: String
     }
 
-    /// Forward nested connection changes so views observing ServerManager refresh when
-    /// connection-owned published values (auth/models/oauth) change.
-    private func observeConnection(_ connection: ServerConnection, serverId: String) {
-        connectionSubscriptions[serverId] = connection.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+    struct PendingUserInputQuestion: Equatable {
+        let id: String
+        let header: String
+        let question: String
+        let isOther: Bool
+        let isSecret: Bool
+        let options: [PendingUserInputOption]
+    }
+
+    struct PendingUserInputRequest: Identifiable, Equatable {
+        let id: String
+        let requestId: String
+        let serverId: String
+        let threadId: String
+        let turnId: String
+        let itemId: String
+        let questions: [PendingUserInputQuestion]
+        let requesterAgentNickname: String?
+        let requesterAgentRole: String?
+        let createdAt: Date
     }
 
     var sortedThreads: [ThreadState] {
@@ -185,8 +204,19 @@ final class ServerManager: ObservableObject {
         pendingApprovals.first
     }
 
+    func pendingUserInputRequest(for key: ThreadKey?) -> PendingUserInputRequest? {
+        guard let key else { return nil }
+        return pendingUserInputRequests.first {
+            $0.serverId == key.serverId && $0.threadId == key.threadId
+        }
+    }
+
     var hasAnyConnection: Bool {
         connections.values.contains { $0.isConnected }
+    }
+
+    var hasInstalledNetworkMonitorCallbacks: Bool {
+        networkMonitor.onNetworkLost != nil && networkMonitor.onNetworkRestored != nil
     }
 
     private func debugAgentDirectoryLog(_ message: @autoclosure () -> String) {
@@ -268,6 +298,8 @@ final class ServerManager: ObservableObject {
     // MARK: - Server Lifecycle
 
     func addServer(_ server: DiscoveredServer, target: ConnectionTarget) async {
+        startNetworkMonitorIfNeeded()
+
         if let existing = connections[server.id] {
             if existing.server == server && existing.target == target {
                 configureConnectionCallbacks(existing, serverId: server.id)
@@ -282,7 +314,6 @@ final class ServerManager: ObservableObject {
 
             existing.disconnect()
             connections.removeValue(forKey: server.id)
-            connectionSubscriptions.removeValue(forKey: server.id)
         }
 
         let conn = ServerConnection(server: server, target: target)
@@ -296,9 +327,8 @@ final class ServerManager: ObservableObject {
     }
 
     private func configureConnectionCallbacks(_ conn: ServerConnection, serverId: String) {
-        observeConnection(conn, serverId: serverId)
         conn.onNotification = { [weak self] method, data in
-            self?.handleNotification(serverId: serverId, method: method, data: data)
+            self?.enqueueNotification(serverId: serverId, method: method, data: data)
         }
         conn.onServerRequest = { [weak self] requestId, method, data in
             self?.handleServerRequest(
@@ -311,7 +341,26 @@ final class ServerManager: ObservableObject {
         conn.onDisconnect = { [weak self] in
             NSLog("[%@ ws] disconnected server=%@", self?.ts ?? "?", serverId)
             self?.removePendingApprovals(forServerId: serverId)
-            self?.objectWillChange.send()
+            self?.removePendingUserInputRequests(forServerId: serverId)
+        }
+        conn.onLoginCompleted = { [weak self, weak conn] in
+            guard let self else { return }
+            Task { @MainActor [weak conn] in
+                await self.refreshSessions(for: serverId)
+                if self.activeThreadKey?.serverId == serverId {
+                    await self.syncActiveThreadFromServer()
+                }
+                conn?.loginCompleted = false
+            }
+        }
+    }
+
+    private func enqueueNotification(serverId: String, method: String, data: Data) {
+        let previousTask = notificationWorkTask
+        notificationWorkTask = Task { [weak self] in
+            _ = await previousTask?.result
+            guard let self, !Task.isCancelled else { return }
+            await self.handleNotification(serverId: serverId, method: method, data: data)
         }
     }
 
@@ -325,10 +374,10 @@ final class ServerManager: ObservableObject {
         }
         connections[id]?.disconnect()
         connections.removeValue(forKey: id)
-        connectionSubscriptions.removeValue(forKey: id)
         removePendingApprovals(forServerId: id)
+        removePendingUserInputRequests(forServerId: id)
         for key in threads.keys where key.serverId == id {
-            threadSubscriptions.removeValue(forKey: key)
+            cancelThreadMetadataRefresh(for: key)
             liveItemMessageIndices.removeValue(forKey: key)
             liveTurnDiffMessageIndices.removeValue(forKey: key)
             threadTurnCounts.removeValue(forKey: key)
@@ -347,7 +396,12 @@ final class ServerManager: ObservableObject {
         saveServerList()
     }
 
+    func clearActiveThread() {
+        activeThreadKey = nil
+    }
+
     func reconnectAll() async {
+        startNetworkMonitorIfNeeded()
         let saved = loadSavedServers()
         await withTaskGroup(of: Void.self) { group in
             for s in saved {
@@ -361,6 +415,28 @@ final class ServerManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private func startNetworkMonitorIfNeeded() {
+        guard networkMonitor.onNetworkLost == nil else { return }
+        networkMonitor.onNetworkLost = { [weak self] in
+            guard let self else { return }
+            NSLog("[network] marking all connections disconnected")
+            for (_, conn) in self.connections {
+                conn.connectionHealth = .disconnected
+            }
+        }
+        networkMonitor.onNetworkRestored = { [weak self] in
+            guard let self else { return }
+            NSLog("[network] restoring connections")
+            Task {
+                for (_, conn) in self.connections where !conn.isConnected {
+                    conn.disconnect()
+                    await conn.connect()
+                }
+            }
+        }
+        networkMonitor.start()
     }
 
     // MARK: - Thread Lifecycle
@@ -400,6 +476,7 @@ final class ServerManager: ObservableObject {
         state.rootThreadId = sanitizedLineageId(resp.thread.rootThreadId)
         state.agentNickname = sanitizedLineageId(resp.thread.agentNickname)
         state.agentRole = sanitizedLineageId(resp.thread.agentRole)
+        state.requiresOpenHydration = false
         upsertAgentDirectory(
             serverId: serverId,
             threadId: threadId,
@@ -412,10 +489,8 @@ final class ServerManager: ObservableObject {
         threadTurnCounts[key] = 0
         liveItemMessageIndices[key] = nil
         liveTurnDiffMessageIndices[key] = nil
-        observeThread(state)
         activeThreadKey = key
-        await refreshThreadContextWindow(for: key, cwd: resp.cwd)
-        await refreshPersistedContextUsage(for: key)
+        scheduleThreadMetadataRefresh(for: key, cwd: resp.cwd)
         return key
     }
 
@@ -436,7 +511,7 @@ final class ServerManager: ObservableObject {
         )
         state.status = .connecting
         threads[key] = state
-        observeThread(state)
+        activeThreadKey = key
         do {
             let resp = try await conn.resumeThread(
                 threadId: threadId,
@@ -444,15 +519,6 @@ final class ServerManager: ObservableObject {
                 approvalPolicy: approvalPolicy,
                 sandboxMode: sandboxMode
             )
-            state.messages = restoredMessages(
-                from: resp.thread.turns,
-                serverId: serverId,
-                defaultAgentNickname: resp.thread.agentNickname,
-                defaultAgentRole: resp.thread.agentRole
-            )
-            threadTurnCounts[key] = resp.thread.turns.count
-            liveItemMessageIndices[key] = nil
-            liveTurnDiffMessageIndices[key] = nil
             state.cwd = resp.cwd
             state.model = resp.model
             state.modelProvider = resp.modelProvider ?? resp.model
@@ -469,11 +535,26 @@ final class ServerManager: ObservableObject {
                 nickname: state.agentNickname,
                 role: state.agentRole
             )
+            await Task.yield()
+            let restored = restoredMessages(
+                from: resp.thread.turns,
+                serverId: serverId,
+                defaultAgentNickname: resp.thread.agentNickname,
+                defaultAgentRole: resp.thread.agentRole
+            )
+            installRestoredMessages(
+                restored,
+                on: state,
+                key: key,
+                staged: true
+            )
+            state.requiresOpenHydration = false
+            threadTurnCounts[key] = resp.thread.turns.count
+            liveItemMessageIndices[key] = nil
+            liveTurnDiffMessageIndices[key] = nil
             state.status = .ready
             state.updatedAt = Date()
-            activeThreadKey = key
-            await refreshThreadContextWindow(for: key, cwd: resp.cwd)
-            await refreshPersistedContextUsage(for: key)
+            scheduleThreadMetadataRefresh(for: key, cwd: resp.cwd)
             return true
         } catch {
             state.status = .error(error.localizedDescription)
@@ -485,10 +566,12 @@ final class ServerManager: ObservableObject {
         _ key: ThreadKey,
         approvalPolicy: String = "never",
         sandboxMode: String? = nil
-    ) async {
-        if threads[key]?.messages.isEmpty == true {
-            let cwd = threads[key]?.cwd ?? "/tmp"
-            _ = await resumeThread(
+    ) async -> Bool {
+        guard let thread = threads[key] else { return false }
+
+        if thread.requiresOpenHydration && thread.items.isEmpty {
+            let cwd = thread.cwd.isEmpty ? "/tmp" : thread.cwd
+            return await resumeThread(
                 serverId: key.serverId,
                 threadId: key.threadId,
                 cwd: cwd,
@@ -496,11 +579,28 @@ final class ServerManager: ObservableObject {
                 sandboxMode: sandboxMode
             )
         } else {
+            thread.requiresOpenHydration = false
             activeThreadKey = key
-            let cwd = threads[key]?.cwd ?? "/tmp"
-            await refreshThreadContextWindow(for: key, cwd: cwd)
-            await refreshPersistedContextUsage(for: key)
+            let cwd = thread.cwd.isEmpty ? "/tmp" : thread.cwd
+            scheduleThreadMetadataRefresh(for: key, cwd: cwd)
+            return true
         }
+    }
+
+    func prepareThreadForPresentation(
+        _ key: ThreadKey,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async -> Bool {
+        guard let thread = threads[key] else { return false }
+        if activeThreadKey == key && !thread.requiresOpenHydration {
+            return true
+        }
+        return await viewThread(
+            key,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
     }
 
     func forkThread(
@@ -534,11 +634,16 @@ final class ServerManager: ObservableObject {
             serverName: conn.server.name,
             serverSource: conn.server.source
         )
-        forkedState.messages = restoredMessages(
+        installRestoredMessages(
+            restoredMessages(
             from: response.thread.turns,
             serverId: sourceKey.serverId,
             defaultAgentNickname: response.thread.agentNickname,
             defaultAgentRole: response.thread.agentRole
+            ),
+            on: forkedState,
+            key: forkKey,
+            staged: false
         )
         threadTurnCounts[forkKey] = response.thread.turns.count
         liveItemMessageIndices[forkKey] = nil
@@ -556,6 +661,7 @@ final class ServerManager: ObservableObject {
             ?? sourceKey.threadId
         forkedState.agentNickname = sanitizedLineageId(response.thread.agentNickname)
         forkedState.agentRole = sanitizedLineageId(response.thread.agentRole)
+        forkedState.requiresOpenHydration = false
         upsertAgentDirectory(
             serverId: sourceKey.serverId,
             threadId: response.thread.id,
@@ -566,10 +672,8 @@ final class ServerManager: ObservableObject {
         forkedState.status = .ready
         forkedState.updatedAt = Date()
         threads[forkKey] = forkedState
-        observeThread(forkedState)
         activeThreadKey = forkKey
-        await refreshThreadContextWindow(for: forkKey, cwd: response.cwd)
-        await refreshPersistedContextUsage(for: forkKey)
+        scheduleThreadMetadataRefresh(for: forkKey, cwd: response.cwd)
         return forkKey
     }
 
@@ -590,7 +694,7 @@ final class ServerManager: ObservableObject {
     }
 
     func forkFromMessage(
-        _ message: ChatMessage,
+        _ item: ConversationItem,
         approvalPolicy: String = "never",
         sandboxMode: String? = nil
     ) async throws -> ThreadKey {
@@ -601,11 +705,11 @@ final class ServerManager: ObservableObject {
         guard !sourceThread.hasTurnActive else {
             throw NSError(domain: "Shitter", code: 1015, userInfo: [NSLocalizedDescriptionKey: "Wait for the active turn to finish before forking"])
         }
-        guard message.role == .user, message.isFromUserTurnBoundary else {
+        guard item.isUserItem, item.isFromUserTurnBoundary else {
             throw NSError(domain: "Shitter", code: 1016, userInfo: [NSLocalizedDescriptionKey: "Fork from here is only supported for user messages"])
         }
 
-        let rollbackDepth = try rollbackDepthForMessage(message, in: sourceKey)
+        let rollbackDepth = try rollbackDepthForItem(item, in: sourceKey)
         let forkKey = try await forkThread(
             sourceKey,
             cwd: sourceThread.cwd,
@@ -619,11 +723,16 @@ final class ServerManager: ObservableObject {
         }
 
         let rollbackResponse = try await forkConn.rollbackThread(threadId: forkKey.threadId, numTurns: rollbackDepth)
-        forkThreadState.messages = restoredMessages(
+        installRestoredMessages(
+            restoredMessages(
             from: rollbackResponse.thread.turns,
             serverId: forkKey.serverId,
             defaultAgentNickname: rollbackResponse.thread.agentNickname ?? forkThreadState.agentNickname,
             defaultAgentRole: rollbackResponse.thread.agentRole ?? forkThreadState.agentRole
+            ),
+            on: forkThreadState,
+            key: forkKey,
+            staged: false
         )
         threadTurnCounts[forkKey] = rollbackResponse.thread.turns.count
         forkThreadState.status = .ready
@@ -633,7 +742,7 @@ final class ServerManager: ObservableObject {
         return forkKey
     }
 
-    func editMessage(_ message: ChatMessage) async throws {
+    func editMessage(_ item: ConversationItem) async throws {
         guard let key = activeThreadKey,
               let thread = threads[key],
               let conn = connections[key.serverId] else {
@@ -642,18 +751,23 @@ final class ServerManager: ObservableObject {
         guard !thread.hasTurnActive else {
             throw NSError(domain: "Shitter", code: 1019, userInfo: [NSLocalizedDescriptionKey: "Wait for the active turn to finish before editing"])
         }
-        guard message.role == .user, message.isFromUserTurnBoundary else {
+        guard item.isUserItem, item.isFromUserTurnBoundary else {
             throw NSError(domain: "Shitter", code: 1020, userInfo: [NSLocalizedDescriptionKey: "Only user messages can be edited"])
         }
 
-        let rollbackDepth = try rollbackDepthForMessage(message, in: key)
+        let rollbackDepth = try rollbackDepthForItem(item, in: key)
         if rollbackDepth > 0 {
             let response = try await conn.rollbackThread(threadId: key.threadId, numTurns: rollbackDepth)
-            thread.messages = restoredMessages(
+            installRestoredMessages(
+                restoredMessages(
                 from: response.thread.turns,
                 serverId: key.serverId,
                 defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
                 defaultAgentRole: response.thread.agentRole ?? thread.agentRole
+                ),
+                on: thread,
+                key: key,
+                staged: false
             )
             threadTurnCounts[key] = response.thread.turns.count
             thread.status = .ready
@@ -661,7 +775,7 @@ final class ServerManager: ObservableObject {
             liveItemMessageIndices[key] = nil
             liveTurnDiffMessageIndices[key] = nil
         }
-        composerPrefillRequest = ComposerPrefillRequest(text: message.text)
+        composerPrefillRequest = ComposerPrefillRequest(text: item.userText ?? "")
     }
 
     // MARK: - Approvals
@@ -684,6 +798,18 @@ final class ServerManager: ObservableObject {
         connections[approval.serverId]?.respondToServerRequest(
             id: approval.requestId,
             result: ["decision": decisionValue]
+        )
+    }
+
+    func respondToPendingUserInput(requestId: String, answers: [String: [String]]) {
+        guard let index = pendingUserInputRequests.firstIndex(where: { $0.requestId == requestId }) else { return }
+        let request = pendingUserInputRequests.remove(at: index)
+        let payloadAnswers = answers.reduce(into: [String: Any]()) { partialResult, entry in
+            partialResult[entry.key] = ["answers": entry.value]
+        }
+        connections[request.serverId]?.respondToServerRequest(
+            id: request.requestId,
+            result: ["answers": payloadAnswers]
         )
     }
 
@@ -776,6 +902,31 @@ final class ServerManager: ObservableObject {
                 requesterAgentRole: requester.role,
                 createdAt: Date()
             )
+        case "item/tool/requestUserInput":
+            guard let threadId = extractString(params, keys: ["threadId", "thread_id"]),
+                  let turnId = extractString(params, keys: ["turnId", "turn_id"]),
+                  let itemId = extractString(params, keys: ["itemId", "item_id"]) else {
+                return false
+            }
+            let requester = resolveAgentIdentity(serverId: serverId, threadId: threadId, params: params)
+            let questions = pendingUserInputQuestions(from: params["questions"])
+            guard !questions.isEmpty else { return false }
+            pendingUserInputRequests.removeAll { $0.requestId == requestId }
+            pendingUserInputRequests.append(
+                PendingUserInputRequest(
+                    id: requestId,
+                    requestId: requestId,
+                    serverId: serverId,
+                    threadId: threadId,
+                    turnId: turnId,
+                    itemId: itemId,
+                    questions: questions,
+                    requesterAgentNickname: requester.nickname,
+                    requesterAgentRole: requester.role,
+                    createdAt: Date()
+                )
+            )
+            return true
         case "item/tool/call":
             return handleDynamicToolCall(serverId: serverId, requestId: requestId, params: params)
         default:
@@ -833,17 +984,19 @@ final class ServerManager: ObservableObject {
 
         let widget = WidgetState.fromArguments(params.arguments, callId: params.callId, isFinalized: true)
 
-        // Use liveItemMessageIndices for O(1) lookup instead of linear scan
+        let item = ConversationItem(
+            id: params.callId,
+            content: .widget(ConversationWidgetData(widgetState: widget, status: "completed")),
+            sourceTurnId: thread.activeTurnId,
+            sourceTurnIndex: nil,
+            timestamp: Date()
+        )
+
         if let index = liveItemMessageIndices[key]?[params.callId],
-           thread.messages.indices.contains(index) {
-            thread.messages[index].widgetState = widget
-            thread.messages[index].text = "### Widget\nstatus: completed\n\nWidget: \(widget.title)"
+           thread.items.indices.contains(index) {
+            thread.items[index] = item
         } else {
-            thread.messages.append(ChatMessage(
-                role: .system,
-                text: "### Widget\nstatus: completed\n\nWidget: \(widget.title)",
-                widgetState: widget
-            ))
+            thread.items.append(item)
         }
 
         thread.updatedAt = Date()
@@ -882,6 +1035,33 @@ final class ServerManager: ObservableObject {
         pendingApprovals.removeAll { $0.serverId == serverId }
     }
 
+    private func removePendingUserInputRequests(forServerId serverId: String) {
+        pendingUserInputRequests.removeAll { $0.serverId == serverId }
+    }
+
+    private func removePendingRequests(serverId: String, threadId: String?, requestId: String? = nil) {
+        pendingApprovals.removeAll { pending in
+            guard pending.serverId == serverId else { return false }
+            if let requestId, pending.requestId == requestId {
+                return true
+            }
+            if let threadId, pending.threadId == threadId {
+                return true
+            }
+            return false
+        }
+        pendingUserInputRequests.removeAll { request in
+            guard request.serverId == serverId else { return false }
+            if let requestId, request.requestId == requestId {
+                return true
+            }
+            if let threadId, request.threadId == threadId {
+                return true
+            }
+            return false
+        }
+    }
+
     // MARK: - Send / Interrupt
 
     func send(
@@ -914,17 +1094,17 @@ final class ServerManager: ObservableObject {
                     serverName: conn?.server.name ?? "Server",
                     serverSource: conn?.server.source ?? .local
                 )
-                state.messages.append(ChatMessage(role: .user, text: text, isFromUserTurnBoundary: true))
-                state.messages.append(ChatMessage(role: .system, text: error.localizedDescription))
+                state.items.append(makeUserItem(text: text, sourceTurnId: nil, sourceTurnIndex: nil, isBoundary: true))
+                state.items.append(makeErrorItem(message: error.localizedDescription, sourceTurnId: nil, sourceTurnIndex: nil))
                 state.status = .error(error.localizedDescription)
                 threads[errorKey] = state
-                observeThread(state)
                 activeThreadKey = errorKey
                 return
             }
         }
         guard let key, let thread = threads[key], let conn = connections[key.serverId] else { return }
-        thread.messages.append(ChatMessage(role: .user, text: text, isFromUserTurnBoundary: true))
+        let nextTurnIndex = threadTurnCounts[key] ?? inferredTurnCount(from: thread.items)
+        thread.items.append(makeUserItem(text: text, sourceTurnId: nil, sourceTurnIndex: nextTurnIndex, isBoundary: true))
         thread.status = .thinking
         thread.updatedAt = Date()
         requestNotificationPermissionIfNeeded()
@@ -936,6 +1116,8 @@ final class ServerManager: ObservableObject {
             let resp = try await conn.sendTurn(
                 threadId: key.threadId,
                 text: text,
+                approvalPolicy: approvalPolicy,
+                sandboxMode: sandboxMode,
                 model: model,
                 effort: effort,
                 additionalInput: skillInputs
@@ -997,8 +1179,8 @@ final class ServerManager: ObservableObject {
             throw NSError(domain: "Shitter", code: 1032, userInfo: [NSLocalizedDescriptionKey: "Server unavailable"])
         }
         try await conn.archiveThread(threadId: key.threadId)
+        cancelThreadMetadataRefresh(for: key)
         threads.removeValue(forKey: key)
-        threadSubscriptions.removeValue(forKey: key)
         threadTurnCounts.removeValue(forKey: key)
         liveItemMessageIndices.removeValue(forKey: key)
         liveTurnDiffMessageIndices.removeValue(forKey: key)
@@ -1034,14 +1216,35 @@ final class ServerManager: ObservableObject {
             for summary in resp.data {
                 let key = ThreadKey(serverId: serverId, threadId: summary.id)
                 if let existing = threads[key] {
-                    existing.preview = summary.preview
-                    existing.cwd = summary.cwd
-                    existing.rolloutPath = summary.path ?? existing.rolloutPath
-                    existing.modelProvider = summary.modelProvider
-                    existing.parentThreadId = sanitizedLineageId(summary.parentThreadId) ?? existing.parentThreadId
-                    existing.rootThreadId = sanitizedLineageId(summary.rootThreadId) ?? existing.rootThreadId
-                    existing.agentNickname = sanitizedLineageId(summary.agentNickname) ?? existing.agentNickname
-                    existing.agentRole = sanitizedLineageId(summary.agentRole) ?? existing.agentRole
+                    if existing.preview != summary.preview {
+                        existing.preview = summary.preview
+                    }
+                    if existing.cwd != summary.cwd {
+                        existing.cwd = summary.cwd
+                    }
+                    let nextRolloutPath = summary.path ?? existing.rolloutPath
+                    if existing.rolloutPath != nextRolloutPath {
+                        existing.rolloutPath = nextRolloutPath
+                    }
+                    if existing.modelProvider != summary.modelProvider {
+                        existing.modelProvider = summary.modelProvider
+                    }
+                    let nextParentThreadId = sanitizedLineageId(summary.parentThreadId) ?? existing.parentThreadId
+                    if existing.parentThreadId != nextParentThreadId {
+                        existing.parentThreadId = nextParentThreadId
+                    }
+                    let nextRootThreadId = sanitizedLineageId(summary.rootThreadId) ?? existing.rootThreadId
+                    if existing.rootThreadId != nextRootThreadId {
+                        existing.rootThreadId = nextRootThreadId
+                    }
+                    let nextAgentNickname = sanitizedLineageId(summary.agentNickname) ?? existing.agentNickname
+                    if existing.agentNickname != nextAgentNickname {
+                        existing.agentNickname = nextAgentNickname
+                    }
+                    let nextAgentRole = sanitizedLineageId(summary.agentRole) ?? existing.agentRole
+                    if existing.agentRole != nextAgentRole {
+                        existing.agentRole = nextAgentRole
+                    }
                     upsertAgentDirectory(
                         serverId: serverId,
                         threadId: summary.id,
@@ -1049,7 +1252,10 @@ final class ServerManager: ObservableObject {
                         nickname: existing.agentNickname,
                         role: existing.agentRole
                     )
-                    existing.updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
+                    let nextUpdatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
+                    if existing.updatedAt != nextUpdatedAt {
+                        existing.updatedAt = nextUpdatedAt
+                    }
                 } else {
                     let state = ThreadState(
                         serverId: serverId,
@@ -1075,7 +1281,6 @@ final class ServerManager: ObservableObject {
                     state.updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
                     threads[key] = state
                     threadTurnCounts[key] = threadTurnCounts[key] ?? 0
-                    observeThread(state)
                 }
             }
         } catch {}
@@ -1083,7 +1288,7 @@ final class ServerManager: ObservableObject {
 
     // MARK: - Notification Routing
 
-    func handleNotification(serverId: String, method: String, data: Data) {
+    func handleNotification(serverId: String, method: String, data: Data) async {
         if suppressNotifications {
             return
         }
@@ -1098,15 +1303,17 @@ final class ServerManager: ObservableObject {
             handleThreadTokenUsageUpdatedNotification(serverId: serverId, data: data)
 
         case "turn/started":
-            if let threadId = extractThreadId(from: data) {
+            let identifiers = await extractThreadIdentifiers(from: data)
+            if let threadId = identifiers.threadId {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .thinking
-                threads[key]?.activeTurnId = extractTurnId(from: data)
+                threads[key]?.activeTurnId = identifiers.turnId
+                removePendingRequests(serverId: serverId, threadId: threadId)
             }
 
         case "item/agentMessage/delta":
             serversUsingItemNotifications.insert(serverId)
-            struct DeltaParams: Decodable {
+            struct DeltaParams: Decodable, Sendable {
                 let delta: String
                 let threadId: String?
                 let agentId: String?
@@ -1205,8 +1412,10 @@ final class ServerManager: ObservableObject {
                     return extract(from: threadSpawn) ?? extract(from: subAgent)
                 }
             }
-            struct DeltaNotif: Decodable { let params: DeltaParams }
-            guard let notif = try? JSONDecoder().decode(DeltaNotif.self, from: data),
+            struct DeltaNotif: Decodable, Sendable { let params: DeltaParams }
+            guard let notif = await decodeJSONOnBackground(from: data, using: { data in
+                try? JSONDecoder().decode(DeltaNotif.self, from: data)
+            }),
                   !notif.params.delta.isEmpty else { return }
             let explicitThreadId = sanitizedLineageId(notif.params.threadId)
             let key = resolveThreadKey(serverId: serverId, threadId: explicitThreadId)
@@ -1217,21 +1426,25 @@ final class ServerManager: ObservableObject {
             debugAgentDirectoryLog(
                 "delta parsed threadId=\(explicitThreadId ?? "<nil>") agentId=\(agentId ?? "<nil>") nickname=\(agentNickname ?? "<nil>") role=\(agentRole ?? "<nil>")"
             )
-            if let last = thread.messages.last, last.role == .assistant {
-                thread.messages[thread.messages.count - 1].text += notif.params.delta
-                if thread.messages[thread.messages.count - 1].agentNickname == nil {
-                    thread.messages[thread.messages.count - 1].agentNickname = agentNickname
+            if let last = thread.items.last,
+               case .assistant(var data) = last.content {
+                data.text += notif.params.delta
+                if data.agentNickname == nil {
+                    data.agentNickname = agentNickname
                 }
-                if thread.messages[thread.messages.count - 1].agentRole == nil {
-                    thread.messages[thread.messages.count - 1].agentRole = agentRole
+                if data.agentRole == nil {
+                    data.agentRole = agentRole
                 }
+                thread.items[thread.items.count - 1].content = .assistant(data)
+                thread.items[thread.items.count - 1].timestamp = Date()
             } else {
-                thread.messages.append(
-                    ChatMessage(
-                        role: .assistant,
+                thread.items.append(
+                    makeAssistantItem(
                         text: notif.params.delta,
                         agentNickname: agentNickname,
-                        agentRole: agentRole
+                        agentRole: agentRole,
+                        sourceTurnId: thread.activeTurnId,
+                        sourceTurnIndex: nil
                     )
                 )
             }
@@ -1253,11 +1466,12 @@ final class ServerManager: ObservableObject {
             handleErrorNotification(serverId: serverId, data: data)
 
         case "turn/completed", "codex/event/task_complete":
-            if let threadId = extractThreadId(from: data) {
+            if let threadId = await extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .ready
                 threads[key]?.updatedAt = Date()
                 threads[key]?.activeTurnId = nil
+                removePendingRequests(serverId: serverId, threadId: threadId)
                 liveItemMessageIndices[key] = nil
                 liveTurnDiffMessageIndices[key] = nil
                 backgroundedTurnKeys.remove(key)
@@ -1270,6 +1484,7 @@ final class ServerManager: ObservableObject {
                     thread.status = .ready
                     thread.updatedAt = Date()
                     thread.activeTurnId = nil
+                    removePendingRequests(serverId: serverId, threadId: thread.threadId)
                     liveItemMessageIndices[thread.key] = nil
                     liveTurnDiffMessageIndices[thread.key] = nil
                     backgroundedTurnKeys.remove(thread.key)
@@ -1279,12 +1494,25 @@ final class ServerManager: ObservableObject {
             }
             Task { await connections[serverId]?.fetchRateLimits() }
 
+        case "serverRequest/resolved":
+            guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let params = root["params"] as? [String: Any] else { return }
+            removePendingRequests(
+                serverId: serverId,
+                threadId: extractString(params, keys: ["threadId", "thread_id"]),
+                requestId: extractString(params, keys: ["requestId", "request_id"])
+            )
+
         case "turn/diff/updated":
             handleTurnDiffNotification(serverId: serverId, data: data)
 
+        case "turn/plan/updated":
+            handleTurnPlanUpdatedNotification(serverId: serverId, data: data)
+
         default:
             if method.hasPrefix("item/") {
-                handleItemNotification(serverId: serverId, method: method, data: data)
+                NSLog("[notif] item notification: %@", method)
+                await handleItemNotification(serverId: serverId, method: method, data: data)
             } else if method == "codex/event/turn_diff" {
                 handleLegacyCodexEventNotification(serverId: serverId, method: method, data: data)
             } else if method == "codex/event" || method.hasPrefix("codex/event/") {
@@ -1309,7 +1537,13 @@ final class ServerManager: ObservableObject {
         let key = resolveThreadKey(serverId: serverId, threadId: threadId)
         guard let thread = threads[key] else { return }
 
-        thread.messages.append(ChatMessage(role: .system, text: message))
+        thread.items.append(
+            ConversationItem(
+                id: UUID().uuidString,
+                content: .error(ConversationSystemErrorData(title: "Error", message: message, details: nil)),
+                timestamp: Date()
+            )
+        )
         thread.status = .error(message)
         thread.updatedAt = Date()
         endLiveActivity(key: key, phase: .failed)
@@ -1369,12 +1603,9 @@ final class ServerManager: ObservableObject {
         }
 
         threads[key] = thread
-        observeThread(thread)
         let currentCwd = thread.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
         if !currentCwd.isEmpty {
-            Task { @MainActor in
-                await refreshThreadContextWindow(for: key, cwd: currentCwd)
-            }
+            scheduleThreadMetadataRefresh(for: key, cwd: currentCwd)
         }
     }
 
@@ -1399,22 +1630,26 @@ final class ServerManager: ObservableObject {
         }
     }
 
-    private func handleItemNotification(serverId: String, method: String, data: Data) {
+    private func handleItemNotification(serverId: String, method: String, data: Data) async {
         // Format: item/started or item/completed → params.item has the ThreadItem with "type"
         //         item/agentMessage/delta handled separately in handleNotification.
         serversUsingItemNotifications.insert(serverId)
         struct ItemNotification: Decodable { let params: AnyCodable? }
-        guard let raw = try? JSONDecoder().decode(ItemNotification.self, from: data),
+        guard let raw = await decodeJSONOnBackground(from: data, using: { data in
+            try? JSONDecoder().decode(ItemNotification.self, from: data)
+        }),
               let paramsDict = raw.params?.value as? [String: Any] else { return }
 
         let threadId = extractString(paramsDict, keys: ["threadId", "thread_id"])
         let key = resolveThreadKey(serverId: serverId, threadId: threadId)
         guard let thread = threads[key] else { return }
+        let turnId = extractString(paramsDict, keys: ["turnId", "turn_id"])
 
         switch method {
         case "item/started", "item/completed":
             guard let itemDict = paramsDict["item"] as? [String: Any] else { return }
             let itemType = itemDict["type"] as? String ?? "unknown"
+            NSLog("[item] %@ type=%@", method, itemType)
             // agentMessage is streamed via delta; userMessage is added locally in send()
             if itemType == "agentMessage" || itemType == "userMessage" {
                 return
@@ -1430,8 +1665,11 @@ final class ServerManager: ObservableObject {
                         // On completion, preserve the existing widget message (already populated
                         // by handleShowWidgetToolCall). Just finalize and clear live tracking.
                         if let index = liveItemMessageIndices[key]?[itemId],
-                           thread.messages.indices.contains(index) {
-                            thread.messages[index].widgetState?.isFinalized = true
+                           thread.items.indices.contains(index),
+                           case .widget(var data) = thread.items[index].content {
+                            data.widgetState.isFinalized = true
+                            data.status = "completed"
+                            thread.items[index].content = .widget(data)
                         }
                         liveItemMessageIndices[key]?[itemId] = nil
                         thread.updatedAt = Date()
@@ -1441,10 +1679,10 @@ final class ServerManager: ObservableObject {
                     // item/started — create a placeholder widget with spinner
                     let args = itemDict["arguments"] as? [String: Any] ?? [:]
                     let widget = WidgetState.fromArguments(args, callId: itemId)
-                    let msg = ChatMessage(
-                        role: .system,
-                        text: "### Widget\nstatus: inProgress\n\nWidget: \(widget.title)",
-                        widgetState: widget
+                    let msg = ConversationItem(
+                        id: itemId,
+                        content: .widget(ConversationWidgetData(widgetState: widget, status: "inProgress")),
+                        timestamp: Date()
                     )
                     upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
                     thread.updatedAt = Date()
@@ -1464,14 +1702,18 @@ final class ServerManager: ObservableObject {
                 updateLiveActivity(key: key, phase: .toolCall, toolName: toolName)
             }
             guard let itemData = try? JSONSerialization.data(withJSONObject: itemDict),
-                  let item = try? JSONDecoder().decode(ResumedThreadItem.self, from: itemData),
-                  let msg = chatMessage(
+                  let item = await decodeJSONOnBackground(from: itemData, using: { data in
+                      try? JSONDecoder().decode(ResumedThreadItem.self, from: data)
+                  }),
+                  let msg = conversationItem(
                     from: item,
-                    sourceTurnId: nil,
+                    itemId: extractString(itemDict, keys: ["id"]) ?? UUID().uuidString,
+                    sourceTurnId: turnId,
                     sourceTurnIndex: nil,
                     serverId: serverId,
                     defaultAgentNickname: thread.agentNickname,
-                    defaultAgentRole: thread.agentRole
+                    defaultAgentRole: thread.agentRole,
+                    isInProgressEvent: method == "item/started"
                   ) else { return }
             let itemId = extractString(itemDict, keys: ["id"])
             if method == "item/started", let itemId {
@@ -1479,7 +1721,7 @@ final class ServerManager: ObservableObject {
             } else if method == "item/completed", let itemId {
                 completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -1490,9 +1732,21 @@ final class ServerManager: ObservableObject {
                 thread.updatedAt = Date()
                 return
             }
-            if let msg = systemMessage(title: "Command Output", body: "```text\n\(delta)\n```") {
-                thread.messages.append(msg)
+            thread.items.append(
+                ConversationItem(
+                    id: UUID().uuidString,
+                    content: .note(ConversationNoteData(title: "Command Output", body: delta)),
+                    timestamp: Date()
+                )
+            )
+            thread.updatedAt = Date()
+
+        case "item/plan/delta":
+            guard let delta = extractString(paramsDict, keys: ["delta"]), !delta.isEmpty else { return }
+            if let itemId = extractString(paramsDict, keys: ["itemId", "item_id", "id"]),
+               appendProposedPlanDelta(delta, itemId: itemId, turnId: turnId, key: key, thread: thread) {
                 thread.updatedAt = Date()
+                return
             }
 
         case "item/mcpToolCall/progress":
@@ -1502,10 +1756,14 @@ final class ServerManager: ObservableObject {
                 thread.updatedAt = Date()
                 return
             }
-            if let msg = systemMessage(title: "MCP Tool Progress", body: progress) {
-                thread.messages.append(msg)
-                thread.updatedAt = Date()
-            }
+            thread.items.append(
+                ConversationItem(
+                    id: UUID().uuidString,
+                    content: .note(ConversationNoteData(title: "MCP Tool Progress", body: progress)),
+                    timestamp: Date()
+                )
+            )
+            thread.updatedAt = Date()
 
         default:
             break
@@ -1522,6 +1780,34 @@ final class ServerManager: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func pendingUserInputQuestions(from raw: Any?) -> [PendingUserInputQuestion] {
+        guard let values = raw as? [Any] else { return [] }
+        return values.compactMap { rawQuestion in
+            guard let dict = rawQuestion as? [String: Any],
+                  let id = extractString(dict, keys: ["id"]),
+                  let header = extractString(dict, keys: ["header"]),
+                  let question = extractString(dict, keys: ["question"]) else {
+                return nil
+            }
+            let options = (dict["options"] as? [Any] ?? []).compactMap { rawOption -> PendingUserInputOption? in
+                guard let optionDict = rawOption as? [String: Any],
+                      let label = extractString(optionDict, keys: ["label"]),
+                      let description = extractString(optionDict, keys: ["description"]) else {
+                    return nil
+                }
+                return PendingUserInputOption(label: label, description: description)
+            }
+            return PendingUserInputQuestion(
+                id: id,
+                header: header,
+                question: question,
+                isOther: (dict["isOther"] as? Bool) ?? (dict["is_other"] as? Bool) ?? false,
+                isSecret: (dict["isSecret"] as? Bool) ?? (dict["is_secret"] as? Bool) ?? false,
+                options: options
+            )
+        }
     }
 
     private func extractInt64(_ dict: [String: Any], keys: [String]) -> Int64? {
@@ -1933,42 +2219,88 @@ final class ServerManager: ObservableObject {
         AgentLabelFormatter.sanitized(raw)
     }
 
-    private func upsertLiveItemMessage(_ message: ChatMessage, itemId: String, key: ThreadKey, thread: ThreadState) {
+    private func upsertLiveItemMessage(_ message: ConversationItem, itemId: String, key: ThreadKey, thread: ThreadState) {
         if let index = liveItemMessageIndices[key]?[itemId],
-           thread.messages.indices.contains(index) {
-            thread.messages[index] = message
+           thread.items.indices.contains(index) {
+            thread.items[index] = message
         } else {
-            let index = thread.messages.count
-            thread.messages.append(message)
+            let index = thread.items.count
+            thread.items.append(message)
             liveItemMessageIndices[key, default: [:]][itemId] = index
         }
     }
 
-    private func completeLiveItemMessage(_ message: ChatMessage, itemId: String, key: ThreadKey, thread: ThreadState) {
+    private func completeLiveItemMessage(_ message: ConversationItem, itemId: String, key: ThreadKey, thread: ThreadState) {
         if let index = liveItemMessageIndices[key]?[itemId],
-           thread.messages.indices.contains(index) {
-            thread.messages[index] = message
+           thread.items.indices.contains(index) {
+            thread.items[index] = message
         } else {
-            thread.messages.append(message)
+            thread.items.append(message)
         }
         liveItemMessageIndices[key]?[itemId] = nil
     }
 
     private func appendCommandOutputDelta(_ delta: String, itemId: String, key: ThreadKey, thread: ThreadState) -> Bool {
         guard let index = liveItemMessageIndices[key]?[itemId],
-              thread.messages.indices.contains(index) else {
+              thread.items.indices.contains(index) else {
             return false
         }
-        thread.messages[index].text = mergeCommandOutput(thread.messages[index].text, delta: delta)
+        guard case .commandExecution(var data) = thread.items[index].content else {
+            return false
+        }
+        data.output = mergeCommandOutput(data.output ?? "", delta: delta)
+        thread.items[index].content = .commandExecution(data)
         return true
     }
 
     private func appendMcpProgress(_ progress: String, itemId: String, key: ThreadKey, thread: ThreadState) -> Bool {
         guard let index = liveItemMessageIndices[key]?[itemId],
-              thread.messages.indices.contains(index) else {
+              thread.items.indices.contains(index) else {
             return false
         }
-        thread.messages[index].text = mergeProgress(thread.messages[index].text, progress: progress)
+        guard case .mcpToolCall(var data) = thread.items[index].content else {
+            return false
+        }
+        data.progressMessages = mergeProgress(data.progressMessages, progress: progress)
+        thread.items[index].content = .mcpToolCall(data)
+        return true
+    }
+
+    private func appendProposedPlanDelta(_ delta: String, itemId: String, turnId: String?, key: ThreadKey, thread: ThreadState) -> Bool {
+        if let mappedIndex = liveItemMessageIndices[key]?[itemId],
+           thread.items.indices.contains(mappedIndex),
+           case .proposedPlan(var data) = thread.items[mappedIndex].content {
+            data.content = mergePlanText(data.content, delta: delta)
+            thread.items[mappedIndex].content = .proposedPlan(data)
+            if let turnId, thread.items[mappedIndex].sourceTurnId == nil {
+                thread.items[mappedIndex].sourceTurnId = turnId
+            }
+            thread.items[mappedIndex].timestamp = Date()
+            return true
+        }
+
+        if let turnId,
+           let index = proposedPlanItemIndex(for: turnId, in: thread),
+           thread.items.indices.contains(index),
+           case .proposedPlan(var data) = thread.items[index].content {
+            data.content = mergePlanText(data.content, delta: delta)
+            thread.items[index].content = .proposedPlan(data)
+            thread.items[index].timestamp = Date()
+            return true
+        }
+
+        let seedId = itemId.isEmpty ? "proposed-plan-\(turnId ?? UUID().uuidString)" : itemId
+        let item = ConversationItem(
+            id: seedId,
+            content: .proposedPlan(ConversationProposedPlanData(content: delta.trimmingCharacters(in: .newlines))),
+            sourceTurnId: turnId,
+            timestamp: Date()
+        )
+        if !itemId.isEmpty {
+            upsertLiveItemMessage(item, itemId: itemId, key: key, thread: thread)
+        } else {
+            thread.items.append(item)
+        }
         return true
     }
 
@@ -1991,11 +2323,121 @@ final class ServerManager: ObservableObject {
         return current + outputPrefix + chunk + "```"
     }
 
-    private func mergeProgress(_ current: String, progress: String) -> String {
-        if current.contains("\n\nProgress:\n") {
-            return current + "\n" + progress
+    private func mergePlanText(_ current: String, delta: String) -> String {
+        (current + delta).trimmingCharacters(in: .newlines)
+    }
+
+    private func mergeProgress(_ current: [String], progress: String) -> [String] {
+        var next = current
+        next.append(progress)
+        return next
+    }
+
+    private func handleTurnPlanUpdatedNotification(serverId: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any],
+              let turnId = extractString(params, keys: ["turnId", "turn_id"]),
+              !turnId.isEmpty else {
+            return
         }
-        return current + "\n\nProgress:\n" + progress
+
+        let threadId = extractString(params, keys: ["threadId", "thread_id"])
+        let key = resolveThreadKey(serverId: serverId, threadId: threadId)
+        guard let thread = threads[key] else { return }
+
+        upsertTurnTodoList(turnId: turnId, steps: planSteps(from: params["plan"]), thread: thread)
+        thread.updatedAt = Date()
+    }
+
+    private func proposedPlanItemIndex(for turnId: String, in thread: ThreadState) -> Int? {
+        for index in thread.items.indices.reversed() {
+            guard case .proposedPlan = thread.items[index].content else { continue }
+            let itemTurnId = thread.items[index].sourceTurnId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if itemTurnId == turnId {
+                return index
+            }
+        }
+
+        if thread.activeTurnId == turnId {
+            for index in thread.items.indices.reversed() {
+                guard case .proposedPlan = thread.items[index].content else { continue }
+                if thread.items[index].sourceTurnId == nil {
+                    return index
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func todoListItemIndex(for turnId: String, in thread: ThreadState) -> Int? {
+        for index in thread.items.indices.reversed() {
+            guard case .todoList = thread.items[index].content else { continue }
+            let itemTurnId = thread.items[index].sourceTurnId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if itemTurnId == turnId {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private func upsertTurnTodoList(turnId: String, steps: [ConversationPlanStep], thread: ThreadState) {
+        guard !steps.isEmpty else { return }
+
+        if let index = todoListItemIndex(for: turnId, in: thread),
+           thread.items.indices.contains(index) {
+            thread.items[index].content = .todoList(ConversationTodoListData(steps: steps))
+            thread.items[index].sourceTurnId = turnId
+            thread.items[index].timestamp = Date()
+            return
+        }
+
+        thread.items.append(
+            ConversationItem(
+                id: "turn-todo-\(turnId)",
+                content: .todoList(ConversationTodoListData(steps: steps)),
+                sourceTurnId: turnId,
+                timestamp: Date()
+            )
+        )
+    }
+
+    private func planSteps(from rawValue: Any?) -> [ConversationPlanStep] {
+        guard let values = rawValue as? [Any] else { return [] }
+        return values.compactMap { rawStep in
+            guard let stepDict = rawStep as? [String: Any],
+                  let step = extractString(stepDict, keys: ["step"]),
+                  !step.isEmpty else {
+                return nil
+            }
+            let rawStatus = extractString(stepDict, keys: ["status"]) ?? ConversationPlanStepStatus.pending.rawValue
+            return ConversationPlanStep(step: step, status: planStepStatus(from: rawStatus))
+        }
+    }
+
+    private func planStepStatus(from raw: String) -> ConversationPlanStepStatus {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "completed":
+            return .completed
+        case "inprogress", "in_progress":
+            return .inProgress
+        default:
+            return .pending
+        }
+    }
+
+    private func todoListSteps(from entries: [ResumedTodoListEntry]) -> [ConversationPlanStep] {
+        entries.compactMap { entry in
+            let step = (entry.step ?? entry.text)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !step.isEmpty else { return nil }
+            if let completed = entry.completed {
+                return ConversationPlanStep(step: step, status: completed ? .completed : .pending)
+            }
+            return ConversationPlanStep(
+                step: step,
+                status: planStepStatus(from: entry.status ?? ConversationPlanStepStatus.pending.rawValue)
+            )
+        }
     }
 
     private func handleTurnDiffNotification(serverId: String, data: Data) {
@@ -2016,24 +2458,30 @@ final class ServerManager: ObservableObject {
         let fileChangeCount = max(diffHeaders, 1)
         liveActivityFileChangeCounts[key] = fileChangeCount
 
-        guard let thread = threads[key],
-              let msg = systemMessage(title: "File Diff", body: "```diff\n\(diff)\n```") else { return }
+        guard let thread = threads[key] else { return }
+        let msg = ConversationItem(
+            id: notif.params.turnId ?? UUID().uuidString,
+            content: .turnDiff(ConversationTurnDiffData(diff: diff)),
+            sourceTurnId: notif.params.turnId,
+            sourceTurnIndex: nil,
+            timestamp: Date()
+        )
 
         if let turnId = notif.params.turnId, !turnId.isEmpty {
             upsertLiveTurnDiffMessage(msg, turnId: turnId, key: key, thread: thread)
         } else {
-            thread.messages.append(msg)
+            thread.items.append(msg)
         }
         thread.updatedAt = Date()
     }
 
-    private func upsertLiveTurnDiffMessage(_ message: ChatMessage, turnId: String, key: ThreadKey, thread: ThreadState) {
+    private func upsertLiveTurnDiffMessage(_ message: ConversationItem, turnId: String, key: ThreadKey, thread: ThreadState) {
         if let index = liveTurnDiffMessageIndices[key]?[turnId],
-           thread.messages.indices.contains(index) {
-            thread.messages[index] = message
+           thread.items.indices.contains(index) {
+            thread.items[index] = message
         } else {
-            let index = thread.messages.count
-            thread.messages.append(message)
+            let index = thread.items.count
+            thread.items.append(message)
             liveTurnDiffMessageIndices[key, default: [:]][turnId] = index
         }
     }
@@ -2069,16 +2517,26 @@ final class ServerManager: ObservableObject {
 
             updateLiveActivity(key: key, phase: .toolCall, toolName: command.isEmpty ? "shell" : command)
 
-            var lines: [String] = ["Status: inProgress"]
-            if !cwd.isEmpty { lines.append("Directory: \(cwd)") }
-            var body = lines.joined(separator: "\n")
-            if !command.isEmpty { body += "\n\nCommand:\n```bash\n\(command)\n```" }
-
-            guard let msg = systemMessage(title: "Command Execution", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .commandExecution(
+                    ConversationCommandExecutionData(
+                        command: command,
+                        cwd: cwd,
+                        status: "inProgress",
+                        output: nil,
+                        exitCode: nil,
+                        durationMs: nil,
+                        processId: nil,
+                        actions: []
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2089,10 +2547,14 @@ final class ServerManager: ObservableObject {
                 thread.updatedAt = Date()
                 return
             }
-            if let msg = systemMessage(title: "Command Output", body: "```text\n\(delta)\n```") {
-                thread.messages.append(msg)
-                thread.updatedAt = Date()
-            }
+            thread.items.append(
+                ConversationItem(
+                    id: UUID().uuidString,
+                    content: .note(ConversationNoteData(title: "Command Output", body: delta)),
+                    timestamp: Date()
+                )
+            )
+            thread.updatedAt = Date()
 
         case "exec_command_end":
             let itemId = extractString(eventPayload, keys: ["call_id", "callId"])
@@ -2102,24 +2564,27 @@ final class ServerManager: ObservableObject {
             let exitCode = extractString(eventPayload, keys: ["exit_code", "exitCode"])
             let durationMs = durationMillis(from: eventPayload["duration"])
 
-            var lines: [String] = ["Status: \(status)"]
-            if !cwd.isEmpty { lines.append("Directory: \(cwd)") }
-            if let exitCode, !exitCode.isEmpty { lines.append("Exit code: \(exitCode)") }
-            if let durationMs { lines.append("Duration: \(durationMs) ms") }
-
-            var body = lines.joined(separator: "\n")
-            if !command.isEmpty { body += "\n\nCommand:\n```bash\n\(command)\n```" }
-
             let output = extractCommandOutput(eventPayload)
-            if !output.isEmpty {
-                body += "\n\nOutput:\n```text\n\(output)\n```"
-            }
-
-            guard let msg = systemMessage(title: "Command Execution", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .commandExecution(
+                    ConversationCommandExecutionData(
+                        command: command,
+                        cwd: cwd,
+                        status: status,
+                        output: output.isEmpty ? nil : output,
+                        exitCode: exitCode.flatMap(Int.init),
+                        durationMs: durationMs,
+                        processId: nil,
+                        actions: []
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2129,20 +2594,28 @@ final class ServerManager: ObservableObject {
             let server = invocation.flatMap { extractString($0, keys: ["server"]) } ?? ""
             let tool = invocation.flatMap { extractString($0, keys: ["tool"]) } ?? ""
 
-            var lines: [String] = ["Status: inProgress"]
-            if !server.isEmpty || !tool.isEmpty {
-                lines.append("Tool: \(server.isEmpty ? tool : "\(server)/\(tool)")")
-            }
-            var body = lines.joined(separator: "\n")
-            if let args = invocation?["arguments"], let pretty = prettyJSON(args) {
-                body += "\n\nArguments:\n```json\n\(pretty)\n```"
-            }
-
-            guard let msg = systemMessage(title: "MCP Tool Call", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .mcpToolCall(
+                    ConversationMcpToolCallData(
+                        server: server,
+                        tool: tool,
+                        status: "inProgress",
+                        durationMs: nil,
+                        argumentsJSON: invocation.flatMap { $0["arguments"] }.flatMap(prettyJSON),
+                        contentSummary: nil,
+                        structuredContentJSON: nil,
+                        rawOutputJSON: nil,
+                        errorMessage: nil,
+                        progressMessages: []
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2159,22 +2632,28 @@ final class ServerManager: ObservableObject {
                 status = "failed"
             }
 
-            var lines: [String] = ["Status: \(status)"]
-            if !server.isEmpty || !tool.isEmpty {
-                lines.append("Tool: \(server.isEmpty ? tool : "\(server)/\(tool)")")
-            }
-            if let durationMs { lines.append("Duration: \(durationMs) ms") }
-            var body = lines.joined(separator: "\n")
-
-            if let result, let pretty = prettyJSON(result) {
-                body += "\n\nResult:\n```json\n\(pretty)\n```"
-            }
-
-            guard let msg = systemMessage(title: "MCP Tool Call", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .mcpToolCall(
+                    ConversationMcpToolCallData(
+                        server: server,
+                        tool: tool,
+                        status: status,
+                        durationMs: durationMs,
+                        argumentsJSON: invocation.flatMap { $0["arguments"] }.flatMap(prettyJSON),
+                        contentSummary: result.map(stringifyValue),
+                        structuredContentJSON: nil,
+                        rawOutputJSON: result.flatMap(prettyJSON),
+                        errorMessage: status == "failed" ? stringifyValue(result ?? "") : nil,
+                        progressMessages: []
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2182,15 +2661,21 @@ final class ServerManager: ObservableObject {
             let itemId = extractString(eventPayload, keys: ["call_id", "callId", "item_id", "itemId"])
             let query = extractString(eventPayload, keys: ["query"]) ?? ""
 
-            var lines: [String] = ["Status: inProgress"]
-            if !query.isEmpty { lines.append("Query: \(query)") }
-            let body = lines.joined(separator: "\n")
-
-            guard let msg = systemMessage(title: "Web Search", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .webSearch(
+                    ConversationWebSearchData(
+                        query: query,
+                        actionJSON: nil,
+                        isInProgress: true
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2199,18 +2684,21 @@ final class ServerManager: ObservableObject {
             let query = extractString(eventPayload, keys: ["query"]) ?? ""
             let status = extractString(eventPayload, keys: ["status"]) ?? "completed"
 
-            var lines: [String] = ["Status: \(status)"]
-            if !query.isEmpty { lines.append("Query: \(query)") }
-            var body = lines.joined(separator: "\n")
-            if let action = eventPayload["action"], let pretty = prettyJSON(action) {
-                body += "\n\nAction:\n```json\n\(pretty)\n```"
-            }
-
-            guard let msg = systemMessage(title: "Web Search", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .webSearch(
+                    ConversationWebSearchData(
+                        query: query,
+                        actionJSON: eventPayload["action"].flatMap(prettyJSON),
+                        isInProgress: status.lowercased().contains("progress")
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2219,17 +2707,21 @@ final class ServerManager: ObservableObject {
             let changeSummary = legacyPatchChangeBody(from: eventPayload["changes"])
             let autoApproved = (eventPayload["auto_approved"] as? Bool) == true
 
-            var body = "Status: inProgress"
-            body += "\nApproval: \(autoApproved ? "auto" : "requested")"
-            if !changeSummary.isEmpty {
-                body += "\n\n" + changeSummary
-            }
-
-            guard let msg = systemMessage(title: "File Change", body: body) else { return }
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .fileChange(
+                    ConversationFileChangeData(
+                        status: "inProgress",
+                        changes: legacyPatchChanges(from: eventPayload["changes"]),
+                        outputDelta: autoApproved ? "Approval: auto" : "Approval: requested"
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 upsertLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2240,22 +2732,22 @@ final class ServerManager: ObservableObject {
             let stderr = extractString(eventPayload, keys: ["stderr"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let changeSummary = legacyPatchChangeBody(from: eventPayload["changes"])
 
-            var body = "Status: \(status)"
-            if !changeSummary.isEmpty {
-                body += "\n\n" + changeSummary
-            }
-            if !stdout.isEmpty {
-                body += "\n\nOutput:\n```text\n\(stdout)\n```"
-            }
-            if !stderr.isEmpty {
-                body += "\n\nError:\n```text\n\(stderr)\n```"
-            }
-
-            guard let msg = systemMessage(title: "File Change", body: body) else { return }
+            let outputDelta = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            let msg = ConversationItem(
+                id: itemId ?? UUID().uuidString,
+                content: .fileChange(
+                    ConversationFileChangeData(
+                        status: status,
+                        changes: legacyPatchChanges(from: eventPayload["changes"]),
+                        outputDelta: outputDelta.isEmpty ? nil : outputDelta
+                    )
+                ),
+                timestamp: Date()
+            )
             if let itemId {
                 completeLiveItemMessage(msg, itemId: itemId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2264,13 +2756,19 @@ final class ServerManager: ObservableObject {
                 ?? extractString(eventPayload, keys: ["id", "turnId", "turn_id"])
             guard let diff = extractString(eventPayload, keys: ["unified_diff"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !diff.isEmpty,
-                  let msg = systemMessage(title: "File Diff", body: "```diff\n\(diff)\n```") else { return }
+                  !diff.isEmpty else { return }
+            let msg = ConversationItem(
+                id: turnId ?? UUID().uuidString,
+                content: .turnDiff(ConversationTurnDiffData(diff: diff)),
+                sourceTurnId: turnId,
+                sourceTurnIndex: nil,
+                timestamp: Date()
+            )
 
             if let turnId, !turnId.isEmpty {
                 upsertLiveTurnDiffMessage(msg, turnId: turnId, key: key, thread: thread)
             } else {
-                thread.messages.append(msg)
+                thread.items.append(msg)
             }
             thread.updatedAt = Date()
 
@@ -2328,29 +2826,56 @@ final class ServerManager: ObservableObject {
         return sections.joined(separator: "\n\n---\n\n")
     }
 
-    private func extractThreadId(from data: Data) -> String? {
-        struct Wrapper: Decodable {
-            struct Params: Decodable {
-                let threadId: String?
-                let conversationId: String?
-            }
-            let params: Params?
+    private func legacyPatchChanges(from rawChanges: Any?) -> [ConversationFileChangeEntry] {
+        guard let changes = rawChanges as? [String: Any], !changes.isEmpty else { return [] }
+        return changes.keys.sorted().compactMap { path in
+            guard let change = changes[path] as? [String: Any] else { return nil }
+            let kind = extractString(change, keys: ["type"]) ?? "update"
+            let diff = extractString(change, keys: ["unified_diff", "content"]) ?? ""
+            return ConversationFileChangeEntry(path: path, kind: kind, diff: diff)
         }
-        guard let params = (try? JSONDecoder().decode(Wrapper.self, from: data))?.params else { return nil }
-        return params.threadId ?? params.conversationId
     }
 
-    private func extractTurnId(from data: Data) -> String? {
+    private func decodeJSONOnBackground<T>(
+        from data: Data,
+        using decode: @escaping @Sendable (Data) -> T?
+    ) async -> T? {
+        await withCheckedContinuation { continuation in
+            notificationDecodeQueue.async {
+                continuation.resume(returning: decode(data))
+            }
+        }
+    }
+
+    private func extractThreadIdentifiers(from data: Data) async -> (threadId: String?, turnId: String?) {
         struct Wrapper: Decodable {
             struct Params: Decodable {
                 struct Turn: Decodable { let id: String? }
+
+                let threadId: String?
+                let conversationId: String?
                 let turn: Turn?
                 let turnId: String?
             }
+
             let params: Params?
         }
-        guard let params = (try? JSONDecoder().decode(Wrapper.self, from: data))?.params else { return nil }
-        return params.turn?.id ?? params.turnId
+
+        guard let params = await decodeJSONOnBackground(from: data, using: { data in
+            try? JSONDecoder().decode(Wrapper.self, from: data)
+        })?.params else {
+            return (nil, nil)
+        }
+
+        return (
+            params.threadId ?? params.conversationId,
+            params.turn?.id ?? params.turnId
+        )
+    }
+
+    private func extractThreadId(from data: Data) async -> String? {
+        let identifiers = await extractThreadIdentifiers(from: data)
+        return identifiers.threadId
     }
 
     func syncActiveThreadFromServer() async {
@@ -2407,9 +2932,6 @@ final class ServerManager: ObservableObject {
             defaultAgentRole: response.thread.agentRole ?? thread.agentRole
         )
 
-        // Suspend forwarding during batch update to avoid N separate objectWillChange publishes
-        threadSubscriptions[key]?.cancel()
-
         thread.cwd = response.cwd
         thread.model = response.model
         thread.modelProvider = response.modelProvider ?? response.model
@@ -2419,38 +2941,18 @@ final class ServerManager: ObservableObject {
         thread.rootThreadId = sanitizedLineageId(response.thread.rootThreadId) ?? thread.rootThreadId
         thread.agentNickname = sanitizedLineageId(response.thread.agentNickname) ?? thread.agentNickname
         thread.agentRole = sanitizedLineageId(response.thread.agentRole) ?? thread.agentRole
-        await refreshThreadContextWindow(for: key, cwd: response.cwd)
-        await refreshPersistedContextUsage(for: key)
+        scheduleThreadMetadataRefresh(for: key, cwd: response.cwd)
 
-        let needsMessageUpdate: Bool
-        if messagesEquivalent(thread.messages, restored) {
-            needsMessageUpdate = false
-        } else if shouldPreferLocalMessages(current: thread.messages, restored: restored) {
-            needsMessageUpdate = false
-        } else {
-            // Preserve IDs from matching existing messages so SwiftUI doesn't destroy/recreate cells
-            let existing = thread.messages
-            for i in restored.indices {
-                if i < existing.count,
-                   existing[i].role == restored[i].role,
-                   existing[i].text == restored[i].text {
-                    restored[i].id = existing[i].id
-                    if restored[i].widgetState == nil, existing[i].widgetState != nil {
-                        restored[i].widgetState = existing[i].widgetState
-                    }
-                }
-            }
-            thread.messages = restored
-            needsMessageUpdate = true
-        }
-
-        if needsMessageUpdate {
+        if !messagesEquivalent(thread.items, restored),
+           !shouldPreferLocalMessages(current: thread.items, restored: restored) {
+            let prepared = preparedRestoredMessages(
+                restored,
+                preservingIdentityFrom: thread.items
+            )
+            thread.items = prepared
             threadTurnCounts[key] = response.thread.turns.count
         }
 
-        // Reconnect forwarding and send a single publish
-        observeThread(thread)
-        objectWillChange.send()
         upsertAgentDirectory(
             serverId: key.serverId,
             threadId: response.thread.id,
@@ -2525,11 +3027,48 @@ final class ServerManager: ObservableObject {
         }
     }
 
-    private func rollbackDepthForMessage(_ message: ChatMessage, in key: ThreadKey) throws -> Int {
-        guard let selectedTurnIndex = message.sourceTurnIndex else {
+    private func scheduleThreadMetadataRefresh(
+        for key: ThreadKey,
+        cwd: String,
+        delayNanoseconds: UInt64 = 250_000_000
+    ) {
+        let normalizedCwd = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCwd.isEmpty else {
+            cancelThreadMetadataRefresh(for: key)
+            return
+        }
+
+        cancelThreadMetadataRefresh(for: key)
+        let token = UUID()
+        deferredThreadMetadataRefreshTokens[key] = token
+        deferredThreadMetadataRefreshTasks[key] = Task { [weak self] in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+            guard let self, !Task.isCancelled else { return }
+
+            await self.refreshThreadContextWindow(for: key, cwd: normalizedCwd)
+            guard !Task.isCancelled else { return }
+
+            await self.refreshPersistedContextUsage(for: key)
+            guard self.deferredThreadMetadataRefreshTokens[key] == token else { return }
+
+            self.deferredThreadMetadataRefreshTasks[key] = nil
+            self.deferredThreadMetadataRefreshTokens[key] = nil
+        }
+    }
+
+    private func cancelThreadMetadataRefresh(for key: ThreadKey) {
+        deferredThreadMetadataRefreshTasks[key]?.cancel()
+        deferredThreadMetadataRefreshTasks[key] = nil
+        deferredThreadMetadataRefreshTokens[key] = nil
+    }
+
+    private func rollbackDepthForItem(_ item: ConversationItem, in key: ThreadKey) throws -> Int {
+        guard let selectedTurnIndex = item.sourceTurnIndex else {
             throw NSError(domain: "Shitter", code: 1021, userInfo: [NSLocalizedDescriptionKey: "Message is missing turn metadata"])
         }
-        let totalTurns = threadTurnCounts[key] ?? inferredTurnCount(from: threads[key]?.messages ?? [])
+        let totalTurns = threadTurnCounts[key] ?? inferredTurnCount(from: threads[key]?.items ?? [])
         guard totalTurns > 0 else {
             throw NSError(domain: "Shitter", code: 1022, userInfo: [NSLocalizedDescriptionKey: "No turn history available"])
         }
@@ -2539,14 +3078,14 @@ final class ServerManager: ObservableObject {
         return max(totalTurns - selectedTurnIndex - 1, 0)
     }
 
-    private func inferredTurnCount(from messages: [ChatMessage]) -> Int {
-        if let maxTurnIndex = messages.compactMap(\.sourceTurnIndex).max() {
+    private func inferredTurnCount(from items: [ConversationItem]) -> Int {
+        if let maxTurnIndex = items.compactMap(\.sourceTurnIndex).max() {
             return maxTurnIndex + 1
         }
-        return messages.filter { $0.role == .user && $0.isFromUserTurnBoundary }.count
+        return items.filter { $0.isUserItem && $0.isFromUserTurnBoundary }.count
     }
 
-    private func shouldPreferLocalMessages(current: [ChatMessage], restored: [ChatMessage]) -> Bool {
+    private func shouldPreferLocalMessages(current: [ConversationItem], restored: [ConversationItem]) -> Bool {
         // Protect against transient/stale resume snapshots that can briefly
         // return fewer messages and cause the UI to "clear then refill".
         if !current.isEmpty && restored.isEmpty {
@@ -2561,40 +3100,101 @@ final class ServerManager: ObservableObject {
         return currentToolCount > restoredToolCount && restored.count <= current.count
     }
 
-    private func isToolSystemMessage(_ message: ChatMessage) -> Bool {
-        guard message.role == .system else { return false }
-        guard let title = systemTitle(from: message.text)?.lowercased() else { return false }
-        return title.contains("command")
-            || title.contains("file")
-            || title.contains("mcp")
-            || title.contains("web")
-            || title.contains("collab")
-            || title.contains("image")
+    private func isToolSystemMessage(_ item: ConversationItem) -> Bool {
+        switch item.content {
+        case .commandExecution,
+             .fileChange,
+             .turnDiff,
+             .mcpToolCall,
+             .dynamicToolCall,
+             .multiAgentAction,
+             .webSearch,
+             .widget:
+            return true
+        default:
+            return false
+        }
     }
 
-    private func systemTitle(from text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("### ") else { return nil }
-        let firstLine = trimmed.prefix(while: { $0 != "\n" })
-        let title = firstLine.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? nil : title
-    }
-
-    private func messagesEquivalent(_ lhs: [ChatMessage], _ rhs: [ChatMessage]) -> Bool {
+    private func messagesEquivalent(_ lhs: [ConversationItem], _ rhs: [ConversationItem]) -> Bool {
         guard lhs.count == rhs.count else { return false }
         for (left, right) in zip(lhs, rhs) {
-            guard left.role == right.role, left.text == right.text else { return false }
-            guard left.sourceTurnId == right.sourceTurnId else { return false }
-            guard left.sourceTurnIndex == right.sourceTurnIndex else { return false }
-            guard left.isFromUserTurnBoundary == right.isFromUserTurnBoundary else { return false }
-            guard left.agentNickname == right.agentNickname else { return false }
-            guard left.agentRole == right.agentRole else { return false }
-            guard left.images.count == right.images.count else { return false }
-            for (leftImage, rightImage) in zip(left.images, right.images) {
-                guard leftImage.data == rightImage.data else { return false }
-            }
+            guard sameRenderableMessage(left, right) else { return false }
         }
         return true
+    }
+
+    private func sameRenderableMessage(_ lhs: ConversationItem, _ rhs: ConversationItem) -> Bool {
+        lhs.renderDigest == rhs.renderDigest
+    }
+
+    private func preparedRestoredMessages(
+        _ restored: [ConversationItem],
+        preservingIdentityFrom existing: [ConversationItem]
+    ) -> [ConversationItem] {
+        var prepared = restored
+        for index in prepared.indices {
+            guard index < existing.count,
+                  sameRenderableMessage(existing[index], prepared[index]) else { continue }
+            prepared[index] = existing[index]
+        }
+        return prepared
+    }
+
+    private func cancelDeferredMessageHydration(for key: ThreadKey) {
+        deferredThreadMessageHydrationTasks[key]?.cancel()
+        deferredThreadMessageHydrationTasks[key] = nil
+    }
+
+    private func installRestoredMessages(
+        _ restored: [ConversationItem],
+        on thread: ThreadState,
+        key: ThreadKey,
+        staged: Bool
+    ) {
+        cancelDeferredMessageHydration(for: key)
+        thread.requiresOpenHydration = false
+
+        let prepared = preparedRestoredMessages(
+            restored,
+            preservingIdentityFrom: thread.items
+        )
+
+        guard staged, prepared.count > initialHydratedMessageCount else {
+            thread.items = prepared
+            return
+        }
+
+        let splitIndex = max(0, prepared.count - initialHydratedMessageCount)
+        let olderMessages = Array(prepared[..<splitIndex])
+        thread.items = Array(prepared[splitIndex...])
+
+        guard !olderMessages.isEmpty else { return }
+
+        deferredThreadMessageHydrationTasks[key] = Task { @MainActor [weak self, weak thread] in
+            guard let self, let thread else { return }
+
+            var nextEnd = olderMessages.count
+            while nextEnd > 0 {
+                if Task.isCancelled || self.threads[key] !== thread {
+                    break
+                }
+
+                let nextStart = max(0, nextEnd - hydrationChunkSize)
+                let chunk = Array(olderMessages[nextStart..<nextEnd])
+                thread.items.insert(contentsOf: chunk, at: 0)
+                nextEnd = nextStart
+
+                if nextEnd > 0 {
+                    await Task.yield()
+                    try? await Task.sleep(for: .milliseconds(16))
+                }
+            }
+
+            if self.deferredThreadMessageHydrationTasks[key]?.isCancelled == false {
+                self.deferredThreadMessageHydrationTasks[key] = nil
+            }
+        }
     }
 
     private func resolveThreadKey(serverId: String, threadId: String?) -> ThreadKey {
@@ -2666,6 +3266,11 @@ final class ServerManager: ObservableObject {
         deregisterPushProxy()
         endBackgroundTaskIfNeeded()
 
+        // Immediately mark all connections as connecting so the UI reflects reconnection in progress
+        for (_, conn) in connections {
+            conn.connectionHealth = .connecting
+        }
+
         let keysToSync = backgroundedTurnKeys.union(
             threads.compactMap { $0.value.hasTurnActive ? $0.key : nil }
         )
@@ -2676,6 +3281,9 @@ final class ServerManager: ObservableObject {
                 NSLog("[%@ bg] reconnecting server %@", ts, serverId)
                 conn.disconnect()
                 await conn.connect()
+                if conn.connectionHealth == .connecting {
+                    conn.connectionHealth = .disconnected
+                }
             }
 
             // First pass: read-only sync to get clean state without event subscription
@@ -2689,7 +3297,12 @@ final class ServerManager: ObservableObject {
                         defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
                         defaultAgentRole: response.thread.agentRole ?? thread.agentRole
                     )
-                    thread.messages = restored
+                    installRestoredMessages(
+                        restored,
+                        on: thread,
+                        key: key,
+                        staged: false
+                    )
                     if let model = response.model { thread.model = model }
                     if let cwd = response.cwd { thread.cwd = cwd }
                     let turnDone = response.thread.turns.last?.status == "completed"
@@ -2750,7 +3363,12 @@ final class ServerManager: ObservableObject {
                     defaultAgentNickname: response.thread.agentNickname ?? thread.agentNickname,
                     defaultAgentRole: response.thread.agentRole ?? thread.agentRole
                 )
-                thread.messages = restored
+                installRestoredMessages(
+                    restored,
+                    on: thread,
+                    key: key,
+                    staged: false
+                )
                 if let model = response.model { thread.model = model }
                 if let cwd = response.cwd { thread.cwd = cwd }
                 let lastTurn = response.thread.turns.last
@@ -2836,8 +3454,9 @@ final class ServerManager: ObservableObject {
         let now = CFAbsoluteTimeGetCurrent()
         let sinceLastUpdate = now - (liveActivityLastUpdateTimes[key] ?? 0)
         guard sinceLastUpdate > 2.0 else { return }
-        guard let lastMsg = thread.messages.last, lastMsg.role == .assistant else { return }
-        let snippet = snippetText(lastMsg.text)
+        guard let lastAssistant = thread.items.last(where: \.isAssistantItem),
+              let text = lastAssistant.assistantText else { return }
+        let snippet = snippetText(text)
         guard !snippet.isEmpty, snippet != liveActivityOutputSnippets[key] else { return }
         liveActivityOutputSnippets[key] = snippet
         let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
@@ -2874,8 +3493,9 @@ final class ServerManager: ObservableObject {
 
         let toolCount = liveActivityToolCallCounts[key, default: 0]
 
-        if let lastAssistant = thread?.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
-            liveActivityOutputSnippets[key] = snippetText(lastAssistant.text)
+        if let lastAssistant = thread?.items.last(where: { $0.isAssistantItem && !($0.assistantText ?? "").isEmpty }),
+           let text = lastAssistant.assistantText {
+            liveActivityOutputSnippets[key] = snippetText(text)
         }
 
         let phase: CodexTurnAttributes.ContentState.Phase = thread?.hasTurnActive == true ? .thinking : .completed
@@ -2950,56 +3570,59 @@ final class ServerManager: ObservableObject {
         return (try? JSONDecoder().decode([SavedServer].self, from: data)) ?? []
     }
 
-    // MARK: - Message Restoration
+    // MARK: - Conversation Restoration
 
     func restoredMessages(
         from turns: [ResumedTurn],
         serverId: String? = nil,
         defaultAgentNickname: String? = nil,
         defaultAgentRole: String? = nil
-    ) -> [ChatMessage] {
-        var restored: [ChatMessage] = []
+    ) -> [ConversationItem] {
+        var restored: [ConversationItem] = []
         restored.reserveCapacity(turns.count * 3)
         for (turnIndex, turn) in turns.enumerated() {
-            for item in turn.items {
-                if let msg = chatMessage(
+            for (itemIndex, item) in turn.items.enumerated() {
+                if let restoredItem = conversationItem(
                     from: item,
+                    itemId: "\(turn.id)-\(itemIndex)",
                     sourceTurnId: turn.id,
                     sourceTurnIndex: turnIndex,
                     serverId: serverId,
                     defaultAgentNickname: defaultAgentNickname,
                     defaultAgentRole: defaultAgentRole
                 ) {
-                    restored.append(msg)
+                    restored.append(restoredItem)
                 }
             }
         }
         return restored
     }
 
-    private func chatMessage(
+    private func conversationItem(
         from item: ResumedThreadItem,
+        itemId: String,
         sourceTurnId: String?,
         sourceTurnIndex: Int?,
         serverId: String?,
         defaultAgentNickname: String? = nil,
-        defaultAgentRole: String? = nil
-    ) -> ChatMessage? {
+        defaultAgentRole: String? = nil,
+        isInProgressEvent: Bool = false
+    ) -> ConversationItem? {
         switch item {
-        case .userMessage(let content):
+        case .userMessage(let content, let timestamp):
             let (text, images) = renderUserInput(content)
-            if text.isEmpty && images.isEmpty { return nil }
-            return ChatMessage(
-                role: .user,
-                text: text,
-                images: images,
+            guard !text.isEmpty || !images.isEmpty else { return nil }
+            return ConversationItem(
+                id: itemId,
+                content: .user(ConversationUserMessageData(text: text, images: images)),
                 sourceTurnId: sourceTurnId,
                 sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date(),
                 isFromUserTurnBoundary: true
             )
-        case .agentMessage(let text, _, let itemAgentId, let itemAgentNickname, let itemAgentRole):
+        case .agentMessage(let text, _, let itemAgentId, let itemAgentNickname, let itemAgentRole, let timestamp):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { return nil }
+            guard !trimmed.isEmpty else { return nil }
             let normalizedNickname = sanitizedLineageId(itemAgentNickname) ?? sanitizedLineageId(defaultAgentNickname)
             let normalizedRole = sanitizedLineageId(itemAgentRole) ?? sanitizedLineageId(defaultAgentRole)
             upsertAgentDirectory(
@@ -3009,389 +3632,319 @@ final class ServerManager: ObservableObject {
                 nickname: normalizedNickname,
                 role: normalizedRole
             )
-            return ChatMessage(
-                role: .assistant,
-                text: trimmed,
+            return ConversationItem(
+                id: itemId,
+                content: .assistant(
+                    ConversationAssistantMessageData(
+                        text: trimmed,
+                        agentNickname: normalizedNickname,
+                        agentRole: normalizedRole
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
                 sourceTurnIndex: sourceTurnIndex,
-                agentNickname: normalizedNickname,
-                agentRole: normalizedRole
+                timestamp: timestamp ?? Date()
             )
-        case .plan(let text):
-            return withTurnMetadata(
-                systemMessage(title: "Plan", body: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+        case .proposedPlan(let text, let timestamp):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return ConversationItem(
+                id: itemId,
+                content: .proposedPlan(ConversationProposedPlanData(content: trimmed)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .reasoning(let summary, let content):
-            let summaryText = summary
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            let detailText = content
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n\n")
-            var sections: [String] = []
-            if !summaryText.isEmpty { sections.append(summaryText) }
-            if !detailText.isEmpty { sections.append(detailText) }
-            return withTurnMetadata(
-                systemMessage(title: "Reasoning", body: sections.joined(separator: "\n\n")),
+        case .todoList(let entries, let timestamp):
+            let steps = todoListSteps(from: entries)
+            guard !steps.isEmpty else { return nil }
+            return ConversationItem(
+                id: itemId,
+                content: .todoList(ConversationTodoListData(steps: steps)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .commandExecution(let command, let cwd, let status, let output, let exitCode, let durationMs):
-            var lines: [String] = ["Status: \(status)"]
-            if !cwd.isEmpty { lines.append("Directory: \(cwd)") }
-            if let exitCode { lines.append("Exit code: \(exitCode)") }
-            if let durationMs { lines.append("Duration: \(durationMs) ms") }
-            var body = lines.joined(separator: "\n")
-            if !command.isEmpty { body += "\n\nCommand:\n```bash\n\(command)\n```" }
-            if let output {
-                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { body += "\n\nOutput:\n```text\n\(trimmed)\n```" }
-            }
-            return withTurnMetadata(
-                systemMessage(title: "Command Execution", body: body),
+        case .reasoning(let summary, let content, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .reasoning(ConversationReasoningData(summary: summary, content: content)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .fileChange(let changes, let status):
-            if changes.isEmpty {
-                return withTurnMetadata(
-                    systemMessage(title: "File Change", body: "Status: \(status)"),
-                    sourceTurnId: sourceTurnId,
-                    sourceTurnIndex: sourceTurnIndex
+        case .commandExecution(let command, let cwd, let status, let commandActions, let output, let exitCode, let durationMs, let processId, let timestamp):
+            let actions = commandActions.map { action in
+                let kind: ConversationCommandActionKind
+                switch action.type {
+                case "read":
+                    kind = .read
+                case "search":
+                    kind = .search
+                case "listFiles":
+                    kind = .listFiles
+                default:
+                    kind = .unknown
+                }
+                return ConversationCommandAction(
+                    kind: kind,
+                    command: action.command,
+                    name: action.name,
+                    path: action.path,
+                    query: action.query
                 )
             }
-            var parts: [String] = []
-            for change in changes {
-                var body = "Path: \(change.path)\nKind: \(change.kind)"
-                let diff = change.diff.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !diff.isEmpty { body += "\n\n```diff\n\(diff)\n```" }
-                parts.append(body)
-            }
-            return withTurnMetadata(
-                systemMessage(title: "File Change", body: "Status: \(status)\n\n" + parts.joined(separator: "\n\n---\n\n")),
+            return ConversationItem(
+                id: itemId,
+                content: .commandExecution(
+                    ConversationCommandExecutionData(
+                        command: command,
+                        cwd: cwd,
+                        status: status,
+                        output: output,
+                        exitCode: exitCode,
+                        durationMs: durationMs,
+                        processId: processId,
+                        actions: actions
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .mcpToolCall(let server, let tool, let status, let result, let error, let durationMs):
-            var lines: [String] = ["Status: \(status)"]
-            if !server.isEmpty || !tool.isEmpty {
-                lines.append("Tool: \(server.isEmpty ? tool : "\(server)/\(tool)")")
-            }
-            if let durationMs { lines.append("Duration: \(durationMs) ms") }
-            if let errorMessage = error?.message, !errorMessage.isEmpty {
-                lines.append("Error: \(errorMessage)")
-            }
-            var body = lines.joined(separator: "\n")
-            if let result {
-                let resultObject: [String: Any] = [
-                    "content": result.content.map { $0.value },
+        case .fileChange(let changes, let status, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .fileChange(
+                    ConversationFileChangeData(
+                        status: status,
+                        changes: changes.map { ConversationFileChangeEntry(path: $0.path, kind: $0.kind, diff: $0.diff) },
+                        outputDelta: nil
+                    )
+                ),
+                sourceTurnId: sourceTurnId,
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
+            )
+        case .mcpToolCall(let server, let tool, let status, let arguments, let result, let error, let durationMs, let timestamp):
+            let rawOutputJSON = result.flatMap { result -> String? in
+                prettyJSON([
+                    "content": result.content.map(\.value),
                     "structuredContent": result.structuredContent?.value ?? NSNull()
-                ]
-                if let pretty = prettyJSON(resultObject) {
-                    body += "\n\nResult:\n```json\n\(pretty)\n```"
-                }
+                ])
             }
-            return withTurnMetadata(
-                systemMessage(title: "MCP Tool Call", body: body),
+            let contentSummary = result?.content
+                .map { stringifyValue($0.value) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            let structuredJSON = result?.structuredContent.flatMap { prettyJSON($0.value) }
+            return ConversationItem(
+                id: itemId,
+                content: .mcpToolCall(
+                    ConversationMcpToolCallData(
+                        server: server,
+                        tool: tool,
+                        status: status,
+                        durationMs: durationMs,
+                        argumentsJSON: arguments.flatMap { prettyJSON($0.value) },
+                        contentSummary: contentSummary,
+                        structuredContentJSON: structuredJSON,
+                        rawOutputJSON: rawOutputJSON,
+                        errorMessage: error?.message,
+                        progressMessages: []
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .collabAgentToolCall(let tool, let status, let receiverThreadIds, let receiverAgents, let prompt):
-            var lines: [String] = ["Status: \(status)", "Tool: \(tool)"]
-            if !receiverThreadIds.isEmpty || !receiverAgents.isEmpty {
-                var labels: [String] = []
-                var seenIds: Set<String> = []
-                var consumedReceiverAgentIndexes: Set<Int> = []
-                let normalizedTargets = receiverThreadIds.compactMap { sanitizedLineageId($0) }
-                let listsAlignByIndex = normalizedTargets.count == receiverAgents.count
-
-                for agent in receiverAgents {
-                    upsertAgentDirectory(
-                        serverId: serverId,
-                        threadId: agent.threadId,
-                        agentId: agent.agentId,
-                        nickname: agent.agentNickname,
-                        role: agent.agentRole
-                    )
-                }
-
-                for (targetIndex, targetId) in normalizedTargets.enumerated() {
-                    if seenIds.contains(targetId) { continue }
-                    seenIds.insert(targetId)
-
-                    var matchedReason = "source=receiver-targets"
-                    var overrideIndex: Int?
-                    if let index = receiverAgents.firstIndex(where: { sanitizedLineageId($0.threadId) == targetId }) {
-                        overrideIndex = index
-                        matchedReason = "source=receiverAgents.threadId"
-                    } else if let index = receiverAgents.firstIndex(where: { sanitizedLineageId($0.agentId) == targetId }) {
-                        overrideIndex = index
-                        matchedReason = "source=receiverAgents.agentId"
-                    } else if listsAlignByIndex, receiverAgents.indices.contains(targetIndex) {
-                        overrideIndex = targetIndex
-                        matchedReason = "source=aligned-index-\(targetIndex)"
-                    }
-
-                    if let overrideIndex {
-                        consumedReceiverAgentIndexes.insert(overrideIndex)
-                    }
-                    let override = overrideIndex.flatMap { receiverAgents[$0] }
-                    let overrideThreadId = sanitizedLineageId(override?.threadId)
-                    let overrideAgentId = sanitizedLineageId(override?.agentId)
-                    let directoryThreadMatch = mergedAgentDirectoryEntry(serverId: serverId, threadId: targetId, agentId: nil) != nil
-                    let directoryAgentMatch = mergedAgentDirectoryEntry(serverId: serverId, threadId: nil, agentId: targetId) != nil
-                    let prefersAgentTarget: Bool
-                    if overrideAgentId == targetId {
-                        prefersAgentTarget = true
-                    } else if overrideThreadId == targetId {
-                        prefersAgentTarget = false
-                    } else if directoryAgentMatch && !directoryThreadMatch {
-                        prefersAgentTarget = true
-                    } else if directoryThreadMatch && !directoryAgentMatch {
-                        prefersAgentTarget = false
-                    } else {
-                        prefersAgentTarget = overrideThreadId == nil && overrideAgentId != nil
-                    }
-
-                    let directoryEntry = mergedAgentDirectoryEntry(serverId: serverId, threadId: targetId, agentId: targetId)
-                    let lookupThreadId = overrideThreadId
-                        ?? directoryEntry?.threadId
-                        ?? (prefersAgentTarget ? nil : targetId)
-                    let fallback = serverId.flatMap { server in
-                        lookupThreadId.map { resolveAgentIdentity(serverId: server, threadId: $0) }
-                    }
-
-                    let resolvedThreadId = overrideThreadId
-                        ?? directoryEntry?.threadId
-                        ?? fallback?.threadId
-                        ?? (prefersAgentTarget ? nil : targetId)
-                    let resolvedAgentId = overrideAgentId
-                        ?? directoryEntry?.agentId
-                        ?? fallback?.agentId
-                        ?? (prefersAgentTarget ? targetId : nil)
-                    let resolvedNickname = sanitizedLineageId(override?.agentNickname)
-                        ?? directoryEntry?.nickname
-                        ?? fallback?.nickname
-                    let resolvedRole = sanitizedLineageId(override?.agentRole)
-                        ?? directoryEntry?.role
-                        ?? fallback?.role
-
-                    upsertAgentDirectory(
-                        serverId: serverId,
-                        threadId: resolvedThreadId,
-                        agentId: resolvedAgentId,
-                        nickname: resolvedNickname,
-                        role: resolvedRole
-                    )
-
-                    let label = formatAgentLabel(
-                        nickname: resolvedNickname,
-                        role: resolvedRole,
-                        fallbackThreadId: resolvedThreadId ?? resolvedAgentId ?? targetId
-                    ) ?? targetId
-                    labels.append(label)
-
-                    if resolvedNickname != nil || resolvedRole != nil {
-                        logTargetResolution(
-                            targetId: targetId,
-                            resolvedLabel: label,
-                            reason: "resolved-via=\(matchedReason)"
-                        )
-                    } else {
-                        logTargetResolution(
-                            targetId: targetId,
-                            resolvedLabel: label,
-                            reason: "unresolved reason=no-metadata \(matchedReason)"
-                        )
-                    }
-                    if let resolvedThreadId {
-                        seenIds.insert(resolvedThreadId)
-                    }
-                    if let resolvedAgentId {
-                        seenIds.insert(resolvedAgentId)
-                    }
-                }
-
-                for (agentIndex, agent) in receiverAgents.enumerated() {
-                    if consumedReceiverAgentIndexes.contains(agentIndex) { continue }
-                    let normalizedThreadId = sanitizedLineageId(agent.threadId)
-                    let normalizedAgentId = sanitizedLineageId(agent.agentId)
-                    let targetId = normalizedThreadId ?? normalizedAgentId
-                    guard let targetId else { continue }
-                    if seenIds.contains(targetId) { continue }
-                    seenIds.insert(targetId)
-
-                    let directoryEntry = mergedAgentDirectoryEntry(
-                        serverId: serverId,
-                        threadId: normalizedThreadId,
-                        agentId: normalizedAgentId
-                    )
-                    let lookupThreadId = normalizedThreadId ?? directoryEntry?.threadId
-                    let fallback = serverId.flatMap { server in
-                        lookupThreadId.map { resolveAgentIdentity(serverId: server, threadId: $0) }
-                    }
-                    let resolvedThreadId = normalizedThreadId ?? directoryEntry?.threadId ?? fallback?.threadId
-                    let resolvedAgentId = normalizedAgentId
-                        ?? directoryEntry?.agentId
-                        ?? fallback?.agentId
-                        ?? (resolvedThreadId == nil ? targetId : nil)
-                    let resolvedNickname = sanitizedLineageId(agent.agentNickname)
-                        ?? directoryEntry?.nickname
-                        ?? fallback?.nickname
-                    let resolvedRole = sanitizedLineageId(agent.agentRole)
-                        ?? directoryEntry?.role
-                        ?? fallback?.role
-
-                    upsertAgentDirectory(
-                        serverId: serverId,
-                        threadId: resolvedThreadId,
-                        agentId: resolvedAgentId,
-                        nickname: resolvedNickname,
-                        role: resolvedRole
-                    )
-                    let label = formatAgentLabel(
-                        nickname: resolvedNickname,
-                        role: resolvedRole,
-                        fallbackThreadId: resolvedThreadId ?? resolvedAgentId ?? targetId
-                    ) ?? targetId
-                    labels.append(label)
-
-                    if resolvedNickname != nil || resolvedRole != nil {
-                        logTargetResolution(
-                            targetId: targetId,
-                            resolvedLabel: label,
-                            reason: "resolved-via=receiver-agent-ref"
-                        )
-                    } else {
-                        logTargetResolution(
-                            targetId: targetId,
-                            resolvedLabel: label,
-                            reason: "unresolved reason=receiver-agent-ref-missing-metadata"
-                        )
-                    }
-                    if let resolvedThreadId {
-                        seenIds.insert(resolvedThreadId)
-                    }
-                    if let resolvedAgentId {
-                        seenIds.insert(resolvedAgentId)
-                    }
-                }
-
-                if !labels.isEmpty {
-                    lines.append("Targets: \(labels.joined(separator: ", "))")
-                }
+        case .collabAgentToolCall(let tool, let status, let receiverThreadIds, let receiverAgents, let agentsStates, let prompt, let timestamp):
+            let targets = receiverThreadIds.compactMap { targetId -> String? in
+                let normalizedTarget = sanitizedLineageId(targetId)
+                let matchingAgent = receiverAgents.first { sanitizedLineageId($0.threadId) == normalizedTarget || sanitizedLineageId($0.agentId) == normalizedTarget }
+                let label = formatAgentLabel(
+                    nickname: matchingAgent?.agentNickname,
+                    role: matchingAgent?.agentRole,
+                    fallbackThreadId: normalizedTarget
+                )
+                return label ?? normalizedTarget
             }
-            if let prompt {
-                let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    lines.append("")
-                    lines.append("Prompt:")
-                    lines.append(trimmed)
-                }
-            }
-            return withTurnMetadata(
-                systemMessage(title: "Collaboration", body: lines.joined(separator: "\n")),
+            let states = agentsStates.map { key, value in
+                ConversationMultiAgentState(
+                    targetId: key,
+                    status: value.status,
+                    message: value.message
+                )
+            }.sorted { $0.targetId < $1.targetId }
+            return ConversationItem(
+                id: itemId,
+                content: .multiAgentAction(
+                    ConversationMultiAgentActionData(
+                        tool: tool,
+                        status: status,
+                        prompt: prompt,
+                        targets: targets,
+                        agentStates: states
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .webSearch(let query, let action):
-            var lines: [String] = ["Status: completed"]
-            if !query.isEmpty { lines.append("Query: \(query)") }
-            if let action, let pretty = prettyJSON(action.value) {
-                lines.append("")
-                lines.append("Action:")
-                lines.append("```json\n\(pretty)\n```")
-            }
-            return withTurnMetadata(
-                systemMessage(title: "Web Search", body: lines.joined(separator: "\n")),
+        case .webSearch(let query, let action, let isInProgress, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .webSearch(
+                    ConversationWebSearchData(
+                        query: query,
+                        actionJSON: action.flatMap { prettyJSON($0.value) },
+                        isInProgress: isInProgress
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .imageView(let path):
-            return withTurnMetadata(
-                systemMessage(title: "Image View", body: "Path: \(path)"),
+        case .imageView(let path, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .note(ConversationNoteData(title: "Image View", body: "Path: \(path)")),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .enteredReviewMode(let review):
-            return withTurnMetadata(
-                systemMessage(title: "Review Mode", body: "Entered review: \(review)"),
+        case .enteredReviewMode(let review, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .divider(.reviewEntered(review)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .exitedReviewMode(let review):
-            return withTurnMetadata(
-                systemMessage(title: "Review Mode", body: "Exited review: \(review)"),
+        case .exitedReviewMode(let review, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .divider(.reviewExited(review)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .dynamicToolCall(let tool, let arguments, let status, _, let durationMs):
+        case .dynamicToolCall(let tool, let arguments, let status, let contentItems, let success, let durationMs, let timestamp):
             if tool == GenerativeUITools.readMeToolName {
                 return nil
             }
             if tool == GenerativeUITools.showWidgetToolName {
                 guard let args = arguments?.value as? [String: Any],
-                      let code = args["widget_code"] as? String, !code.isEmpty else { return nil }
-                let widget = WidgetState.fromArguments(args, callId: UUID().uuidString, isFinalized: true)
-                var msg = ChatMessage(
-                    role: .system,
-                    text: "### Widget\nstatus: completed\n\nWidget: \(widget.title)",
-                    widgetState: widget
+                      let code = args["widget_code"] as? String,
+                      !code.isEmpty else {
+                    return nil
+                }
+                let widget = WidgetState.fromArguments(args, callId: itemId, isFinalized: status.lowercased().contains("complete"))
+                return ConversationItem(
+                    id: itemId,
+                    content: .widget(ConversationWidgetData(widgetState: widget, status: status)),
+                    sourceTurnId: sourceTurnId,
+                    sourceTurnIndex: sourceTurnIndex,
+                    timestamp: timestamp ?? Date()
                 )
-                msg.sourceTurnId = sourceTurnId
-                msg.sourceTurnIndex = sourceTurnIndex
-                return msg
             }
-            var lines: [String] = ["Status: \(status)", "Tool: \(tool)"]
-            if let durationMs { lines.append("Duration: \(durationMs) ms") }
-            return withTurnMetadata(
-                systemMessage(title: "Dynamic Tool Call", body: lines.joined(separator: "\n")),
+            let contentSummary = contentItems.map { item in
+                stringifyValue(item.value)
+            } ?? ""
+            return ConversationItem(
+                id: itemId,
+                content: .dynamicToolCall(
+                    ConversationDynamicToolCallData(
+                        tool: tool,
+                        status: status,
+                        durationMs: durationMs,
+                        success: success,
+                        argumentsJSON: arguments.flatMap { prettyJSON($0.value) },
+                        contentSummary: contentSummary
+                    )
+                ),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .contextCompaction:
-            return withTurnMetadata(
-                systemMessage(title: "Context", body: "Context compaction occurred."),
+        case .contextCompaction(let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .divider(.contextCompaction(isComplete: !isInProgressEvent)),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
-        case .unknown(let type):
-            return withTurnMetadata(
-                systemMessage(title: "Event", body: "Unhandled item type: \(type)"),
+        case .unknown(let type, let timestamp):
+            return ConversationItem(
+                id: itemId,
+                content: .note(ConversationNoteData(title: "Event", body: "Unhandled item type: \(type)")),
                 sourceTurnId: sourceTurnId,
-                sourceTurnIndex: sourceTurnIndex
+                sourceTurnIndex: sourceTurnIndex,
+                timestamp: timestamp ?? Date()
             )
         case .ignored:
             return nil
         }
     }
 
-    private func withTurnMetadata(
-        _ message: ChatMessage?,
+    private func makeUserItem(
+        text: String,
+        images: [ChatImage] = [],
         sourceTurnId: String?,
-        sourceTurnIndex: Int?
-    ) -> ChatMessage? {
-        guard let message else { return nil }
-        return ChatMessage(
-            role: message.role,
-            text: message.text,
-            images: message.images,
+        sourceTurnIndex: Int?,
+        isBoundary: Bool,
+        timestamp: Date = Date()
+    ) -> ConversationItem {
+        ConversationItem(
+            id: UUID().uuidString,
+            content: .user(ConversationUserMessageData(text: text, images: images)),
             sourceTurnId: sourceTurnId,
             sourceTurnIndex: sourceTurnIndex,
-            isFromUserTurnBoundary: message.isFromUserTurnBoundary,
-            agentNickname: message.agentNickname,
-            agentRole: message.agentRole
+            timestamp: timestamp,
+            isFromUserTurnBoundary: isBoundary
         )
     }
 
-    private func systemMessage(title: String, body: String) -> ChatMessage? {
-        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return ChatMessage(role: .system, text: "### \(title)\n\(trimmed)")
+    private func makeAssistantItem(
+        id: String = UUID().uuidString,
+        text: String,
+        agentNickname: String?,
+        agentRole: String?,
+        sourceTurnId: String?,
+        sourceTurnIndex: Int?,
+        timestamp: Date = Date()
+    ) -> ConversationItem {
+        ConversationItem(
+            id: id,
+            content: .assistant(
+                ConversationAssistantMessageData(
+                    text: text,
+                    agentNickname: agentNickname,
+                    agentRole: agentRole
+                )
+            ),
+            sourceTurnId: sourceTurnId,
+            sourceTurnIndex: sourceTurnIndex,
+            timestamp: timestamp
+        )
+    }
+
+    private func makeErrorItem(
+        title: String = "Error",
+        message: String,
+        details: String? = nil,
+        sourceTurnId: String?,
+        sourceTurnIndex: Int?,
+        timestamp: Date = Date()
+    ) -> ConversationItem {
+        ConversationItem(
+            id: UUID().uuidString,
+            content: .error(ConversationSystemErrorData(title: title, message: message, details: details)),
+            sourceTurnId: sourceTurnId,
+            sourceTurnIndex: sourceTurnIndex,
+            timestamp: timestamp
+        )
     }
 
     private func renderUserInput(_ content: [ResumedUserInput]) -> (String, [ChatImage]) {
@@ -3444,5 +3997,21 @@ final class ServerManager: ObservableObject {
         }
         if text.hasSuffix("\n") { text.removeLast() }
         return text
+    }
+
+    private func stringifyValue(_ value: Any) -> String {
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        if let bool = value as? Bool {
+            return bool ? "true" : "false"
+        }
+        if let json = prettyJSON(value) {
+            return json.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

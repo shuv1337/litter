@@ -22,22 +22,27 @@ final class CodexIOSUITests: XCTestCase {
             "Unable to tap the .203 server"
         )
         _ = waitForDiscoveryDismissed(in: app, timeout: 20)
-        ensureSidebarClosed(in: app)
-        _ = waitForSidebarClosed(in: app, timeout: 8)
-        _ = waitForMainContentReady(in: app, timeout: 12)
+        XCTAssertTrue(waitForHomeContentReady(in: app, timeout: 12), "Home dashboard did not load")
         sleep(1)
-        snapshot("02AfterSelecting203Server")
+        snapshot("02HomeLoaded")
 
-        XCTAssertTrue(openSidebar(in: app), "Unable to open sidebar")
-        XCTAssertTrue(waitForAnySidebarSession(in: app, timeout: 12), "No sidebar sessions to select")
+        XCTAssertTrue(openFirstConnectedServer(in: app), "Unable to open sessions screen")
+        XCTAssertTrue(waitForSessionsScreen(in: app, timeout: 8), "Sessions screen did not appear")
+        XCTAssertTrue(waitForAnySession(in: app, timeout: 12), "No sessions to select")
         sleep(1)
-        snapshot("03SidebarOpened")
+        snapshot("03SessionsLoaded")
 
-        XCTAssertTrue(selectSidebarSession(in: app), "Unable to select a sidebar session")
-        _ = waitForSidebarClosed(in: app, timeout: 8)
-        _ = waitForMainContentReady(in: app, timeout: 10)
+        XCTAssertTrue(selectFirstSession(in: app), "Unable to open a session")
+        XCTAssertTrue(waitForConversationLoaded(in: app, timeout: 10), "Conversation view did not load")
         sleep(2)
-        snapshot("04SidebarItemLoaded")
+        snapshot("04ConversationLoaded")
+
+        let backButton = app.buttons["header.homeButton"]
+        XCTAssertTrue(backButton.waitForExistence(timeout: 4), "Conversation header back button missing")
+        backButton.tap()
+        XCTAssertTrue(waitForSessionsScreen(in: app, timeout: 8), "Back did not return to sessions")
+        sleep(1)
+        snapshot("05ReturnedToSessions")
     }
 
     private func presentDiscovery(in app: XCUIApplication) -> Bool {
@@ -45,25 +50,15 @@ final class CodexIOSUITests: XCTestCase {
             return true
         }
 
-        let connectButton = app.buttons["Connect to Server"]
-        if connectButton.waitForExistence(timeout: 2), connectButton.isHittable {
-            connectButton.tap()
-            if waitForDiscoveryVisible(in: app, timeout: 8) {
-                return true
-            }
-        }
-
-        guard openSidebar(in: app) else { return false }
-
-        let addServerButton = app.buttons["sidebar.addServerButton"]
-        if addServerButton.waitForExistence(timeout: 3), addServerButton.isHittable {
-            addServerButton.tap()
+        let primaryConnectButton = app.buttons["Connect Server"]
+        if primaryConnectButton.waitForExistence(timeout: 2), primaryConnectButton.isHittable {
+            primaryConnectButton.tap()
             return waitForDiscoveryVisible(in: app, timeout: 8)
         }
 
-        let sidebarConnectButton = app.buttons["sidebar.connectButton"]
-        if sidebarConnectButton.waitForExistence(timeout: 2), sidebarConnectButton.isHittable {
-            sidebarConnectButton.tap()
+        let legacyConnectButton = app.buttons["Connect to Server"]
+        if legacyConnectButton.waitForExistence(timeout: 2), legacyConnectButton.isHittable {
+            legacyConnectButton.tap()
             return waitForDiscoveryVisible(in: app, timeout: 8)
         }
 
@@ -155,8 +150,7 @@ final class CodexIOSUITests: XCTestCase {
     private func tapPreferredHostText(in app: XCUIApplication, hostFragment: String) -> Bool {
         let hostTexts = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", hostFragment))
         let first = hostTexts.firstMatch
-        guard first.waitForExistence(timeout: 1) else { return false }
-        guard first.isHittable else { return false }
+        guard first.waitForExistence(timeout: 1), first.isHittable else { return false }
         first.tap()
         return true
     }
@@ -175,90 +169,38 @@ final class CodexIOSUITests: XCTestCase {
         return discoveryList.exists && discoveryList.isHittable
     }
 
-    private func openSidebar(in app: XCUIApplication) -> Bool {
-        if isSidebarOpen(in: app) {
-            return true
-        }
-
-        let toggle = app.buttons["header.sidebarButton"]
-        if toggle.waitForExistence(timeout: 8), toggle.isHittable {
-            toggle.tap()
-        }
-        if waitForSidebarOpen(in: app, timeout: 3) {
-            return true
-        }
-
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.5))
-        start.press(forDuration: 0.02, thenDragTo: end)
-
-        return waitForSidebarOpen(in: app, timeout: 4)
-    }
-
-    private func waitForSidebarOpen(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        waitUntil(timeout: timeout) { isSidebarOpen(in: app) }
-    }
-
-    private func ensureSidebarClosed(in app: XCUIApplication) {
-        guard isSidebarOpen(in: app) else { return }
-
-        let toggle = app.buttons["header.sidebarButton"]
-        if toggle.exists && toggle.isHittable {
-            toggle.tap()
-        }
-        if waitForSidebarClosed(in: app, timeout: 2) {
-            return
-        }
-
-        // Tap away on the dimmed area.
-        let dismissPoint = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
-        dismissPoint.tap()
-    }
-
-    private func waitForSidebarClosed(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let sidebar = identifiedElement("sidebar.container", in: app)
+    private func waitForHomeContentReady(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let connectedServerRow = app.descendants(matching: .any).matching(identifier: "home.connectedServerRow")
+        let connectButton = app.buttons["Connect Server"]
         return waitUntil(timeout: timeout) {
-            guard sidebar.exists else { return true }
-            return sidebar.frame.maxX <= 0
+            (connectedServerRow.firstMatch.exists && connectedServerRow.firstMatch.isHittable) ||
+                (connectButton.exists && connectButton.isHittable)
         }
     }
 
-    private func isSidebarOpen(in app: XCUIApplication) -> Bool {
-        let newSession = app.buttons["sidebar.newSessionButton"]
-        if newSession.exists && newSession.isHittable {
-            return true
-        }
-
-        let addServer = app.buttons["sidebar.addServerButton"]
-        if addServer.exists && addServer.isHittable {
-            return true
-        }
-
-        let connect = app.buttons["sidebar.connectButton"]
-        if connect.exists && connect.isHittable {
-            return true
-        }
-
-        let rows = app.descendants(matching: .any).matching(identifier: "sidebar.sessionRow")
-        if rows.firstMatch.exists && rows.firstMatch.isHittable {
-            return true
-        }
-
-        let sidebar = identifiedElement("sidebar.container", in: app)
-        guard sidebar.exists else { return false }
-        return sidebar.frame.minX > -40 && sidebar.isHittable
+    private func openFirstConnectedServer(in app: XCUIApplication) -> Bool {
+        let rows = app.descendants(matching: .any).matching(identifier: "home.connectedServerRow")
+        let firstRow = rows.firstMatch
+        guard firstRow.waitForExistence(timeout: 8), firstRow.isHittable else { return false }
+        firstRow.tap()
+        return true
     }
 
-    private func waitForAnySidebarSession(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let rows = app.descendants(matching: .any).matching(identifier: "sidebar.sessionRow")
+    private func waitForSessionsScreen(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let sessionsContainer = identifiedElement("sessions.container", in: app)
         return waitUntil(timeout: timeout) {
-            rows.firstMatch.exists
+            sessionsContainer.exists && sessionsContainer.isHittable
         }
     }
 
-    private func selectSidebarSession(in app: XCUIApplication) -> Bool {
-        let sidebar = identifiedElement("sidebar.container", in: app)
-        let rowQuery = app.descendants(matching: .any).matching(identifier: "sidebar.sessionRow")
+    private func waitForAnySession(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let rows = app.descendants(matching: .any).matching(identifier: "sessions.sessionRow")
+        return waitUntil(timeout: timeout) { rows.firstMatch.exists }
+    }
+
+    private func selectFirstSession(in app: XCUIApplication) -> Bool {
+        let sessionsContainer = identifiedElement("sessions.container", in: app)
+        let rowQuery = app.descendants(matching: .any).matching(identifier: "sessions.sessionRow")
 
         for _ in 0..<8 {
             let count = min(rowQuery.count, 12)
@@ -271,14 +213,14 @@ final class CodexIOSUITests: XCTestCase {
                     }
                 }
             }
-            if sidebar.exists {
-                sidebar.swipeUp()
+            if sessionsContainer.exists {
+                sessionsContainer.swipeUp()
             } else {
                 break
             }
         }
 
-        let titles = app.staticTexts.matching(identifier: "sidebar.sessionTitle")
+        let titles = app.staticTexts.matching(identifier: "sessions.sessionTitle")
         let titleCount = min(titles.count, 12)
         for index in 0..<titleCount {
             let title = titles.element(boundBy: index)
@@ -291,9 +233,11 @@ final class CodexIOSUITests: XCTestCase {
         return false
     }
 
-    private func waitForMainContentReady(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        waitUntil(timeout: timeout) {
-            app.buttons["header.sidebarButton"].exists && !isDiscoveryVisible(in: app)
+    private func waitForConversationLoaded(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let backButton = app.buttons["header.homeButton"]
+        let sessionsContainer = identifiedElement("sessions.container", in: app)
+        return waitUntil(timeout: timeout) {
+            backButton.exists && backButton.isHittable && (!sessionsContainer.exists || !sessionsContainer.isHittable)
         }
     }
 

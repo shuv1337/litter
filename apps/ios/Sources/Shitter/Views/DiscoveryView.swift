@@ -3,8 +3,8 @@ import Network
 
 struct DiscoveryView: View {
     var onServerSelected: ((DiscoveredServer) -> Void)?
-    @EnvironmentObject var serverManager: ServerManager
-    @StateObject private var discovery: NetworkDiscovery
+    @Environment(ServerManager.self) private var serverManager
+    @State private var discovery: NetworkDiscovery
     @State private var sshServer: DiscoveredServer?
     @State private var pendingSSHServer: DiscoveredServer?
     @State private var showManualEntry = false
@@ -18,7 +18,7 @@ struct DiscoveryView: View {
     @State private var connectingServer: DiscoveredServer?
     @State private var wakingServer: DiscoveredServer?
     @State private var connectError: String?
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     private let autoStartDiscovery: Bool
     private let initialServers: [DiscoveredServer]
 
@@ -29,7 +29,7 @@ struct DiscoveryView: View {
         initialServers: [DiscoveredServer] = []
     ) {
         self.onServerSelected = onServerSelected
-        _discovery = StateObject(wrappedValue: discovery ?? NetworkDiscovery())
+        _discovery = State(initialValue: discovery ?? NetworkDiscovery())
         self.autoStartDiscovery = autoStartDiscovery
         self.initialServers = initialServers
     }
@@ -43,7 +43,26 @@ struct DiscoveryView: View {
         let saved = serverManager.loadSavedServers()
             .map { $0.toDiscoveredServer() }
             .filter { $0.source != .local }
-        return mergeServers(discovered + saved)
+        let discoveredByHost = discovered.reduce(into: [String: DiscoveredServer]()) { partialResult, server in
+            partialResult[normalizedServerKey(for: server)] = server
+        }
+        let reconciledSaved = saved.map { savedServer in
+            guard let liveServer = discoveredByHost[normalizedServerKey(for: savedServer)] else {
+                return savedServer
+            }
+            return DiscoveredServer(
+                id: savedServer.id,
+                name: savedServer.name,
+                hostname: savedServer.hostname,
+                port: liveServer.port,
+                sshPort: liveServer.sshPort ?? savedServer.sshPort,
+                source: liveServer.source,
+                hasCodexServer: liveServer.hasCodexServer,
+                wakeMAC: savedServer.wakeMAC ?? liveServer.wakeMAC,
+                sshPortForwardingEnabled: savedServer.sshPortForwardingEnabled || liveServer.sshPortForwardingEnabled
+            )
+        }
+        return mergeServers(discovered + reconciledSaved)
     }
 
     private func mergeServers(_ candidates: [DiscoveredServer]) -> [DiscoveredServer] {
@@ -60,14 +79,14 @@ struct DiscoveryView: View {
         }
 
         for candidate in candidates {
-            let key = candidate.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let mergeKey = key.isEmpty ? candidate.id : key
+            let mergeKey = normalizedServerKey(for: candidate)
             if let existing = merged[mergeKey] {
                 let candidateWithWakeMAC = DiscoveredServer(
                     id: candidate.id,
                     name: candidate.name,
                     hostname: candidate.hostname,
                     port: candidate.port,
+                    sshPort: candidate.sshPort ?? existing.sshPort,
                     source: candidate.source,
                     hasCodexServer: candidate.hasCodexServer,
                     wakeMAC: candidate.wakeMAC ?? existing.wakeMAC,
@@ -85,6 +104,7 @@ struct DiscoveryView: View {
                         name: existing.name,
                         hostname: existing.hostname,
                         port: existing.port,
+                        sshPort: existing.sshPort ?? candidateWithWakeMAC.sshPort,
                         source: existing.source,
                         hasCodexServer: existing.hasCodexServer,
                         wakeMAC: candidateWithWakeMAC.wakeMAC,
@@ -104,6 +124,11 @@ struct DiscoveryView: View {
             }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+    }
+
+    private func normalizedServerKey(for server: DiscoveredServer) -> String {
+        let key = server.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return key.isEmpty ? server.id : key
     }
 
     private func applyInitialServersIfNeeded() {
@@ -177,6 +202,7 @@ struct DiscoveryView: View {
                         name: server.name,
                         hostname: host,
                         port: port,
+                        sshPort: server.sshPort,
                         source: server.source,
                         hasCodexServer: true,
                         wakeMAC: detectedWakeMAC ?? server.wakeMAC,
@@ -187,7 +213,8 @@ struct DiscoveryView: View {
                             id: server.id,
                             name: server.name,
                             hostname: server.hostname,
-                            port: server.port,
+                            port: nil,
+                            sshPort: server.sshPort,
                             source: server.source,
                             hasCodexServer: false,
                             wakeMAC: detectedWakeMAC ?? server.wakeMAC,
@@ -203,6 +230,7 @@ struct DiscoveryView: View {
                         name: server.name,
                         hostname: server.hostname,
                         port: server.port,
+                        sshPort: server.sshPort,
                         source: server.source,
                         hasCodexServer: server.hasCodexServer,
                         wakeMAC: detectedWakeMAC ?? server.wakeMAC,
@@ -309,13 +337,14 @@ struct DiscoveryView: View {
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
                 Spacer()
-                if serverManager.connections[server.id]?.isConnected == true {
-                    Text("connected")
+                if let health = serverManager.connections[server.id]?.connectionHealth,
+                   health != .disconnected {
+                    Text(health.settingsLabel.lowercased())
                         .font(ShitterFont.styled(.caption2))
-                        .foregroundColor(ShitterTheme.accent)
+                        .foregroundColor(health.settingsColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(ShitterTheme.accent.opacity(0.15))
+                        .background(health.settingsColor.opacity(0.15))
                         .cornerRadius(4)
                 } else if connectingServer?.id == server.id {
                     ProgressView().controlSize(.small).tint(ShitterTheme.accent)
@@ -345,9 +374,18 @@ struct DiscoveryView: View {
     private func serverSubtitle(_ server: DiscoveredServer) -> String {
         if server.source == .local { return "In-process server" }
         var parts = [server.hostname]
-        if let port = server.port { parts.append(":\(port)") }
+        if let port = server.hasCodexServer ? server.port : server.sshPort {
+            parts.append(":\(port)")
+        }
+        let conn = serverManager.connections[server.id]
         if server.hasCodexServer {
-            parts.append(" - codex running")
+            if let conn, conn.isConnected {
+                parts.append(" - codex running")
+            } else if conn != nil {
+                parts.append(" - codex")
+            } else {
+                parts.append(" - codex running")
+            }
         } else {
             parts.append(" - SSH (\(server.source.rawString))")
         }
@@ -396,6 +434,7 @@ struct DiscoveryView: View {
         let wakeResult = await waitForWakeSignal(
             host: server.hostname,
             preferredCodexPort: server.hasCodexServer ? server.port : nil,
+            preferredSSHPort: server.sshPort,
             timeout: server.hasCodexServer ? 12.0 : 18.0,
             wakeMAC: server.wakeMAC
         )
@@ -408,6 +447,7 @@ struct DiscoveryView: View {
                     name: server.name,
                     hostname: server.hostname,
                     port: port,
+                    sshPort: server.sshPort,
                     source: server.source,
                     hasCodexServer: true,
                     wakeMAC: server.wakeMAC,
@@ -415,13 +455,14 @@ struct DiscoveryView: View {
                 ),
                 true
             )
-        case .ssh:
+        case .ssh(let sshPort):
             return (
                 DiscoveredServer(
                     id: server.id,
                     name: server.name,
                     hostname: server.hostname,
-                    port: server.port,
+                    port: nil,
+                    sshPort: sshPort,
                     source: server.source,
                     hasCodexServer: false,
                     wakeMAC: server.wakeMAC,
@@ -438,17 +479,19 @@ struct DiscoveryView: View {
 
     private enum WakeSignalResult {
         case codex(UInt16)
-        case ssh
+        case ssh(UInt16)
         case none
     }
 
     private func waitForWakeSignal(
         host: String,
         preferredCodexPort: UInt16?,
+        preferredSSHPort: UInt16?,
         timeout: TimeInterval,
         wakeMAC: String?
     ) async -> WakeSignalResult {
         let codexPorts = orderedCodexPorts(preferred: preferredCodexPort)
+        let sshPorts = orderedSSHPorts(preferred: preferredSSHPort)
         let deadline = Date().addingTimeInterval(max(timeout, 0.5))
         var lastWakePacketAt = Date.distantPast
 
@@ -464,8 +507,10 @@ struct DiscoveryView: View {
                 }
             }
 
-            if await isPortOpen(host: host, port: 22, timeout: 0.7) {
-                return .ssh
+            for port in sshPorts {
+                if await isPortOpen(host: host, port: port, timeout: 0.7) {
+                    return .ssh(port)
+                }
             }
 
             try? await Task.sleep(for: .milliseconds(350))
@@ -480,6 +525,17 @@ struct DiscoveryView: View {
             ports.append(preferred)
         }
         ports.append(contentsOf: [8390, 4222])
+
+        var seen = Set<UInt16>()
+        return ports.filter { seen.insert($0).inserted }
+    }
+
+    private func orderedSSHPorts(preferred: UInt16?) -> [UInt16] {
+        var ports = [UInt16]()
+        if let preferred {
+            ports.append(preferred)
+        }
+        ports.append(22)
 
         var seen = Set<UInt16>()
         return ports.filter { seen.insert($0).inserted }
@@ -715,6 +771,7 @@ struct DiscoveryView: View {
                     name: host,
                     hostname: host,
                     port: port,
+                    sshPort: 22,
                     source: .manual,
                     hasCodexServer: true,
                     sshPortForwardingEnabled: false
@@ -769,6 +826,7 @@ struct DiscoveryView: View {
                 name: host,
                 hostname: host,
                 port: port,
+                sshPort: nil,
                 source: .manual,
                 hasCodexServer: true,
                 wakeMAC: normalizedWakeMAC,
@@ -785,7 +843,8 @@ struct DiscoveryView: View {
                 id: "manual-ssh-\(host):\(sshPort)",
                 name: host,
                 hostname: host,
-                port: sshPort,
+                port: nil,
+                sshPort: sshPort,
                 source: .manual,
                 hasCodexServer: false,
                 wakeMAC: normalizedWakeMAC,

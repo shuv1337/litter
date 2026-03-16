@@ -33,6 +33,7 @@ struct DiscoveredServer: Identifiable, Hashable {
     let name: String
     let hostname: String
     let port: UInt16?
+    let sshPort: UInt16?
     let source: ServerSource
     let hasCodexServer: Bool
     let wakeMAC: String?
@@ -43,6 +44,7 @@ struct DiscoveredServer: Identifiable, Hashable {
         name: String,
         hostname: String,
         port: UInt16?,
+        sshPort: UInt16? = nil,
         source: ServerSource,
         hasCodexServer: Bool,
         wakeMAC: String? = nil,
@@ -52,6 +54,7 @@ struct DiscoveredServer: Identifiable, Hashable {
         self.name = name
         self.hostname = hostname
         self.port = port
+        self.sshPort = sshPort
         self.source = source
         self.hasCodexServer = hasCodexServer
         self.wakeMAC = Self.normalizeWakeMAC(wakeMAC)
@@ -62,6 +65,10 @@ struct DiscoveredServer: Identifiable, Hashable {
         if source == .local { return .local }
         if hasCodexServer, let port { return .remote(host: hostname, port: port) }
         return nil
+    }
+
+    var resolvedSSHPort: UInt16 {
+        sshPort ?? 22
     }
 
     static func normalizeWakeMAC(_ raw: String?) -> String? {

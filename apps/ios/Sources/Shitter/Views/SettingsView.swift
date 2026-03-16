@@ -1,20 +1,13 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @EnvironmentObject var serverManager: ServerManager
+    @Environment(ServerManager.self) private var serverManager
     @Environment(\.dismiss) private var dismiss
     @AppStorage("fontFamily") private var fontFamily = FontFamilyOption.mono.rawValue
-    @State private var apiKey = ""
-    @State private var isAuthWorking = false
-    @State private var authError: String?
-    @State private var showOAuth = false
+    @AppStorage("collapseTurns") private var collapseTurns = false
 
-    private var conn: ServerConnection? {
+    private var connection: ServerConnection? {
         serverManager.activeConnection ?? serverManager.connections.values.first(where: { $0.isConnected })
-    }
-
-    private var authStatus: AuthStatus {
-        conn?.authStatus ?? .unknown
     }
 
     private var connectedServers: [ServerConnection] {
@@ -31,6 +24,7 @@ struct SettingsView: View {
                 ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
                     appearanceSection
+                    conversationSection
                     fontSection
                     experimentalSection
                     accountSection
@@ -45,18 +39,6 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                         .foregroundColor(ShitterTheme.accent)
                 }
-            }
-        }
-        .sheet(isPresented: $showOAuth) {
-            oauthSheet
-        }
-        .onChange(of: conn?.oauthURL) { _, url in
-            showOAuth = url != nil
-        }
-        .onChange(of: conn?.loginCompleted) { _, completed in
-            if completed == true {
-                showOAuth = false
-                conn?.loginCompleted = false
             }
         }
     }
@@ -80,6 +62,33 @@ struct SettingsView: View {
             .listRowBackground(ShitterTheme.surface.opacity(0.6))
         } header: {
             Text("Theme")
+                .foregroundColor(ShitterTheme.textSecondary)
+        }
+    }
+
+    // MARK: - Conversation Section
+
+    private var conversationSection: some View {
+        Section {
+            Toggle(isOn: $collapseTurns) {
+                HStack(spacing: 10) {
+                    Image(systemName: "rectangle.compress.vertical")
+                        .foregroundColor(ShitterTheme.accent)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Collapse Turns")
+                            .font(ShitterFont.styled(.subheadline))
+                            .foregroundColor(ShitterTheme.textPrimary)
+                        Text("Collapse previous turns into cards")
+                            .font(ShitterFont.styled(.caption))
+                            .foregroundColor(ShitterTheme.textSecondary)
+                    }
+                }
+            }
+            .tint(ShitterTheme.accent)
+            .listRowBackground(ShitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Conversation")
                 .foregroundColor(ShitterTheme.textSecondary)
         }
     }
@@ -143,8 +152,69 @@ struct SettingsView: View {
     // MARK: - Account Section (inline, no nested sheet)
 
     private var accountSection: some View {
+        Group {
+            if let connection {
+                SettingsConnectionAccountSection(connection: connection)
+            } else {
+                SettingsDisconnectedAccountSection()
+            }
+        }
+    }
+
+    // MARK: - Servers Section
+
+    private var serversSection: some View {
         Section {
-            // Current status
+            if connectedServers.isEmpty {
+                Text("No servers connected")
+                    .font(ShitterFont.styled(.footnote))
+                    .foregroundColor(ShitterTheme.textMuted)
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
+            } else {
+                ForEach(connectedServers, id: \.id) { conn in
+                    HStack {
+                        Image(systemName: serverIconName(for: conn.server.source))
+                            .foregroundColor(ShitterTheme.accent)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(conn.server.name)
+                                .font(ShitterFont.styled(.footnote))
+                                .foregroundColor(ShitterTheme.textPrimary)
+                            Text(conn.connectionHealth.settingsLabel)
+                                .font(ShitterFont.styled(.caption))
+                                .foregroundColor(conn.connectionHealth.settingsColor)
+                        }
+                        Spacer()
+                        Button("Remove") {
+                            serverManager.removeServer(id: conn.id)
+                        }
+                        .font(ShitterFont.styled(.caption))
+                        .foregroundColor(ShitterTheme.danger)
+                    }
+                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
+                }
+            }
+        } header: {
+            Text("Servers")
+                .foregroundColor(ShitterTheme.textSecondary)
+        }
+    }
+
+}
+
+private struct SettingsConnectionAccountSection: View {
+    let connection: ServerConnection
+    @State private var apiKey = ""
+    @State private var isAuthWorking = false
+    @State private var authError: String?
+    @State private var showOAuth = false
+
+    private var authStatus: AuthStatus {
+        connection.authStatus
+    }
+
+    var body: some View {
+        Section {
             HStack(spacing: 12) {
                 Circle()
                     .fill(authColor)
@@ -162,7 +232,7 @@ struct SettingsView: View {
                 Spacer()
                 if authStatus != .notLoggedIn && authStatus != .unknown {
                     Button("Logout") {
-                        Task { await conn?.logout() }
+                        Task { await connection.logout() }
                     }
                     .font(ShitterFont.styled(.caption))
                     .foregroundColor(ShitterTheme.danger)
@@ -170,13 +240,12 @@ struct SettingsView: View {
             }
             .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
-            // Login actions
             if case .notLoggedIn = authStatus {
                 Button {
                     Task {
                         isAuthWorking = true
                         authError = nil
-                        await conn?.loginWithChatGPT()
+                        await connection.loginWithChatGPT()
                         isAuthWorking = false
                     }
                 } label: {
@@ -204,7 +273,7 @@ struct SettingsView: View {
                         Task {
                             isAuthWorking = true
                             authError = nil
-                            await conn?.loginWithApiKey(key)
+                            await connection.loginWithApiKey(key)
                             isAuthWorking = false
                         }
                     }
@@ -215,15 +284,8 @@ struct SettingsView: View {
                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
 
-            if case .unknown = authStatus, conn == nil {
-                Text("Connect to a server first")
-                    .font(ShitterFont.styled(.caption))
-                    .foregroundColor(ShitterTheme.textMuted)
-                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
-            }
-
-            if let err = authError {
-                Text(err)
+            if let authError {
+                Text(authError)
                     .font(ShitterFont.styled(.caption))
                     .foregroundColor(ShitterTheme.danger)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -232,57 +294,28 @@ struct SettingsView: View {
             Text("Account")
                 .foregroundColor(ShitterTheme.textSecondary)
         }
-    }
-
-    // MARK: - Servers Section
-
-    private var serversSection: some View {
-        Section {
-            if connectedServers.isEmpty {
-                Text("No servers connected")
-                    .font(ShitterFont.styled(.footnote))
-                    .foregroundColor(ShitterTheme.textMuted)
-                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
-            } else {
-                ForEach(connectedServers, id: \.id) { conn in
-                    HStack {
-                        Image(systemName: serverIconName(for: conn.server.source))
-                            .foregroundColor(ShitterTheme.accent)
-                            .frame(width: 20)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(conn.server.name)
-                                .font(ShitterFont.styled(.footnote))
-                                .foregroundColor(ShitterTheme.textPrimary)
-                            Text(conn.isConnected ? "Connected" : "Disconnected")
-                                .font(ShitterFont.styled(.caption))
-                                .foregroundColor(conn.isConnected ? ShitterTheme.accent : ShitterTheme.textSecondary)
-                        }
-                        Spacer()
-                        Button("Remove") {
-                            serverManager.removeServer(id: conn.id)
-                        }
-                        .font(ShitterFont.styled(.caption))
-                        .foregroundColor(ShitterTheme.danger)
-                    }
-                    .listRowBackground(ShitterTheme.surface.opacity(0.6))
-                }
+        .sheet(isPresented: $showOAuth) {
+            oauthSheet
+        }
+        .onChange(of: connection.oauthURL) { _, url in
+            showOAuth = url != nil
+        }
+        .onChange(of: connection.loginCompleted) { _, completed in
+            if completed == true {
+                showOAuth = false
+                connection.loginCompleted = false
             }
-        } header: {
-            Text("Servers")
-                .foregroundColor(ShitterTheme.textSecondary)
         }
     }
 
-    // MARK: - OAuth Sheet
-
     @ViewBuilder
     private var oauthSheet: some View {
-        if let url = conn?.oauthURL {
+        if let url = connection.oauthURL {
             NavigationStack {
                 OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
-                    conn?.forwardOAuthCallback(callbackURL)
+                    connection.forwardOAuthCallback(callbackURL)
                 }) {
-                    Task { await conn?.cancelLogin() }
+                    Task { await connection.cancelLogin() }
                 }
                 .ignoresSafeArea()
                 .navigationTitle("Login with ChatGPT")
@@ -290,7 +323,7 @@ struct SettingsView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") {
-                            Task { await conn?.cancelLogin() }
+                            Task { await connection.cancelLogin() }
                             showOAuth = false
                         }
                         .foregroundColor(ShitterTheme.danger)
@@ -300,12 +333,10 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Auth Helpers
-
     private var authColor: Color {
         switch authStatus {
         case .chatgpt: return ShitterTheme.accent
-        case .apiKey:  return Color(hex: "#00AAFF")
+        case .apiKey: return Color(hex: "#00AAFF")
         case .notLoggedIn, .unknown: return ShitterTheme.textMuted
         }
     }
@@ -324,6 +355,20 @@ struct SettingsView: View {
         case .chatgpt: return "ChatGPT account"
         case .apiKey: return "OpenAI API key"
         default: return nil
+        }
+    }
+}
+
+private struct SettingsDisconnectedAccountSection: View {
+    var body: some View {
+        Section {
+            Text("Connect to a server first")
+                .font(ShitterFont.styled(.caption))
+                .foregroundColor(ShitterTheme.textMuted)
+                .listRowBackground(ShitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Account")
+                .foregroundColor(ShitterTheme.textSecondary)
         }
     }
 }

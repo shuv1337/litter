@@ -279,8 +279,82 @@ struct UserInput: Encodable {
 struct TurnStartParams: Encodable {
     let threadId: String
     let input: [UserInput]
+    var approvalPolicy: String?
+    var sandboxPolicy: TurnSandboxPolicy?
     var model: String?
     var effort: String?
+}
+
+enum TurnSandboxPolicy: Encodable {
+    case dangerFullAccess
+    case readOnly
+    case workspaceWrite
+
+    init?(mode: String?) {
+        switch mode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "danger-full-access":
+            self = .dangerFullAccess
+        case "read-only":
+            self = .readOnly
+        case "workspace-write":
+            self = .workspaceWrite
+        default:
+            return nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .dangerFullAccess:
+            var container = encoder.container(keyedBy: DangerFullAccessCodingKeys.self)
+            try container.encode("dangerFullAccess", forKey: .type)
+        case .readOnly:
+            var container = encoder.container(keyedBy: ReadOnlyCodingKeys.self)
+            try container.encode("readOnly", forKey: .type)
+            try container.encode(TurnReadOnlyAccess.fullAccess, forKey: .access)
+            try container.encode(false, forKey: .networkAccess)
+        case .workspaceWrite:
+            var container = encoder.container(keyedBy: WorkspaceWriteCodingKeys.self)
+            try container.encode("workspaceWrite", forKey: .type)
+            try container.encode([String](), forKey: .writableRoots)
+            try container.encode(TurnReadOnlyAccess.fullAccess, forKey: .readOnlyAccess)
+            try container.encode(false, forKey: .networkAccess)
+            try container.encode(false, forKey: .excludeTmpdirEnvVar)
+            try container.encode(false, forKey: .excludeSlashTmp)
+        }
+    }
+
+    private enum DangerFullAccessCodingKeys: String, CodingKey {
+        case type
+    }
+
+    private enum ReadOnlyCodingKeys: String, CodingKey {
+        case type
+        case access
+        case networkAccess
+    }
+
+    private enum WorkspaceWriteCodingKeys: String, CodingKey {
+        case type
+        case writableRoots
+        case readOnlyAccess
+        case networkAccess
+        case excludeTmpdirEnvVar
+        case excludeSlashTmp
+    }
+}
+
+private enum TurnReadOnlyAccess: Encodable {
+    case fullAccess
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("fullAccess", forKey: .type)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+    }
 }
 
 struct TurnStartResponse: Decodable {
@@ -747,47 +821,64 @@ struct ResumedTurn: Decodable {
 }
 
 enum ResumedThreadItem: Decodable {
-    case userMessage([ResumedUserInput])
-    case agentMessage(text: String, phase: String?, agentId: String?, agentNickname: String?, agentRole: String?)
-    case plan(String)
-    case reasoning(summary: [String], content: [String])
+    case userMessage([ResumedUserInput], timestamp: Date?)
+    case agentMessage(
+        text: String,
+        phase: String?,
+        agentId: String?,
+        agentNickname: String?,
+        agentRole: String?,
+        timestamp: Date?
+    )
+    case proposedPlan(String, timestamp: Date?)
+    case todoList([ResumedTodoListEntry], timestamp: Date?)
+    case reasoning(summary: [String], content: [String], timestamp: Date?)
     case commandExecution(
         command: String,
         cwd: String,
         status: String,
+        commandActions: [ResumedCommandAction],
         output: String?,
         exitCode: Int?,
-        durationMs: Int?
+        durationMs: Int?,
+        processId: String?,
+        timestamp: Date?
     )
-    case fileChange(changes: [ResumedFileUpdateChange], status: String)
+    case fileChange(changes: [ResumedFileUpdateChange], status: String, timestamp: Date?)
     case mcpToolCall(
         server: String,
         tool: String,
         status: String,
+        arguments: AnyCodable?,
         result: ResumedMcpToolCallResult?,
         error: ResumedMcpToolCallError?,
-        durationMs: Int?
+        durationMs: Int?,
+        timestamp: Date?
     )
     case collabAgentToolCall(
         tool: String,
         status: String,
         receiverThreadIds: [String],
         receiverAgents: [ResumedCollabAgentRef],
-        prompt: String?
+        agentsStates: [String: ResumedCollabAgentState],
+        prompt: String?,
+        timestamp: Date?
     )
-    case webSearch(query: String, action: AnyCodable?)
-    case imageView(path: String)
-    case enteredReviewMode(review: String)
-    case exitedReviewMode(review: String)
+    case webSearch(query: String, action: AnyCodable?, isInProgress: Bool, timestamp: Date?)
+    case imageView(path: String, timestamp: Date?)
+    case enteredReviewMode(review: String, timestamp: Date?)
+    case exitedReviewMode(review: String, timestamp: Date?)
     case dynamicToolCall(
         tool: String,
         arguments: AnyCodable?,
         status: String,
         contentItems: AnyCodable?,
-        durationMs: Int?
+        success: Bool?,
+        durationMs: Int?,
+        timestamp: Date?
     )
-    case contextCompaction
-    case unknown(type: String)
+    case contextCompaction(timestamp: Date?)
+    case unknown(type: String, timestamp: Date?)
     case ignored
 
     private enum CodingKeys: String, CodingKey {
@@ -795,6 +886,8 @@ enum ResumedThreadItem: Decodable {
         case id
         case content
         case text
+        case plan
+        case items
         case phase
         case summary
         case command
@@ -803,12 +896,18 @@ enum ResumedThreadItem: Decodable {
         case aggregatedOutput
         case output
         case exitCode
+        case processId
+        case processIdSnake = "process_id"
         case durationMs
+        case commandActions
+        case commandActionsSnake = "command_actions"
         case changes
         case server
         case tool
         case result
         case error
+        case agentsStates
+        case agentsStatesSnake = "agents_states"
         case receiverThreadIds
         case receiverThreadIdsSnake = "receiver_thread_ids"
         case receiverAgents
@@ -821,6 +920,7 @@ enum ResumedThreadItem: Decodable {
         case source
         case arguments
         case contentItems
+        case success
         case agentId
         case agentIdSnake = "agent_id"
         case agentNickname
@@ -832,19 +932,25 @@ enum ResumedThreadItem: Decodable {
         case agentType
         case agentTypeSnake = "agent_type"
         case role
+        case timestamp
+        case createdAt
+        case createdAtSnake = "created_at"
+        case updatedAt
+        case updatedAtSnake = "updated_at"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawType = (try? container.decode(String.self, forKey: .type)) ?? ""
         let type = rawType.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timestamp = Self.decodeDate(container)
         switch type {
         case "userMessage":
             var content = (try? container.decodeIfPresent([ResumedUserInput].self, forKey: .content)) ?? []
             if content.isEmpty, let text = Self.decodeString(container, forKey: .text), !text.isEmpty {
                 content = [ResumedUserInput(type: "text", text: text)]
             }
-            self = .userMessage(content)
+            self = .userMessage(content, timestamp: timestamp)
         case "agentMessage", "assistantMessage":
             let sourceAny = try? container.decodeIfPresent(AnyCodable.self, forKey: .source)
             let directAgentId = Self.decodeString(container, forKey: .agentId)
@@ -882,37 +988,54 @@ enum ResumedThreadItem: Decodable {
                             sourceAny?.value,
                             keys: ["agent_role", "agentRole", "agent_type", "agentType", "role", "type"]
                         )
-                    )
+                    ),
+                timestamp: timestamp
             )
-        case "plan":
-            self = .plan(Self.decodeString(container, forKey: .text) ?? "")
+        case "plan", "proposed-plan", "proposed_plan":
+            self = .proposedPlan(Self.decodeString(container, forKey: .text) ?? "", timestamp: timestamp)
+        case "todo-list", "todo_list", "todoList":
+            let entries = (try? container.decodeIfPresent([ResumedTodoListEntry].self, forKey: .plan))
+                ?? (try? container.decodeIfPresent([ResumedTodoListEntry].self, forKey: .items))
+                ?? []
+            self = .todoList(entries, timestamp: timestamp)
+        case "plan-implementation", "plan_implementation", "planImplementation":
+            self = .ignored
         case "reasoning":
             self = .reasoning(
                 summary: Self.decodeStringArray(container, forKey: .summary),
-                content: Self.decodeStringArray(container, forKey: .content)
+                content: Self.decodeStringArray(container, forKey: .content),
+                timestamp: timestamp
             )
         case "commandExecution":
             self = .commandExecution(
                 command: Self.decodeString(container, forKey: .command) ?? "",
                 cwd: Self.decodeString(container, forKey: .cwd) ?? "",
                 status: Self.decodeString(container, forKey: .status) ?? "unknown",
+                commandActions: (try? container.decodeIfPresent([ResumedCommandAction].self, forKey: .commandActions))
+                    ?? (try? container.decodeIfPresent([ResumedCommandAction].self, forKey: .commandActionsSnake))
+                    ?? [],
                 output: Self.decodeString(container, forKey: .aggregatedOutput) ?? Self.decodeString(container, forKey: .output),
                 exitCode: Self.decodeInt(container, forKey: .exitCode),
-                durationMs: Self.decodeInt(container, forKey: .durationMs)
+                durationMs: Self.decodeInt(container, forKey: .durationMs),
+                processId: Self.decodeString(container, forKey: .processId) ?? Self.decodeString(container, forKey: .processIdSnake),
+                timestamp: timestamp
             )
         case "fileChange":
             self = .fileChange(
                 changes: (try? container.decodeIfPresent([ResumedFileUpdateChange].self, forKey: .changes)) ?? [],
-                status: Self.decodeString(container, forKey: .status) ?? "unknown"
+                status: Self.decodeString(container, forKey: .status) ?? "unknown",
+                timestamp: timestamp
             )
         case "mcpToolCall":
             self = .mcpToolCall(
                 server: Self.decodeString(container, forKey: .server) ?? "",
                 tool: Self.decodeString(container, forKey: .tool) ?? "",
                 status: Self.decodeString(container, forKey: .status) ?? "unknown",
+                arguments: try? container.decodeIfPresent(AnyCodable.self, forKey: .arguments),
                 result: try? container.decodeIfPresent(ResumedMcpToolCallResult.self, forKey: .result),
                 error: try? container.decodeIfPresent(ResumedMcpToolCallError.self, forKey: .error),
-                durationMs: Self.decodeInt(container, forKey: .durationMs)
+                durationMs: Self.decodeInt(container, forKey: .durationMs),
+                timestamp: timestamp
             )
         case "collabAgentToolCall":
             self = .collabAgentToolCall(
@@ -923,31 +1046,64 @@ enum ResumedThreadItem: Decodable {
                 receiverAgents: (try? container.decodeIfPresent([ResumedCollabAgentRef].self, forKey: .receiverAgents))
                     ?? (try? container.decodeIfPresent([ResumedCollabAgentRef].self, forKey: .receiverAgentsSnake))
                     ?? [],
-                prompt: Self.decodeString(container, forKey: .prompt)
+                agentsStates: (try? container.decodeIfPresent([String: ResumedCollabAgentState].self, forKey: .agentsStates))
+                    ?? (try? container.decodeIfPresent([String: ResumedCollabAgentState].self, forKey: .agentsStatesSnake))
+                    ?? [:],
+                prompt: Self.decodeString(container, forKey: .prompt),
+                timestamp: timestamp
             )
         case "webSearch", "web_search", "web-search", "websearch":
             self = .webSearch(
                 query: Self.decodeString(container, forKey: .query) ?? "",
-                action: try? container.decodeIfPresent(AnyCodable.self, forKey: .action)
+                action: try? container.decodeIfPresent(AnyCodable.self, forKey: .action),
+                isInProgress: false,
+                timestamp: timestamp
             )
         case "imageView":
-            self = .imageView(path: Self.decodeString(container, forKey: .path) ?? "")
+            self = .imageView(path: Self.decodeString(container, forKey: .path) ?? "", timestamp: timestamp)
         case "enteredReviewMode":
-            self = .enteredReviewMode(review: Self.decodeString(container, forKey: .review) ?? "")
+            self = .enteredReviewMode(review: Self.decodeString(container, forKey: .review) ?? "", timestamp: timestamp)
         case "exitedReviewMode":
-            self = .exitedReviewMode(review: Self.decodeString(container, forKey: .review) ?? "")
+            self = .exitedReviewMode(review: Self.decodeString(container, forKey: .review) ?? "", timestamp: timestamp)
         case "dynamicToolCall":
             self = .dynamicToolCall(
                 tool: Self.decodeString(container, forKey: .tool) ?? "",
                 arguments: try? container.decodeIfPresent(AnyCodable.self, forKey: .arguments),
                 status: Self.decodeString(container, forKey: .status) ?? "unknown",
                 contentItems: try? container.decodeIfPresent(AnyCodable.self, forKey: .contentItems),
-                durationMs: Self.decodeInt(container, forKey: .durationMs)
+                success: try? container.decodeIfPresent(Bool.self, forKey: .success),
+                durationMs: Self.decodeInt(container, forKey: .durationMs),
+                timestamp: timestamp
             )
         case "contextCompaction":
-            self = .contextCompaction
+            self = .contextCompaction(timestamp: timestamp)
         default:
-            self = .unknown(type: type.isEmpty ? "unknown" : type)
+            self = .unknown(type: type.isEmpty ? "unknown" : type, timestamp: timestamp)
+        }
+    }
+
+    var timestamp: Date? {
+        switch self {
+        case .userMessage(_, let timestamp),
+                .proposedPlan(_, let timestamp),
+                .todoList(_, let timestamp),
+                .reasoning(_, _, let timestamp),
+                .fileChange(_, _, let timestamp),
+                .collabAgentToolCall(_, _, _, _, _, _, let timestamp),
+                .webSearch(_, _, _, let timestamp),
+                .imageView(_, let timestamp),
+                .enteredReviewMode(_, let timestamp),
+                .exitedReviewMode(_, let timestamp),
+                .contextCompaction(let timestamp),
+                .unknown(_, let timestamp):
+            return timestamp
+        case .agentMessage(_, _, _, _, _, let timestamp),
+                .commandExecution(_, _, _, _, _, _, _, _, let timestamp),
+                .mcpToolCall(_, _, _, _, _, _, _, let timestamp),
+                .dynamicToolCall(_, _, _, _, _, _, let timestamp):
+            return timestamp
+        case .ignored:
+            return nil
         }
     }
 
@@ -1005,6 +1161,54 @@ enum ResumedThreadItem: Decodable {
         return nil
     }
 
+    private static func decodeDate(_ container: KeyedDecodingContainer<CodingKeys>) -> Date? {
+        if let directCreatedAt = decodeString(container, forKey: .createdAt),
+           let date = parseDate(directCreatedAt) {
+            return date
+        }
+        if let snakeCreatedAt = decodeString(container, forKey: .createdAtSnake),
+           let date = parseDate(snakeCreatedAt) {
+            return date
+        }
+        if let directUpdatedAt = decodeString(container, forKey: .updatedAt),
+           let date = parseDate(directUpdatedAt) {
+            return date
+        }
+        if let snakeUpdatedAt = decodeString(container, forKey: .updatedAtSnake),
+           let date = parseDate(snakeUpdatedAt) {
+            return date
+        }
+        if let timestamp = decodeString(container, forKey: .timestamp),
+           let date = parseDate(timestamp) {
+            return date
+        }
+        return nil
+    }
+
+    private static func parseDate(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let seconds = TimeInterval(trimmed) {
+            if abs(seconds) > 10_000_000_000 {
+                return Date(timeIntervalSince1970: seconds / 1000)
+            }
+            return Date(timeIntervalSince1970: seconds)
+        }
+        return fractionalISO8601Formatter.date(from: trimmed) ?? plainISO8601Formatter.date(from: trimmed)
+    }
+
+    private static let fractionalISO8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let plainISO8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     private static func stringify(_ value: Any) -> String? {
         switch value {
         case let s as String:
@@ -1042,6 +1246,13 @@ enum ResumedThreadItem: Decodable {
             return []
         }
     }
+}
+
+struct ResumedTodoListEntry: Decodable {
+    let step: String?
+    let status: String?
+    let text: String?
+    let completed: Bool?
 }
 
 struct ResumedCollabAgentRef: Decodable {
@@ -1145,6 +1356,32 @@ struct ResumedUserInput: Decodable {
         self.url = url
         self.path = path
         self.name = name
+    }
+}
+
+struct ResumedCommandAction: Decodable {
+    let type: String
+    let command: String
+    let name: String?
+    let path: String?
+    let query: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case command
+        case name
+        case path
+        case query
+    }
+}
+
+struct ResumedCollabAgentState: Decodable {
+    let status: String
+    let message: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case message
     }
 }
 

@@ -390,14 +390,16 @@ extension Notification.Name {
 struct WidgetContainerView: View {
     let widget: WidgetState
     var onMessage: ((Any) -> Void)?
+    var textScale: CGFloat = 1.0
     private let minimumInlineHeight: CGFloat = 200
 
     @State private var contentHeight: CGFloat
     @State private var isFullscreen = false
 
-    init(widget: WidgetState, onMessage: ((Any) -> Void)? = nil) {
+    init(widget: WidgetState, onMessage: ((Any) -> Void)? = nil, textScale: CGFloat = 1.0) {
         self.widget = widget
         self.onMessage = onMessage
+        self.textScale = textScale
         _contentHeight = State(initialValue: max(widget.height, 200))
     }
 
@@ -417,9 +419,9 @@ struct WidgetContainerView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 11 * textScale, weight: .medium))
                         Text("Expand")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(ShitterFont.styled(size: 12, weight: .medium, scale: textScale))
                     }
                     .foregroundColor(ShitterTheme.textSecondary)
                     .padding(.horizontal, 10)

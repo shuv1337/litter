@@ -1,15 +1,17 @@
 import AVFoundation
+import Observation
 
 @MainActor
-final class VoiceTranscriptionManager: ObservableObject {
-    @Published var isRecording = false
-    @Published var isTranscribing = false
-    @Published var audioLevel: Float = 0
-    @Published var error: String?
+@Observable
+final class VoiceTranscriptionManager {
+    var isRecording = false
+    var isTranscribing = false
+    var audioLevel: Float = 0
+    var error: String?
 
-    private var audioEngine: AVAudioEngine?
-    private let bufferCollector = AudioBufferCollector()
-    private nonisolated(unsafe) var lastLevelUpdate: CFAbsoluteTime = 0
+    @ObservationIgnored private var audioEngine: AVAudioEngine?
+    @ObservationIgnored private let bufferCollector = AudioBufferCollector()
+    @ObservationIgnored private nonisolated(unsafe) var lastLevelUpdate: CFAbsoluteTime = 0
 
     private static let targetSampleRate: Double = 24000
     private static let transcribeModel = "gpt-4o-mini-transcribe"

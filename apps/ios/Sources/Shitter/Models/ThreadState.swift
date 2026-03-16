@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct ThreadKey: Hashable, Sendable {
     let serverId: String
@@ -6,7 +7,8 @@ struct ThreadKey: Hashable, Sendable {
 }
 
 @MainActor
-final class ThreadState: ObservableObject, Identifiable {
+@Observable
+final class ThreadState: Identifiable {
     nonisolated let id: ThreadKey
     nonisolated var key: ThreadKey { id }
     let serverId: String
@@ -14,21 +16,22 @@ final class ThreadState: ObservableObject, Identifiable {
     var serverName: String
     var serverSource: ServerSource
 
-    @Published var messages: [ChatMessage] = []
-    @Published var status: ConversationStatus = .ready
-    @Published var preview: String = ""
-    @Published var cwd: String = ""
-    @Published var model: String = ""
-    @Published var modelProvider: String = ""
-    @Published var reasoningEffort: String?
-    @Published var modelContextWindow: Int64?
-    @Published var contextTokensUsed: Int64?
-    @Published var rolloutPath: String?
-    @Published var parentThreadId: String?
-    @Published var rootThreadId: String?
-    @Published var agentNickname: String?
-    @Published var agentRole: String?
-    @Published var updatedAt: Date = Date()
+    var items: [ ConversationItem] = []
+    var status: ConversationStatus = .ready
+    var preview: String = ""
+    var cwd: String = ""
+    var model: String = ""
+    var modelProvider: String = ""
+    var reasoningEffort: String?
+    var modelContextWindow: Int64?
+    var contextTokensUsed: Int64?
+    var rolloutPath: String?
+    var parentThreadId: String?
+    var rootThreadId: String?
+    var agentNickname: String?
+    var agentRole: String?
+    var updatedAt: Date = Date()
+    var requiresOpenHydration: Bool = true
     var activeTurnId: String?
 
     var hasTurnActive: Bool {
@@ -69,17 +72,21 @@ struct SavedServer: Codable, Identifiable {
     let name: String
     let hostname: String
     let port: UInt16?
+    let sshPort: UInt16?
     let source: String
     let hasCodexServer: Bool
     let wakeMAC: String?
     let sshPortForwardingEnabled: Bool?
 
     func toDiscoveredServer() -> DiscoveredServer {
-        DiscoveredServer(
+        let codexPort = hasCodexServer ? port : nil
+        let resolvedSSHPort = sshPort ?? (hasCodexServer ? nil : port)
+        return DiscoveredServer(
             id: id,
             name: name,
             hostname: hostname,
-            port: port,
+            port: codexPort,
+            sshPort: resolvedSSHPort,
             source: ServerSource.from(source),
             hasCodexServer: hasCodexServer,
             wakeMAC: wakeMAC,
@@ -93,6 +100,7 @@ struct SavedServer: Codable, Identifiable {
             name: server.name,
             hostname: server.hostname,
             port: server.port,
+            sshPort: server.sshPort,
             source: server.source.rawString,
             hasCodexServer: server.hasCodexServer,
             wakeMAC: server.wakeMAC,

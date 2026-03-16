@@ -1,19 +1,33 @@
 import SwiftUI
 
 struct AccountView: View {
-    @EnvironmentObject var serverManager: ServerManager
+    @Environment(ServerManager.self) private var serverManager
     @Environment(\.dismiss) private var dismiss
+
+    private var connection: ServerConnection? {
+        serverManager.activeConnection ?? serverManager.connections.values.first(where: { $0.isConnected })
+    }
+
+    var body: some View {
+        if let connection {
+            AccountConnectionView(connection: connection, dismiss: dismiss)
+        } else {
+            AccountDisconnectedView(dismiss: dismiss)
+        }
+    }
+}
+
+private struct AccountConnectionView: View {
+    let connection: ServerConnection
+    let dismiss: DismissAction
+
     @State private var apiKey = ""
     @State private var isWorking = false
     @State private var errorMsg: String?
     @State private var showOAuth = false
 
-    private var conn: ServerConnection? {
-        serverManager.activeConnection ?? serverManager.connections.values.first(where: { $0.isConnected })
-    }
-
     private var authStatus: AuthStatus {
-        conn?.authStatus ?? .unknown
+        connection.authStatus
     }
 
     var body: some View {
@@ -26,7 +40,9 @@ struct AccountView: View {
                         Divider().background(ShitterTheme.surfaceLight)
                         loginSection
                         if let err = errorMsg {
-                            Text(err).font(.caption).foregroundColor(.red)
+                            Text(err)
+                                .font(.caption)
+                                .foregroundColor(.red)
                                 .padding(.horizontal, 20)
                         }
                     }
@@ -45,13 +61,13 @@ struct AccountView: View {
         .sheet(isPresented: $showOAuth) {
             oauthSheet
         }
-        .onChange(of: conn?.oauthURL) { _, url in
+        .onChange(of: connection.oauthURL) { _, url in
             showOAuth = url != nil
         }
-        .onChange(of: conn?.loginCompleted) { _, completed in
+        .onChange(of: connection.loginCompleted) { _, completed in
             if completed == true {
                 showOAuth = false
-                conn?.loginCompleted = false
+                connection.loginCompleted = false
             }
         }
     }
@@ -80,7 +96,7 @@ struct AccountView: View {
                 Spacer()
                 if authStatus != .notLoggedIn && authStatus != .unknown {
                     Button("Logout") {
-                        Task { await conn?.logout() }
+                        Task { await connection.logout() }
                     }
                     .font(ShitterFont.styled(.footnote))
                     .foregroundColor(ShitterTheme.danger)
@@ -105,7 +121,7 @@ struct AccountView: View {
                 Task {
                     isWorking = true
                     errorMsg = nil
-                    await conn?.loginWithChatGPT()
+                    await connection.loginWithChatGPT()
                     isWorking = false
                 }
             } label: {
@@ -146,9 +162,11 @@ struct AccountView: View {
                     Task {
                         isWorking = true
                         errorMsg = nil
-                        await conn?.loginWithApiKey(key)
+                        await connection.loginWithApiKey(key)
                         isWorking = false
-                        if case .apiKey = authStatus { dismiss() }
+                        if case .apiKey = connection.authStatus {
+                            dismiss()
+                        }
                     }
                 } label: {
                     Text("Save API Key")
@@ -169,12 +187,12 @@ struct AccountView: View {
 
     @ViewBuilder
     private var oauthSheet: some View {
-        if let url = conn?.oauthURL {
+        if let url = connection.oauthURL {
             NavigationStack {
                 OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
-                    conn?.forwardOAuthCallback(callbackURL)
+                    connection.forwardOAuthCallback(callbackURL)
                 }) {
-                    Task { await conn?.cancelLogin() }
+                    Task { await connection.cancelLogin() }
                 }
                 .ignoresSafeArea()
                 .navigationTitle("Login with ChatGPT")
@@ -182,7 +200,7 @@ struct AccountView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") {
-                            Task { await conn?.cancelLogin() }
+                            Task { await connection.cancelLogin() }
                             showOAuth = false
                         }
                         .foregroundColor(ShitterTheme.danger)
@@ -195,7 +213,7 @@ struct AccountView: View {
     private var authColor: Color {
         switch authStatus {
         case .chatgpt: return ShitterTheme.accent
-        case .apiKey:  return Color(hex: "#00AAFF")
+        case .apiKey: return Color(hex: "#00AAFF")
         case .notLoggedIn, .unknown: return ShitterTheme.textMuted
         }
     }
@@ -214,6 +232,37 @@ struct AccountView: View {
         case .chatgpt: return "ChatGPT account"
         case .apiKey: return "OpenAI API key"
         default: return nil
+        }
+    }
+}
+
+private struct AccountDisconnectedView: View {
+    let dismiss: DismissAction
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                ShitterTheme.backgroundGradient.ignoresSafeArea()
+                VStack(spacing: 16) {
+                    Text("Connect to a server first")
+                        .font(ShitterFont.styled(.subheadline))
+                        .foregroundColor(ShitterTheme.textPrimary)
+                    Text("Account settings are tied to the active server connection.")
+                        .font(ShitterFont.styled(.caption))
+                        .foregroundColor(ShitterTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .navigationTitle("Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(ShitterTheme.accent)
+                }
+            }
         }
     }
 }

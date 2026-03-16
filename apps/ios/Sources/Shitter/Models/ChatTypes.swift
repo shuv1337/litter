@@ -9,15 +9,117 @@ enum MessageRole: Equatable {
 struct ChatMessage: Identifiable, Equatable {
     var id = UUID()
     let role: MessageRole
-    var text: String
-    var images: [ChatImage] = []
-    var sourceTurnId: String? = nil
-    var sourceTurnIndex: Int? = nil
-    var isFromUserTurnBoundary: Bool = false
-    var agentNickname: String? = nil
-    var agentRole: String? = nil
-    var widgetState: WidgetState? = nil
-    let timestamp = Date()
+    var text: String {
+        didSet { refreshRenderDigest() }
+    }
+    var images: [ChatImage] = [] {
+        didSet { refreshRenderDigest() }
+    }
+    var sourceTurnId: String? = nil {
+        didSet { refreshRenderDigest() }
+    }
+    var sourceTurnIndex: Int? = nil {
+        didSet { refreshRenderDigest() }
+    }
+    var isFromUserTurnBoundary: Bool = false {
+        didSet { refreshRenderDigest() }
+    }
+    var agentNickname: String? = nil {
+        didSet { refreshRenderDigest() }
+    }
+    var agentRole: String? = nil {
+        didSet { refreshRenderDigest() }
+    }
+    var widgetState: WidgetState? = nil {
+        didSet { refreshRenderDigest() }
+    }
+    var timestamp: Date
+    private(set) var renderDigest: Int
+
+    init(
+        id: UUID = UUID(),
+        role: MessageRole,
+        text: String,
+        images: [ChatImage] = [],
+        sourceTurnId: String? = nil,
+        sourceTurnIndex: Int? = nil,
+        isFromUserTurnBoundary: Bool = false,
+        agentNickname: String? = nil,
+        agentRole: String? = nil,
+        widgetState: WidgetState? = nil,
+        timestamp: Date = Date()
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.images = images
+        self.sourceTurnId = sourceTurnId
+        self.sourceTurnIndex = sourceTurnIndex
+        self.isFromUserTurnBoundary = isFromUserTurnBoundary
+        self.agentNickname = agentNickname
+        self.agentRole = agentRole
+        self.widgetState = widgetState
+        self.timestamp = timestamp
+        self.renderDigest = Self.computeRenderDigest(
+            role: role,
+            text: text,
+            images: images,
+            sourceTurnId: sourceTurnId,
+            sourceTurnIndex: sourceTurnIndex,
+            isFromUserTurnBoundary: isFromUserTurnBoundary,
+            agentNickname: agentNickname,
+            agentRole: agentRole,
+            widgetState: widgetState
+        )
+    }
+
+    private mutating func refreshRenderDigest() {
+        renderDigest = Self.computeRenderDigest(
+            role: role,
+            text: text,
+            images: images,
+            sourceTurnId: sourceTurnId,
+            sourceTurnIndex: sourceTurnIndex,
+            isFromUserTurnBoundary: isFromUserTurnBoundary,
+            agentNickname: agentNickname,
+            agentRole: agentRole,
+            widgetState: widgetState
+        )
+    }
+
+    private static func computeRenderDigest(
+        role: MessageRole,
+        text: String,
+        images: [ChatImage],
+        sourceTurnId: String?,
+        sourceTurnIndex: Int?,
+        isFromUserTurnBoundary: Bool,
+        agentNickname: String?,
+        agentRole: String?,
+        widgetState: WidgetState?
+    ) -> Int {
+        var hasher = Hasher()
+        hasher.combine(String(describing: role))
+        hasher.combine(text)
+        hasher.combine(sourceTurnId)
+        hasher.combine(sourceTurnIndex)
+        hasher.combine(isFromUserTurnBoundary)
+        hasher.combine(agentNickname)
+        hasher.combine(agentRole)
+        hasher.combine(images.count)
+        for image in images {
+            hasher.combine(image.data)
+        }
+        if let widgetState {
+            hasher.combine(widgetState.callId)
+            hasher.combine(widgetState.title)
+            hasher.combine(widgetState.widgetHTML)
+            hasher.combine(widgetState.width)
+            hasher.combine(widgetState.height)
+            hasher.combine(widgetState.isFinalized)
+        }
+        return hasher.finalize()
+    }
 }
 
 struct WidgetState: Equatable {

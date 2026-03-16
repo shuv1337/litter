@@ -1,5 +1,5 @@
 import SwiftUI
-import Combine
+import Observation
 
 extension Notification.Name {
     static let themeDidChange = Notification.Name("io.latitudes.shitter.themeDidChange")
@@ -15,15 +15,16 @@ final class ThemeStore: Sendable {
 }
 
 @MainActor
-final class ThemeManager: ObservableObject {
+@Observable
+final class ThemeManager {
     static let shared = ThemeManager()
 
     private static let appGroupSuite = ShitterPalette.appGroupSuite
 
-    @Published private(set) var lightTheme: ResolvedTheme = .defaultLight
-    @Published private(set) var darkTheme: ResolvedTheme = .defaultDark
-    @Published private(set) var themeVersion: Int = 0
-    @Published private(set) var themeIndex: [ThemeIndexEntry] = []
+    private(set) var lightTheme: ResolvedTheme = .defaultLight
+    private(set) var darkTheme: ResolvedTheme = .defaultDark
+    private(set) var themeVersion: Int = 0
+    private(set) var themeIndex: [ThemeIndexEntry] = []
 
     var selectedLightSlug: String {
         get { UserDefaults.standard.string(forKey: "selectedLightTheme") ?? "codex-light" }
@@ -43,7 +44,7 @@ final class ThemeManager: ObservableObject {
         themeIndex.filter { $0.type == .dark }
     }
 
-    private var definitionCache: [String: ThemeDefinition] = [:]
+    @ObservationIgnored private var definitionCache: [String: ThemeDefinition] = [:]
 
     private init() {
         loadThemeIndex()

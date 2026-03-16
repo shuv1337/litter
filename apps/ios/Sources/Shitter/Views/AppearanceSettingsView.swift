@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AppearanceSettingsView: View {
-    @ObservedObject private var themeManager = ThemeManager.shared
+    @Environment(ThemeManager.self) private var themeManager
     @State private var activeThemePicker: ThemePickerKind?
 
     var body: some View {
@@ -380,8 +380,10 @@ struct ThemePreviewBadge: View {
 
 #if DEBUG
 #Preview("Appearance") {
-    NavigationStack {
-        AppearanceSettingsView()
+    ShitterPreviewScene(includeBackground: false) {
+        NavigationStack {
+            AppearanceSettingsView()
+        }
     }
 }
 #endif

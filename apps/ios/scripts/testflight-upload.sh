@@ -14,10 +14,20 @@ APP_STORE_APP_ID="${APP_STORE_APP_ID:-}"
 TEAM_ID="${TEAM_ID:-}"
 PROVISIONING_PROFILE_SPECIFIER="${PROVISIONING_PROFILE_SPECIFIER:-Shitter App Store}"
 EXPORT_SIGNING_STYLE="${EXPORT_SIGNING_STYLE:-automatic}"
-MARKETING_VERSION="${MARKETING_VERSION:-1.0.1}"
+MARKETING_VERSION="${MARKETING_VERSION:-}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
-BETA_GROUP_NAME="${BETA_GROUP_NAME:-Internal Testers}"
 ASSIGN_BETA_GROUP="${ASSIGN_BETA_GROUP:-1}"
+INTERNAL_BETA_GROUP_NAME="${INTERNAL_BETA_GROUP_NAME:-Internal Testers}"
+EXTERNAL_BETA_GROUP_NAME="${EXTERNAL_BETA_GROUP_NAME:-External Testers}"
+LEGACY_BETA_GROUP_NAME="${BETA_GROUP_NAME:-}"
+if [[ -n "${BETA_GROUP_NAMES:-}" ]]; then
+    BETA_GROUP_NAMES="${BETA_GROUP_NAMES}"
+elif [[ -n "$LEGACY_BETA_GROUP_NAME" ]]; then
+    BETA_GROUP_NAMES="$LEGACY_BETA_GROUP_NAME"
+else
+    BETA_GROUP_NAMES="$INTERNAL_BETA_GROUP_NAME,$EXTERNAL_BETA_GROUP_NAME"
+fi
+SUBMIT_BETA_REVIEW="${SUBMIT_BETA_REVIEW:-1}"
 WAIT_FOR_PROCESSING="${WAIT_FOR_PROCESSING:-1}"
 BUILD_POLL_TIMEOUT_SECONDS="${BUILD_POLL_TIMEOUT_SECONDS:-900}"
 BUILD_POLL_INTERVAL_SECONDS="${BUILD_POLL_INTERVAL_SECONDS:-15}"
@@ -50,6 +60,13 @@ require_cmd xcodebuild
 require_cmd xcodegen
 
 mkdir -p "$BUILD_DIR"
+
+trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
 
 resolve_team_from_profile() {
     local profile_name="$1"
@@ -90,6 +107,13 @@ if [[ -z "$TEAM_ID" ]]; then
     )"
 fi
 
+if [[ -z "$MARKETING_VERSION" ]]; then
+    MARKETING_VERSION="$(
+        xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURATION" -showBuildSettings |
+            awk -F' = ' '/ MARKETING_VERSION = / {print $2; exit}'
+    )"
+fi
+
 if [[ -z "$TEAM_ID" && "$EXPORT_SIGNING_STYLE" == "manual" ]]; then
     TEAM_ID="$(resolve_team_from_profile "$PROVISIONING_PROFILE_SPECIFIER" || true)"
 fi
@@ -102,6 +126,12 @@ fi
 if [[ -z "$TEAM_ID" ]]; then
     echo "Unable to resolve DEVELOPMENT_TEAM for signing." >&2
     echo "Set TEAM_ID explicitly or ensure the project build settings or provisioning profile can resolve it." >&2
+    exit 1
+fi
+
+if [[ -z "$MARKETING_VERSION" ]]; then
+    echo "Unable to resolve MARKETING_VERSION for release." >&2
+    echo "Set MARKETING_VERSION explicitly or ensure the project build settings define it." >&2
     exit 1
 fi
 
@@ -317,34 +347,65 @@ if [[ -n "$build_id" && -n "$WHAT_TO_TEST" ]]; then
 fi
 
 if [[ "$ASSIGN_BETA_GROUP" == "1" && -n "$build_id" ]]; then
+    beta_group_ids=()
+    external_group_requested=0
 
-    beta_group_id="$(
-        asc testflight beta-groups list --app "$APP_STORE_APP_ID" --output json |
-            jq -r --arg name "$BETA_GROUP_NAME" '.data[] | select(.attributes.name == $name) | .id' |
-            head -n 1
-    )"
+    IFS=',' read -r -a requested_group_names <<<"$BETA_GROUP_NAMES"
+    for raw_group_name in "${requested_group_names[@]}"; do
+        group_name="$(trim "$raw_group_name")"
+        [[ -n "$group_name" ]] || continue
 
-    if [[ -z "$beta_group_id" ]]; then
         beta_group_id="$(
-            asc testflight beta-groups create --app "$APP_STORE_APP_ID" --name "$BETA_GROUP_NAME" --internal --output json |
-                jq -r '.data.id // empty'
+            asc testflight beta-groups list --app "$APP_STORE_APP_ID" --output json |
+                jq -r --arg name "$group_name" '.data[] | select(.attributes.name == $name) | .id' |
+                head -n 1
         )"
-    fi
 
-    if [[ -n "$beta_group_id" ]]; then
-        echo "==> Assigning build $build_id to beta group '$BETA_GROUP_NAME'"
+        if [[ -z "$beta_group_id" ]]; then
+            create_cmd=(
+                asc testflight beta-groups create
+                --app "$APP_STORE_APP_ID"
+                --name "$group_name"
+                --output json
+            )
+            if [[ "$group_name" == "$INTERNAL_BETA_GROUP_NAME" ]]; then
+                create_cmd+=(--internal)
+            else
+                external_group_requested=1
+            fi
+            beta_group_id="$(
+                "${create_cmd[@]}" |
+                    jq -r '.data.id // empty'
+            )"
+        elif [[ "$group_name" != "$INTERNAL_BETA_GROUP_NAME" ]]; then
+            external_group_requested=1
+        fi
+
+        if [[ -n "$beta_group_id" ]]; then
+            beta_group_ids+=("$beta_group_id")
+        fi
+    done
+
+    if [[ "${#beta_group_ids[@]}" -gt 0 ]]; then
+        group_csv="$(IFS=,; printf '%s' "${beta_group_ids[*]}")"
+        echo "==> Assigning build $build_id to beta groups: $BETA_GROUP_NAMES"
         deadline="$(( $(date +%s) + BUILD_POLL_TIMEOUT_SECONDS ))"
         assigned=0
         while [[ "$(date +%s)" -lt "$deadline" ]]; do
-            if asc builds add-groups --build "$build_id" --group "$beta_group_id" --output json >/dev/null 2>&1; then
+            if asc builds add-groups --build "$build_id" --group "$group_csv" --output json >/dev/null 2>&1; then
                 assigned=1
                 break
             fi
             sleep "$BUILD_POLL_INTERVAL_SECONDS"
         done
         if [[ "$assigned" -ne 1 ]]; then
-            echo "Failed to assign build $build_id to beta group '$BETA_GROUP_NAME' within timeout." >&2
+            echo "Failed to assign build $build_id to beta groups '$BETA_GROUP_NAMES' within timeout." >&2
             exit 1
+        fi
+
+        if [[ "$SUBMIT_BETA_REVIEW" == "1" && "$external_group_requested" -eq 1 ]]; then
+            echo "==> Submitting build $build_id for Beta App Review"
+            asc testflight review submit --build "$build_id" --confirm --output json >/dev/null
         fi
     fi
 fi

@@ -30,7 +30,7 @@ struct SSHLoginSheet: View {
     }
 
     private var sshPort: Int {
-        Int(server.port ?? 22)
+        Int(server.resolvedSSHPort)
     }
 
     private var hostDisplay: String {

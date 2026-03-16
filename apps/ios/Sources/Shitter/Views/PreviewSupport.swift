@@ -21,7 +21,8 @@ enum ShitterPreviewData {
         id: "preview-ssh",
         name: "Build Mac mini",
         hostname: "mac-mini.local",
-        port: 22,
+        port: nil,
+        sshPort: 22,
         source: .ssh,
         hasCodexServer: false,
         wakeMAC: "aa:bb:cc:dd:ee:ff",
@@ -230,13 +231,11 @@ enum ShitterPreviewData {
 
     @MainActor
     static func makeAppState(
-        sidebarOpen: Bool = false,
         selectedModel: String = sampleModels[0].id,
         reasoningEffort: String = "xhigh",
         currentCwd: String = sampleCwd
     ) -> AppState {
         let state = AppState()
-        state.sidebarOpen = sidebarOpen
         state.selectedModel = selectedModel
         state.reasoningEffort = reasoningEffort
         state.currentCwd = currentCwd
@@ -257,7 +256,7 @@ enum ShitterPreviewData {
         if includeConnection {
             let target = server.connectionTarget ?? .remote(host: server.hostname, port: server.port ?? 8390)
             let connection = ServerConnection(server: server, target: target)
-            connection.isConnected = true
+            connection.connectionHealth = .connected
             connection.connectionPhase = "ready"
             connection.authStatus = authStatus
             connection.models = sampleModels
@@ -352,10 +351,43 @@ enum ShitterPreviewData {
         thread.modelContextWindow = 200_000
         thread.contextTokensUsed = 156_000
         thread.rolloutPath = cwd + "/.codex/sessions/\(threadId).jsonl"
-        thread.messages = messages
+        thread.items = makeConversationItems(from: messages)
         thread.status = status
         thread.updatedAt = Date().addingTimeInterval(-300)
         return thread
+    }
+
+    private static func makeConversationItems(from messages: [ChatMessage]) -> [ConversationItem] {
+        messages.map { message in
+            let content: ConversationItemContent
+            switch message.role {
+            case .user:
+                content = .user(ConversationUserMessageData(text: message.text, images: message.images))
+            case .assistant:
+                content = .assistant(
+                    ConversationAssistantMessageData(
+                        text: message.text,
+                        agentNickname: message.agentNickname,
+                        agentRole: message.agentRole
+                    )
+                )
+            case .system:
+                if let widgetState = message.widgetState {
+                    content = .widget(ConversationWidgetData(widgetState: widgetState, status: "completed"))
+                } else {
+                    content = .note(ConversationNoteData(title: "System", body: message.text))
+                }
+            }
+
+            return ConversationItem(
+                id: message.id.uuidString,
+                content: content,
+                sourceTurnId: message.sourceTurnId,
+                sourceTurnIndex: message.sourceTurnIndex,
+                timestamp: message.timestamp,
+                isFromUserTurnBoundary: message.isFromUserTurnBoundary
+            )
+        }
     }
 
     private static func makeThreadSummary(
@@ -382,8 +414,8 @@ enum ShitterPreviewData {
 
 @MainActor
 struct ShitterPreviewScene<Content: View>: View {
-    @StateObject private var serverManager: ServerManager
-    @StateObject private var appState: AppState
+    @State private var serverManager: ServerManager
+    @State private var appState: AppState
 
     private let includeBackground: Bool
     private let content: Content
@@ -394,8 +426,8 @@ struct ShitterPreviewScene<Content: View>: View {
         includeBackground: Bool = true,
         @ViewBuilder content: () -> Content
     ) {
-        _serverManager = StateObject(wrappedValue: serverManager ?? ShitterPreviewData.makeServerManager())
-        _appState = StateObject(wrappedValue: appState ?? ShitterPreviewData.makeAppState())
+        _serverManager = State(initialValue: serverManager ?? ShitterPreviewData.makeServerManager())
+        _appState = State(initialValue: appState ?? ShitterPreviewData.makeAppState())
         self.includeBackground = includeBackground
         self.content = content()
     }
@@ -407,8 +439,9 @@ struct ShitterPreviewScene<Content: View>: View {
             }
             content
         }
-        .environmentObject(serverManager)
-        .environmentObject(appState)
+        .environment(serverManager)
+        .environment(appState)
+        .environment(ThemeManager.shared)
     }
 }
 #endif
