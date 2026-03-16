@@ -84,15 +84,15 @@ jobs:
             echo "Missing secret ANDROID_UPLOAD_KEYSTORE_B64"
             exit 1
           fi
-          echo "$ANDROID_UPLOAD_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/litter-upload.jks"
-          ls -lh "$RUNNER_TEMP/litter-upload.jks"
+          echo "$ANDROID_UPLOAD_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/shitter-upload.jks"
+          ls -lh "$RUNNER_TEMP/shitter-upload.jks"
 
       - name: Build signed onDevice release APK
         env:
-          LITTER_UPLOAD_STORE_FILE: ${{ runner.temp }}/litter-upload.jks
-          LITTER_UPLOAD_STORE_PASSWORD: ${{ secrets.LITTER_UPLOAD_STORE_PASSWORD }}
-          LITTER_UPLOAD_KEY_ALIAS: ${{ secrets.LITTER_UPLOAD_KEY_ALIAS }}
-          LITTER_UPLOAD_KEY_PASSWORD: ${{ secrets.LITTER_UPLOAD_KEY_PASSWORD }}
+          SHITTER_UPLOAD_STORE_FILE: ${{ runner.temp }}/shitter-upload.jks
+          SHITTER_UPLOAD_STORE_PASSWORD: ${{ secrets.SHITTER_UPLOAD_STORE_PASSWORD }}
+          SHITTER_UPLOAD_KEY_ALIAS: ${{ secrets.SHITTER_UPLOAD_KEY_ALIAS }}
+          SHITTER_UPLOAD_KEY_PASSWORD: ${{ secrets.SHITTER_UPLOAD_KEY_PASSWORD }}
         run: apps/android/gradlew -p apps/android :app:assembleOnDeviceRelease
 
       - name: Generate checksums

@@ -17,7 +17,7 @@ on:
       app_bundle_id:
         description: "App bundle identifier"
         required: true
-        default: "com.sigkitten.shitter"
+        default: "io.latitudes.shitter"
         type: string
       beta_group_name:
         description: "TestFlight beta group"
@@ -185,7 +185,7 @@ jobs:
             fi
           else
             SCHEME="Shitter"
-            APP_BUNDLE_ID="com.sigkitten.shitter"
+            APP_BUNDLE_ID="io.latitudes.shitter"
             BETA_GROUP_NAME="Internal Testers"
             WAIT_FOR_PROCESSING="1"
           fi
