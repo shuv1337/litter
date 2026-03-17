@@ -21,7 +21,7 @@ import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-private val CODEX_DISCOVERY_PORTS = intArrayOf(8390, 4222)
+private val CODEX_DISCOVERY_PORTS = intArrayOf(9234, 8390, 4222)
 
 enum class DiscoverySource {
     LOCAL,
@@ -67,7 +67,7 @@ class ServerDiscoveryService(
                 id = "local",
                 name = "On Device",
                 host = "127.0.0.1",
-                port = 8390,
+                port = 9234,
                 source = DiscoverySource.LOCAL,
                 hasCodexServer = true,
             )

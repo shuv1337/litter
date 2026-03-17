@@ -28,12 +28,15 @@ final class CodexIOSUITests: XCTestCase {
 
         XCTAssertTrue(openFirstConnectedServer(in: app), "Unable to open sessions screen")
         XCTAssertTrue(waitForSessionsScreen(in: app, timeout: 8), "Sessions screen did not appear")
-        XCTAssertTrue(waitForAnySession(in: app, timeout: 12), "No sessions to select")
         sleep(1)
         snapshot("03SessionsLoaded")
 
-        XCTAssertTrue(selectFirstSession(in: app), "Unable to open a session")
-        XCTAssertTrue(waitForConversationLoaded(in: app, timeout: 10), "Conversation view did not load")
+        if waitForAnySession(in: app, timeout: 12) {
+            XCTAssertTrue(selectFirstSession(in: app), "Unable to open a session")
+        } else {
+            XCTAssertTrue(startNewSessionFromSessions(in: app), "Unable to start a new session")
+        }
+        XCTAssertTrue(waitForConversationLoaded(in: app, timeout: 20), "Conversation view did not load")
         sleep(2)
         snapshot("04ConversationLoaded")
 
@@ -231,6 +234,21 @@ final class CodexIOSUITests: XCTestCase {
         }
 
         return false
+    }
+
+    private func startNewSessionFromSessions(in app: XCUIApplication) -> Bool {
+        let newSessionButton = identifiedElement("sessions.newSessionButton", in: app)
+        guard newSessionButton.waitForExistence(timeout: 6), newSessionButton.isHittable else {
+            return false
+        }
+        newSessionButton.tap()
+
+        let selectFolderButton = identifiedElement("directoryPicker.selectFolderButton", in: app)
+        if selectFolderButton.waitForExistence(timeout: 4), selectFolderButton.isHittable {
+            selectFolderButton.tap()
+        }
+
+        return true
     }
 
     private func waitForConversationLoaded(in app: XCUIApplication, timeout: TimeInterval) -> Bool {

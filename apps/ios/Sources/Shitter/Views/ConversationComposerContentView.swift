@@ -31,7 +31,7 @@ struct ConversationComposerContentView: View {
 
                         Button(action: onClearAttachment) {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(.body))
+                                .shitterFont(.body)
                                 .foregroundColor(.white)
                                 .background(Circle().fill(Color.black.opacity(0.6)))
                         }

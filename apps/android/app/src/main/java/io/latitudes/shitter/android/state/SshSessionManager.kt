@@ -27,7 +27,7 @@ class SshException(
 ) : Exception(message, cause)
 
 class SshSessionManager {
-    private val defaultRemotePort = 8390
+    private val defaultRemotePort = 9234
 
     private val lock = Any()
     private var session: Session? = null

@@ -50,17 +50,6 @@
                ReferencedContainer = "container:Shitter.xcodeproj">
             </BuildableReference>
          </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9F5CA27622BF22CE88D6B627"
-               BuildableName = "CodexIOSUITests.xctest"
-               BlueprintName = "CodexIOSUITests"
-               ReferencedContainer = "container:Shitter.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

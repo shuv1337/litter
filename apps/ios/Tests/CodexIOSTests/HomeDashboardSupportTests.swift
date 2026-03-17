@@ -65,7 +65,7 @@ final class HomeDashboardSupportTests: XCTestCase {
           "id": "legacy-ssh",
           "name": "Legacy SSH",
           "hostname": "mac-mini.local",
-          "port": 8390,
+          "port": 9234,
           "source": "manual",
           "hasCodexServer": false,
           "wakeMAC": null,
@@ -77,8 +77,8 @@ final class HomeDashboardSupportTests: XCTestCase {
         let discovered = saved.toDiscoveredServer()
 
         XCTAssertNil(discovered.port)
-        XCTAssertEqual(discovered.sshPort, 8390)
-        XCTAssertEqual(discovered.resolvedSSHPort, 8390)
+        XCTAssertEqual(discovered.sshPort, 9234)
+        XCTAssertEqual(discovered.resolvedSSHPort, 9234)
         XCTAssertFalse(discovered.hasCodexServer)
     }
 
@@ -88,7 +88,7 @@ final class HomeDashboardSupportTests: XCTestCase {
             id: "network-monitor-test",
             name: "Network Monitor Test",
             hostname: "network-monitor-test.local",
-            port: 8390,
+            port: 9234,
             source: .manual,
             hasCodexServer: true
         )
@@ -96,7 +96,7 @@ final class HomeDashboardSupportTests: XCTestCase {
 
         XCTAssertFalse(manager.hasInstalledNetworkMonitorCallbacks)
 
-        await manager.addServer(server, target: .remote(host: "", port: 8390))
+        await manager.addServer(server, target: .remote(host: "", port: 9234))
 
         XCTAssertTrue(manager.hasInstalledNetworkMonitorCallbacks)
     }
@@ -106,11 +106,11 @@ final class HomeDashboardSupportTests: XCTestCase {
             id: "server-a",
             name: "Server A",
             hostname: "server-a.local",
-            port: 8390,
+            port: 9234,
             source: .manual,
             hasCodexServer: true
         )
-        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 8390))
+        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 9234))
         let manager = ServerManager()
         manager.connections = [server.id: connection]
         let model = HomeDashboardModel()
@@ -128,11 +128,11 @@ final class HomeDashboardSupportTests: XCTestCase {
             id: "server-a",
             name: "Server A",
             hostname: "server-a.local",
-            port: 8390,
+            port: 9234,
             source: .manual,
             hasCodexServer: true
         )
-        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 8390))
+        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 9234))
         connection.connectionHealth = .connected
         let olderThread = makeThread(serverId: server.id, threadId: "thread-older", updatedAt: 20)
         let newerThread = makeThread(serverId: server.id, threadId: "thread-newer", updatedAt: 40)
@@ -154,11 +154,11 @@ final class HomeDashboardSupportTests: XCTestCase {
             id: "server-a",
             name: "Server A",
             hostname: "server-a.local",
-            port: 8390,
+            port: 9234,
             source: .manual,
             hasCodexServer: true
         )
-        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 8390))
+        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 9234))
         connection.connectionHealth = .connected
         let manager = ServerManager()
         manager.connections = [server.id: connection]
@@ -178,11 +178,11 @@ final class HomeDashboardSupportTests: XCTestCase {
             id: "server-a",
             name: "Server A",
             hostname: "server-a.local",
-            port: 8390,
+            port: 9234,
             source: .manual,
             hasCodexServer: true
         )
-        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 8390))
+        let connection = ServerConnection(server: server, target: .remote(host: server.hostname, port: 9234))
         connection.connectionHealth = .connected
         let initialThread = makeThread(serverId: server.id, threadId: "thread-initial", updatedAt: 20)
         let lateThread = makeThread(serverId: server.id, threadId: "thread-late", updatedAt: 80)

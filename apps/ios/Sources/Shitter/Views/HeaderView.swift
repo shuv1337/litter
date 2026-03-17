@@ -11,6 +11,7 @@ struct HeaderView: View {
     @State private var isReloading = false
     @State private var showOAuth = false
     @State private var pulsing = false
+    @AppStorage("fastMode") private var fastMode = false
 
     var topInset: CGFloat = 0
 
@@ -21,7 +22,7 @@ struct HeaderView: View {
                     onBack()
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .medium))
+                        .shitterFont(size: 16, weight: .medium)
                         .foregroundColor(ShitterTheme.textSecondary)
                         .frame(width: 44, height: 44)
                         .modifier(GlassCircleModifier())
@@ -45,21 +46,26 @@ struct HeaderView: View {
                                 .onChange(of: shouldPulse) { _, pulse in
                                     pulsing = pulse
                                 }
+                            if fastMode {
+                                Image(systemName: "bolt.fill")
+                                    .shitterFont(size: 10, weight: .semibold)
+                                    .foregroundColor(ShitterTheme.warning)
+                            }
                             Text(sessionModelLabel)
                                 .foregroundColor(ShitterTheme.textPrimary)
                             Text(sessionReasoningLabel)
                                 .foregroundColor(ShitterTheme.textSecondary)
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
+                                .shitterFont(size: 10, weight: .semibold)
                                 .foregroundColor(ShitterTheme.textSecondary)
                                 .rotationEffect(.degrees(appState.showModelSelector ? 180 : 0))
                         }
-                        .font(ShitterFont.styled(.subheadline, weight: .semibold))
+                        .shitterFont(.subheadline, weight: .semibold)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
 
                         Text(sessionDirectoryLabel)
-                            .font(ShitterFont.styled(.caption2, weight: .semibold))
+                            .shitterFont(.caption2, weight: .semibold)
                             .foregroundColor(ShitterTheme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -177,6 +183,13 @@ struct HeaderView: View {
         let threadReasoning = thread.reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !threadReasoning.isEmpty { return threadReasoning }
 
+        // Fall back to the model's default reasoning effort from the loaded model list.
+        let currentModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let model = connection.models.first(where: { $0.model == currentModel }),
+           !model.defaultReasoningEffort.isEmpty {
+            return model.defaultReasoningEffort
+        }
+
         return "default"
     }
 
@@ -241,7 +254,7 @@ struct HeaderView: View {
                         .tint(ShitterTheme.accent)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 16, weight: .semibold))
+                        .shitterFont(size: 16, weight: .semibold)
                         .foregroundColor(connection.isConnected ? ShitterTheme.accent : ShitterTheme.textMuted)
                 }
             }
@@ -258,6 +271,7 @@ struct InlineModelSelectorView: View {
     let models: [CodexModel]
     @Binding var selectedModel: String
     @Binding var reasoningEffort: String
+    @AppStorage("fastMode") private var fastMode = false
     var onDismiss: () -> Void
 
     private var currentModel: CodexModel? {
@@ -278,11 +292,11 @@ struct InlineModelSelectorView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 6) {
                                         Text(model.displayName)
-                                            .font(ShitterFont.styled(.footnote))
+                                            .shitterFont(.footnote)
                                             .foregroundColor(ShitterTheme.textPrimary)
                                         if model.isDefault {
                                             Text("default")
-                                                .font(ShitterFont.styled(.caption2, weight: .medium))
+                                                .shitterFont(.caption2, weight: .medium)
                                                 .foregroundColor(ShitterTheme.accent)
                                                 .padding(.horizontal, 6)
                                                 .padding(.vertical, 1)
@@ -291,13 +305,13 @@ struct InlineModelSelectorView: View {
                                         }
                                     }
                                     Text(model.description)
-                                        .font(ShitterFont.styled(.caption2))
+                                        .shitterFont(.caption2)
                                         .foregroundColor(ShitterTheme.textSecondary)
                                 }
                                 Spacer()
                                 if model.id == selectedModel {
                                     Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .shitterFont(size: 12, weight: .medium)
                                         .foregroundColor(ShitterTheme.accent)
                                 }
                             }
@@ -323,7 +337,7 @@ struct InlineModelSelectorView: View {
                                 onDismiss()
                             } label: {
                                 Text(effort.reasoningEffort)
-                                    .font(ShitterFont.styled(.caption2, weight: .medium))
+                                    .shitterFont(.caption2, weight: .medium)
                                     .foregroundColor(effort.reasoningEffort == reasoningEffort ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
@@ -336,6 +350,29 @@ struct InlineModelSelectorView: View {
                     .padding(.vertical, 8)
                 }
             }
+
+            Divider().background(ShitterTheme.separator).padding(.horizontal, 12)
+
+            HStack(spacing: 6) {
+                Button {
+                    fastMode.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .shitterFont(size: 9, weight: .semibold)
+                        Text("Fast")
+                            .shitterFont(.caption2, weight: .medium)
+                    }
+                    .foregroundColor(fastMode ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(fastMode ? ShitterTheme.warning : ShitterTheme.surfaceLight)
+                    .clipShape(Capsule())
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
         .padding(.vertical, 4)
         .fixedSize(horizontal: false, vertical: true)
@@ -347,6 +384,7 @@ struct ModelSelectorSheet: View {
     let models: [CodexModel]
     @Binding var selectedModel: String
     @Binding var reasoningEffort: String
+    @AppStorage("fastMode") private var fastMode = false
 
     private var currentModel: CodexModel? {
         models.first { $0.id == selectedModel }
@@ -363,11 +401,11 @@ struct ModelSelectorSheet: View {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 Text(model.displayName)
-                                    .font(ShitterFont.styled(.footnote))
+                                    .shitterFont(.footnote)
                                     .foregroundColor(ShitterTheme.textPrimary)
                                 if model.isDefault {
                                     Text("default")
-                                        .font(ShitterFont.styled(.caption2, weight: .medium))
+                                        .shitterFont(.caption2, weight: .medium)
                                         .foregroundColor(ShitterTheme.accent)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 1)
@@ -376,13 +414,13 @@ struct ModelSelectorSheet: View {
                                 }
                             }
                             Text(model.description)
-                                .font(ShitterFont.styled(.caption2))
+                                .shitterFont(.caption2)
                                 .foregroundColor(ShitterTheme.textSecondary)
                         }
                         Spacer()
                         if model.id == selectedModel {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .medium))
+                                .shitterFont(size: 12, weight: .medium)
                                 .foregroundColor(ShitterTheme.accent)
                         }
                     }
@@ -400,7 +438,7 @@ struct ModelSelectorSheet: View {
                                 reasoningEffort = effort.reasoningEffort
                             } label: {
                                 Text(effort.reasoningEffort)
-                                    .font(ShitterFont.styled(.caption2, weight: .medium))
+                                    .shitterFont(.caption2, weight: .medium)
                                     .foregroundColor(effort.reasoningEffort == reasoningEffort ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
@@ -413,6 +451,29 @@ struct ModelSelectorSheet: View {
                     .padding(.vertical, 12)
                 }
             }
+
+            Divider().background(ShitterTheme.separator).padding(.leading, 20)
+
+            HStack(spacing: 6) {
+                Button {
+                    fastMode.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .shitterFont(size: 9, weight: .semibold)
+                        Text("Fast")
+                            .shitterFont(.caption2, weight: .medium)
+                    }
+                    .foregroundColor(fastMode ? ShitterTheme.textOnAccent : ShitterTheme.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(fastMode ? ShitterTheme.warning : ShitterTheme.surfaceLight)
+                    .clipShape(Capsule())
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
 
             Spacer()
         }

@@ -10,6 +10,10 @@ struct HomeDashboardView: View {
     let onNewSession: () -> Void
     let onConnectServer: () -> Void
     let onShowSettings: () -> Void
+    var onDeleteThread: ((ThreadKey) async -> Void)? = nil
+    var onDisconnectServer: ((String) -> Void)? = nil
+    @State private var deleteTargetThread: ThreadState?
+    @State private var disconnectTargetServer: ServerConnection?
 
     var body: some View {
         ScrollView {
@@ -23,6 +27,34 @@ struct HomeDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
+        .alert("Delete Session?", isPresented: Binding(
+            get: { deleteTargetThread != nil },
+            set: { if !$0 { deleteTargetThread = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { deleteTargetThread = nil }
+            Button("Delete", role: .destructive) {
+                if let thread = deleteTargetThread {
+                    Task { await onDeleteThread?(thread.key) }
+                }
+                deleteTargetThread = nil
+            }
+        } message: {
+            Text("This will permanently delete \"\(deleteTargetThread?.sessionTitle ?? "this session")\".")
+        }
+        .alert("Disconnect Server?", isPresented: Binding(
+            get: { disconnectTargetServer != nil },
+            set: { if !$0 { disconnectTargetServer = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { disconnectTargetServer = nil }
+            Button("Disconnect", role: .destructive) {
+                if let conn = disconnectTargetServer {
+                    onDisconnectServer?(conn.id)
+                }
+                disconnectTargetServer = nil
+            }
+        } message: {
+            Text("Disconnect from \"\(disconnectTargetServer?.server.name ?? "this server")\"?")
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -66,6 +98,13 @@ struct HomeDashboardView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(openingRecentSessionKey != nil || isStartingNewSession)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteTargetThread = thread
+                            } label: {
+                                Label("Delete Session", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
@@ -90,6 +129,13 @@ struct HomeDashboardView: View {
                             connectedServerRow(connection)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                disconnectTargetServer = connection
+                            } label: {
+                                Label("Disconnect Server", systemImage: "bolt.slash")
+                            }
+                        }
                     }
                 }
             }
@@ -105,7 +151,7 @@ struct HomeDashboardView: View {
     ) -> some View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
-                .font(ShitterFont.styled(.headline))
+                .shitterFont(.headline)
                 .foregroundColor(ShitterTheme.textPrimary)
 
             Spacer(minLength: 0)
@@ -119,7 +165,7 @@ struct HomeDashboardView: View {
                             .frame(width: 74)
                     } else {
                         Label(buttonTitle, systemImage: systemImage)
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.accent)
                     }
                 }
@@ -140,7 +186,7 @@ struct HomeDashboardView: View {
     private func recentSessionCard(_ thread: ThreadState) -> some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: thread.hasTurnActive ? "sparkles" : "text.bubble")
-                .font(.system(size: 16, weight: .medium))
+                .shitterFont(size: 16, weight: .medium)
                 .foregroundColor(ShitterTheme.accent)
                 .frame(width: 28, height: 28)
                 .background(ShitterTheme.accent.opacity(0.12))
@@ -148,7 +194,7 @@ struct HomeDashboardView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(thread.sessionTitle)
-                    .font(ShitterFont.styled(.subheadline))
+                    .shitterFont(.subheadline)
                     .foregroundColor(ShitterTheme.textPrimary)
                     .lineLimit(1)
 
@@ -163,7 +209,7 @@ struct HomeDashboardView: View {
                     metadataDivider
                     Text(thread.updatedAt, style: .relative)
                 }
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .lineLimit(1)
             }
@@ -178,7 +224,7 @@ struct HomeDashboardView: View {
                 statusBadge("Thinking")
             } else {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .shitterFont(size: 12, weight: .semibold)
                     .foregroundColor(ShitterTheme.textMuted)
             }
         }
@@ -197,7 +243,7 @@ struct HomeDashboardView: View {
     private func connectedServerRow(_ connection: ServerConnection) -> some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: connection.server.source == .local ? "iphone" : "server.rack")
-                .font(.system(size: 16, weight: .medium))
+                .shitterFont(size: 16, weight: .medium)
                 .foregroundColor(ShitterTheme.accent)
                 .frame(width: 28, height: 28)
                 .background(ShitterTheme.accent.opacity(0.12))
@@ -205,12 +251,12 @@ struct HomeDashboardView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(connection.server.name)
-                    .font(ShitterFont.styled(.subheadline))
+                    .shitterFont(.subheadline)
                     .foregroundColor(ShitterTheme.textPrimary)
                     .lineLimit(1)
 
                 Text(HomeDashboardSupport.serverSubtitle(for: connection.server))
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textMuted)
                     .lineLimit(1)
             }
@@ -223,11 +269,11 @@ struct HomeDashboardView: View {
                     .frame(width: 8, height: 8)
 
                 Text("Connected")
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textMuted)
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .shitterFont(size: 12, weight: .semibold)
                     .foregroundColor(ShitterTheme.textMuted)
             }
         }
@@ -246,11 +292,11 @@ struct HomeDashboardView: View {
     private func emptyStateCard(title: String, message: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(ShitterTheme.textPrimary)
 
             Text(message)
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -266,7 +312,7 @@ struct HomeDashboardView: View {
 
     private func statusBadge(_ title: String) -> some View {
         Text(title)
-            .font(ShitterFont.styled(.caption))
+            .shitterFont(.caption)
             .foregroundColor(ShitterTheme.accent)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

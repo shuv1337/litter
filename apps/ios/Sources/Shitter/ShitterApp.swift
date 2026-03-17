@@ -83,7 +83,11 @@ struct ShitterApp: App {
                 .environment(themeManager)
                 .task {
                     appDelegate.serverManager = serverManager
-                    await serverManager.reconnectAll()
+                    let forceDiscoveryForUITest =
+                        ProcessInfo.processInfo.environment["CODEXIOS_UI_TEST_FORCE_DISCOVERY"] == "1"
+                    if !forceDiscoveryForUITest {
+                        await serverManager.reconnectAll()
+                    }
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -107,6 +111,11 @@ struct ContentView: View {
     @State private var stableSafeAreaInsets = StableSafeAreaInsets()
     @State private var conversationWarmup = ConversationWarmupCoordinator()
     @State private var composerBottomInset: CGFloat = 0
+    @AppStorage("conversationTextSizeStep") private var textSizeStep = ConversationTextSize.large.rawValue
+
+    private var textScale: CGFloat {
+        ConversationTextSize.clamped(rawValue: textSizeStep).scale
+    }
 
     var body: some View {
         @Bindable var bindableAppState = appState
@@ -126,6 +135,8 @@ struct ContentView: View {
                 if let approval = serverManager.activePendingApproval {
                     ApprovalPromptView(approval: approval) { decision in
                         serverManager.respondToPendingApproval(requestId: approval.requestId, decision: decision)
+                    } onViewThread: { threadKey in
+                        appState.pendingThreadNavigation = threadKey
                     }
                 }
 
@@ -152,6 +163,7 @@ struct ContentView: View {
         }
         .environment(appState)
         .environment(conversationWarmup)
+        .environment(\.textScale, textScale)
         .onAppear {
             let forceDiscoveryForUITest =
                 ProcessInfo.processInfo.environment["CODEXIOS_UI_TEST_FORCE_DISCOVERY"] == "1"
@@ -173,10 +185,12 @@ struct ContentView: View {
             }
             .environment(serverManager)
             .environment(appState)
+            .environment(\.textScale, textScale)
         }
         .sheet(isPresented: $bindableAppState.showSettings) {
             SettingsView()
                 .environment(serverManager)
+                .environment(\.textScale, textScale)
         }
     }
 
@@ -239,7 +253,13 @@ private struct HomeNavigationView: View {
                         onOpenServerSessions: openServerSessions,
                         onNewSession: handleNewSessionTap,
                         onConnectServer: { appState.showServerPicker = true },
-                        onShowSettings: { appState.showSettings = true }
+                        onShowSettings: { appState.showSettings = true },
+                        onDeleteThread: { key in
+                            try? await serverManager.archiveThread(key)
+                        },
+                        onDisconnectServer: { serverId in
+                            serverManager.removeServer(id: serverId)
+                        }
                     )
                 } else {
                     ShitterTheme.backgroundGradient.ignoresSafeArea()
@@ -283,6 +303,12 @@ private struct HomeNavigationView: View {
         }
         .onChange(of: navigationPath.count) { _, _ in
             updateHomeDashboardActivity()
+        }
+        .onChange(of: appState.pendingThreadNavigation) { _, newKey in
+            if let newKey {
+                appState.pendingThreadNavigation = nil
+                replaceTopConversation(with: newKey)
+            }
         }
         .sheet(item: $directoryPickerSheet) { _ in
             NavigationStack {
@@ -331,7 +357,13 @@ private struct HomeNavigationView: View {
     }
 
     private func handleNewSessionTap() {
-        if let defaultServerId = defaultNewSessionServerId() {
+        if let defaultServerId = defaultNewSessionServerId(preferredServerId: appState.sessionsSelectedServerFilterId) {
+            // For local on-device server, skip directory picker and use /home/codex.
+            if let conn = serverManager.connections[defaultServerId], conn.target == .local {
+                let cwd = codex_ios_default_cwd() as String? ?? NSHomeDirectory()
+                Task { await startNewSession(serverId: defaultServerId, cwd: cwd) }
+                return
+            }
             directoryPickerSheet = SessionLaunchSupport.DirectoryPickerSheetModel(selectedServerId: defaultServerId)
         } else {
             appState.showServerPicker = true
@@ -548,10 +580,31 @@ private struct ConversationDestinationScreen: View {
                     )
                 }
             } else {
-                ProgressView()
-                    .tint(ShitterTheme.accent)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
+                VStack(spacing: 16) {
+                    Spacer()
+                    ProgressView()
+                        .tint(ShitterTheme.accent)
+                    Text("Loading thread...")
+                        .shitterFont(.caption)
+                        .foregroundColor(ShitterTheme.textMuted)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
+                .overlay(alignment: .topLeading) {
+                    Button(action: onBack) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .shitterFont(size: 14, weight: .semibold)
+                            Text("Back")
+                                .shitterFont(.callout)
+                        }
+                        .foregroundColor(ShitterTheme.accent)
+                        .padding(.horizontal, 16)
+                        .padding(.top, topInset + 12)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -582,6 +635,7 @@ private struct ConversationDestinationScreen: View {
 private struct ApprovalPromptView: View {
     let approval: ServerManager.PendingApproval
     let onDecision: (ServerManager.ApprovalDecision) -> Void
+    var onViewThread: ((ThreadKey) -> Void)? = nil
 
     private var title: String {
         switch approval.kind {
@@ -593,18 +647,10 @@ private struct ApprovalPromptView: View {
     }
 
     private var requesterLabel: String? {
-        let nickname = approval.requesterAgentNickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let role = approval.requesterAgentRole?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !nickname.isEmpty && !role.isEmpty {
-            return "\(nickname) [\(role)]"
-        }
-        if !nickname.isEmpty {
-            return nickname
-        }
-        if !role.isEmpty {
-            return "[\(role)]"
-        }
-        return nil
+        AgentLabelFormatter.format(
+            nickname: approval.requesterAgentNickname,
+            role: approval.requesterAgentRole
+        )
     }
 
     var body: some View {
@@ -614,29 +660,57 @@ private struct ApprovalPromptView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Text(title)
-                    .font(ShitterFont.styled(.headline))
+                    .shitterFont(.headline)
                     .foregroundColor(ShitterTheme.textPrimary)
 
                 if let reason = approval.reason, !reason.isEmpty {
                     Text(reason)
-                        .font(ShitterFont.styled(.footnote))
+                        .shitterFont(.footnote)
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
 
                 if let requesterLabel {
-                    Text("Requester: \(requesterLabel)")
-                        .font(ShitterFont.styled(.caption))
-                        .foregroundColor(ShitterTheme.textMuted)
+                    HStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.fill")
+                                .shitterFont(size: 10, weight: .semibold)
+                                .foregroundColor(ShitterTheme.success)
+                            Text(requesterLabel)
+                                .shitterFont(.caption, weight: .medium)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(ShitterTheme.success.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                        if let threadId = approval.threadId, onViewThread != nil {
+                            Button {
+                                onViewThread?(ThreadKey(serverId: approval.serverId, threadId: threadId))
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Text("View Thread")
+                                        .shitterFont(.caption, weight: .medium)
+                                    Image(systemName: "arrow.right")
+                                        .shitterFont(size: 9, weight: .semibold)
+                                }
+                                .foregroundColor(ShitterTheme.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Spacer()
+                    }
                 }
 
                 if let command = approval.command, !command.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Command")
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.textMuted)
                         ScrollView(.horizontal, showsIndicators: false) {
                             Text(command)
-                                .font(ShitterFont.styled(.footnote))
+                                .shitterFont(.footnote)
                                 .foregroundColor(ShitterTheme.textBody)
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -648,13 +722,13 @@ private struct ApprovalPromptView: View {
 
                 if let cwd = approval.cwd, !cwd.isEmpty {
                     Text("CWD: \(cwd)")
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
                 if let grantRoot = approval.grantRoot, !grantRoot.isEmpty {
                     Text("Grant Root: \(grantRoot)")
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.textMuted)
                 }
 
@@ -679,7 +753,7 @@ private struct ApprovalPromptView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .font(ShitterFont.styled(.callout))
+                .shitterFont(.callout)
             }
             .padding(16)
             .modifier(GlassRectModifier(cornerRadius: 14))
@@ -700,7 +774,7 @@ struct LaunchView: View {
             VStack(spacing: 24) {
                 BrandLogo(size: 132)
                 Text("AI coding agent on iOS")
-                    .font(ShitterFont.styled(.body))
+                    .shitterFont(.body)
                     .foregroundColor(ShitterTheme.textMuted)
             }
         }

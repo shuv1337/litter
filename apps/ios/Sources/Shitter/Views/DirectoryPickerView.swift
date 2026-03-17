@@ -50,7 +50,7 @@ private enum DirectoryPickerStrings {
 }
 
 private let directoryPickerSignpostLog = OSLog(
-    subsystem: Bundle.main.bundleIdentifier ?? "com.shitter.ios",
+    subsystem: Bundle.main.bundleIdentifier ?? "io.latitudes.shitter.ios",
     category: "DirectoryPicker"
 )
 
@@ -429,7 +429,7 @@ struct DirectoryPickerView: View {
                             DirectoryPickerStrings.noServerSelected
                     )
                 )
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(selectedServerOption == nil ? ShitterTheme.textMuted : ShitterTheme.textSecondary)
                 .lineLimit(1)
 
@@ -443,7 +443,7 @@ struct DirectoryPickerView: View {
                             }
                         }
                     }
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.accent)
                 }
 
@@ -467,7 +467,7 @@ struct DirectoryPickerView: View {
                     DirectoryPickerStrings.searchFolders,
                     text: searchQueryBinding
                 )
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
@@ -502,7 +502,7 @@ struct DirectoryPickerView: View {
                         }
                     } label: {
                         Label(DirectoryPickerStrings.upOneLevel, systemImage: "arrow.up.backward")
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                     }
                     .disabled(!model.canNavigateUp)
 
@@ -517,7 +517,7 @@ struct DirectoryPickerView: View {
                             }
                         } label: {
                             Text(segment.label)
-                                .font(ShitterFont.styled(.caption))
+                                .shitterFont(.caption)
                                 .foregroundColor(segment.path == model.currentPath ? ShitterTheme.textOnAccent : ShitterTheme.textSecondary)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
@@ -543,10 +543,10 @@ struct DirectoryPickerView: View {
         } else if let err = model.errorMessage {
             VStack(spacing: 12) {
                 Text(DirectoryPickerStrings.loadError)
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.danger)
                 Text(err)
-                    .font(ShitterFont.styled(.caption2))
+                    .shitterFont(.caption2)
                     .foregroundColor(ShitterTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
@@ -590,11 +590,11 @@ struct DirectoryPickerView: View {
                                 .frame(width: 20)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(DirectoryPickerStrings.continueIn((recent.path as NSString).lastPathComponent))
-                                    .font(ShitterFont.styled(.subheadline))
+                                    .shitterFont(.subheadline)
                                     .foregroundColor(ShitterTheme.textPrimary)
                                     .lineLimit(1)
                                 Text(recent.path)
-                                    .font(ShitterFont.styled(.caption2))
+                                    .shitterFont(.caption2)
                                     .foregroundColor(ShitterTheme.textMuted)
                                     .lineLimit(1)
                             }
@@ -620,17 +620,17 @@ struct DirectoryPickerView: View {
                                     .frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text((recent.path as NSString).lastPathComponent)
-                                        .font(ShitterFont.styled(.subheadline))
+                                        .shitterFont(.subheadline)
                                         .foregroundColor(ShitterTheme.textPrimary)
                                         .lineLimit(1)
                                     Text(recent.path)
-                                        .font(ShitterFont.styled(.caption2))
+                                        .shitterFont(.caption2)
                                         .foregroundColor(ShitterTheme.textMuted)
                                         .lineLimit(1)
                                 }
                                 Spacer()
                                 Text(model.relativeDate(for: recent.lastUsedAt))
-                                    .font(ShitterFont.styled(.caption2))
+                                    .shitterFont(.caption2)
                                     .foregroundColor(ShitterTheme.textSecondary)
                                     .lineLimit(1)
                             }
@@ -647,7 +647,7 @@ struct DirectoryPickerView: View {
                 } header: {
                     HStack {
                         Text(DirectoryPickerStrings.recentDirectories)
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.textSecondary)
                         Spacer()
                         Menu {
@@ -661,7 +661,7 @@ struct DirectoryPickerView: View {
                     }
                 } footer: {
                     Text(DirectoryPickerStrings.recentFooter)
-                        .font(ShitterFont.styled(.caption2))
+                        .shitterFont(.caption2)
                         .foregroundColor(ShitterTheme.textMuted)
                 }
             }
@@ -669,7 +669,7 @@ struct DirectoryPickerView: View {
             let visibleEntries = model.visibleEntries()
             if visibleEntries.isEmpty {
                 Text(model.emptyMessage())
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textMuted)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
             } else {
@@ -689,12 +689,12 @@ struct DirectoryPickerView: View {
                                 .foregroundColor(ShitterTheme.accent)
                                 .frame(width: 20)
                             Text(entry)
-                                .font(ShitterFont.styled(.subheadline))
+                                .shitterFont(.subheadline)
                                 .foregroundColor(ShitterTheme.textPrimary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .foregroundColor(ShitterTheme.textMuted)
-                                .font(.caption)
+                                .shitterFont(.caption)
                         }
                     }
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -710,14 +710,14 @@ struct DirectoryPickerView: View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.currentPath.isEmpty {
                 Text(model.currentPath)
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if !canSelectPath {
                 Text(DirectoryPickerStrings.chooseFolderHelper)
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -726,7 +726,7 @@ struct DirectoryPickerView: View {
                     onDismissRequested?()
                 }
                 .buttonStyle(.plain)
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(ShitterTheme.textSecondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -746,7 +746,7 @@ struct DirectoryPickerView: View {
                 .accessibilityIdentifier("directoryPicker.selectFolderButton")
                 .disabled(!canSelectPath)
                 .buttonStyle(.plain)
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(canSelectPath ? ShitterTheme.textOnAccent : ShitterTheme.textMuted)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)

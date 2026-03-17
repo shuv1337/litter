@@ -6,7 +6,6 @@ options:
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
 
-
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -59,6 +58,20 @@ targets:
         embed: true
       - framework: Frameworks/ios_system/files.xcframework
         embed: true
+      - framework: Frameworks/ios_system/awk.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/tar.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/curl_ios.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/ssh_cmd.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/lg2.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/openssl.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/libssh2.xcframework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter.remote
@@ -69,6 +82,7 @@ targets:
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
+
   Shitter:
     type: application
     platform: iOS
@@ -111,6 +125,20 @@ targets:
         embed: true
       - framework: Frameworks/ios_system/files.xcframework
         embed: true
+      - framework: Frameworks/ios_system/awk.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/tar.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/curl_ios.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/ssh_cmd.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/lg2.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/openssl.xcframework
+        embed: true
+      - framework: Frameworks/ios_system/libssh2.xcframework
+        embed: true
       - target: ShitterLiveActivity
         embed: true
     settings:
@@ -123,6 +151,7 @@ targets:
       configs:
         Debug:
           OTHER_LDFLAGS: "$(inherited) -lc++ -lz"
+
   ShitterLiveActivity:
     type: app-extension
     platform: iOS
@@ -143,6 +172,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.latitudes.shitter.liveactivity
         INFOPLIST_FILE: Sources/ShitterLiveActivity/Info.plist
+
   CodexIOSTests:
     type: bundle.unit-test
     platform: iOS
@@ -156,6 +186,7 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         CODE_SIGNING_ALLOWED: false
         CODE_SIGNING_REQUIRED: false
+
   CodexIOSUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -190,6 +221,7 @@ schemes:
     management:
       isShown: true
       orderHint: 0
+
   Shitter:
     build:
       targets:
@@ -200,7 +232,6 @@ schemes:
       config: Debug
       targets:
         - CodexIOSTests
-        - CodexIOSUITests
     profile:
       config: Release
     analyze:

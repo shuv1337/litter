@@ -213,7 +213,7 @@ struct SessionsScreen: View {
             } else if derived.allThreads.isEmpty {
                 Spacer()
                 Text("No sessions yet")
-                    .font(ShitterFont.styled(.footnote))
+                    .shitterFont(.footnote)
                     .foregroundColor(ShitterTheme.textMuted)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -224,7 +224,7 @@ struct SessionsScreen: View {
                 if derived.filteredThreads.isEmpty {
                     Spacer()
                     Text("No matches for \"\(trimmedSessionSearchQuery)\"")
-                        .font(ShitterFont.styled(.footnote))
+                        .shitterFont(.footnote)
                         .foregroundColor(ShitterTheme.textMuted)
                         .frame(maxWidth: .infinity)
                     Spacer()
@@ -298,7 +298,7 @@ struct SessionsScreen: View {
         HStack(spacing: 10) {
             Button { appState.showSettings = true } label: {
                 Image(systemName: "gear")
-                    .font(.system(.subheadline, weight: .medium))
+                    .shitterFont(.subheadline, weight: .medium)
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(width: 44, height: 44)
                     .modifier(GlassRectModifier(cornerRadius: 10))
@@ -306,8 +306,14 @@ struct SessionsScreen: View {
             .accessibilityIdentifier("sessions.settingsButton")
 
             Button {
-                if let defaultServerId = defaultNewSessionServerId() {
-                    directoryPickerSheet = SessionLaunchSupport.DirectoryPickerSheetModel(selectedServerId: defaultServerId)
+                if let defaultServerId = defaultNewSessionServerId(preferredServerId: appState.sessionsSelectedServerFilterId) {
+                    // For local on-device server, skip directory picker and use /home/codex.
+                    if let conn = serverManager.connections[defaultServerId], conn.target == .local {
+                        let cwd = codex_ios_default_cwd() as String? ?? NSHomeDirectory()
+                        Task { await startNewSession(serverId: defaultServerId, cwd: cwd) }
+                    } else {
+                        directoryPickerSheet = SessionLaunchSupport.DirectoryPickerSheetModel(selectedServerId: defaultServerId)
+                    }
                 } else {
                     appState.showServerPicker = true
                 }
@@ -319,9 +325,9 @@ struct SessionsScreen: View {
                             .tint(ShitterTheme.textOnAccent)
                     } else {
                         Image(systemName: "plus")
-                            .font(.system(.subheadline, weight: .medium))
+                            .shitterFont(.subheadline, weight: .medium)
                         Text("New Session")
-                            .font(ShitterFont.styled(.subheadline))
+                            .shitterFont(.subheadline)
                     }
                 }
                 .foregroundColor(ShitterTheme.textOnAccent)
@@ -346,28 +352,28 @@ struct SessionsScreen: View {
                     .foregroundColor(ShitterTheme.textMuted)
                     .frame(width: 20)
                 Text("Not connected")
-                    .font(ShitterFont.styled(.footnote))
+                    .shitterFont(.footnote)
                     .foregroundColor(ShitterTheme.textMuted)
                 Spacer()
                 Button("Connect") {
                     appState.showServerPicker = true
                 }
                 .accessibilityIdentifier("sessions.connectButton")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.accent)
             } else {
                 Image(systemName: "server.rack")
                     .foregroundColor(ShitterTheme.accent)
                     .frame(width: 20)
                 Text("\(connected.count) server\(connected.count == 1 ? "" : "s")")
-                    .font(ShitterFont.styled(.footnote))
+                    .shitterFont(.footnote)
                     .foregroundColor(ShitterTheme.textPrimary)
                 Spacer()
                 Button("Add") {
                     appState.showServerPicker = true
                 }
                 .accessibilityIdentifier("sessions.addServerButton")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.accent)
                 if let activeThread {
                     Button {
@@ -382,7 +388,7 @@ struct SessionsScreen: View {
                         }
                     }
                     .disabled(isForkingActiveThread || (activeThreadEphemeralState?.hasTurnActive ?? activeThread.hasTurnActive))
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor((activeThreadEphemeralState?.hasTurnActive ?? activeThread.hasTurnActive) ? ShitterTheme.textMuted : ShitterTheme.accent)
                 }
             }
@@ -395,10 +401,10 @@ struct SessionsScreen: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(ShitterTheme.textMuted)
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
 
             TextField("Search sessions", text: $sessionSearchQuery)
-                .font(ShitterFont.styled(.footnote))
+                .shitterFont(.footnote)
                 .foregroundColor(ShitterTheme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
@@ -409,7 +415,7 @@ struct SessionsScreen: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(ShitterTheme.textMuted)
-                        .font(.system(size: 14))
+                        .shitterFont(size: 14)
                 }
                 .buttonStyle(.plain)
             }
@@ -471,7 +477,7 @@ struct SessionsScreen: View {
                     selectedServerFilterId = nil
                     showOnlyForks = false
                 }
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.accent)
             }
             Spacer(minLength: 0)
@@ -488,11 +494,11 @@ struct SessionsScreen: View {
     private func filterChip(title: String, isActive: Bool, icon: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
+                .shitterFont(size: 10, weight: .semibold)
             Text(title)
                 .lineLimit(1)
         }
-        .font(ShitterFont.styled(.caption))
+        .shitterFont(.caption)
         .foregroundColor(isActive ? ShitterTheme.textOnAccent : ShitterTheme.textSecondary)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -516,27 +522,27 @@ struct SessionsScreen: View {
         } label: {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                    .shitterFont(size: 10, weight: .semibold)
                     .foregroundColor(ShitterTheme.textSecondary)
                     .frame(width: 12)
 
                 Image(systemName: "folder")
-                    .font(.system(size: 11, weight: .semibold))
+                    .shitterFont(size: 11, weight: .semibold)
                     .foregroundColor(ShitterTheme.accent)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.workspaceTitle)
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.textPrimary)
                         .lineLimit(1)
 
                     Text(group.serverHost)
-                        .font(ShitterFont.styled(.caption2))
+                        .shitterFont(.caption2)
                         .foregroundColor(ShitterTheme.textMuted)
                         .lineLimit(1)
 
                     Text(abbreviateHomePath(group.workspacePath))
-                        .font(ShitterFont.styled(.caption2))
+                        .shitterFont(.caption2)
                         .foregroundColor(ShitterTheme.textMuted)
                         .lineLimit(1)
                 }
@@ -561,7 +567,7 @@ struct SessionsScreen: View {
                     ForEach(derived.workspaceSections) { section in
                         if let title = section.title {
                             Text(title)
-                                .font(ShitterFont.styled(.caption2))
+                                .shitterFont(.caption2)
                                 .foregroundColor(ShitterTheme.textMuted)
                                 .padding(.horizontal, 2)
                         }
@@ -687,7 +693,7 @@ struct SessionsScreen: View {
                     if hasChildren {
                         Button(action: onToggleNode) {
                             Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
+                                .shitterFont(size: 9, weight: .semibold)
                                 .foregroundColor(ShitterTheme.textSecondary)
                                 .frame(width: 10, height: 10)
                         }
@@ -701,6 +707,8 @@ struct SessionsScreen: View {
                 HStack(alignment: .top, spacing: 6) {
                     if hasTurnActive {
                         PulsingDot().padding(.top, 3)
+                    } else if thread.isSubagent {
+                        subagentStatusIndicator(thread.agentStatus).padding(.top, 3)
                     } else {
                         Circle().fill(Color.clear).frame(width: 8, height: 8).padding(.top, 3)
                     }
@@ -708,15 +716,27 @@ struct SessionsScreen: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(thread.sessionTitle)
-                                .font(ShitterFont.styled(.footnote))
+                                .shitterFont(.footnote)
                                 .foregroundColor(ShitterTheme.textPrimary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                                 .accessibilityIdentifier("sessions.sessionTitle")
 
-                            if thread.isFork {
+                            if thread.isSubagent {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "person.2.fill")
+                                        .shitterFont(size: 8, weight: .semibold)
+                                    Text(thread.agentDisplayLabel ?? "Agent")
+                                        .shitterFont(.caption2)
+                                }
+                                .foregroundColor(ShitterTheme.textOnAccent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(ShitterTheme.success)
+                                .cornerRadius(4)
+                            } else if thread.isFork {
                                 Text("Fork")
-                                    .font(ShitterFont.styled(.caption2))
+                                    .shitterFont(.caption2)
                                     .foregroundColor(ShitterTheme.textOnAccent)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
@@ -749,7 +769,7 @@ struct SessionsScreen: View {
                                     .foregroundColor(ShitterTheme.textMuted)
                             }
                         }
-                        .font(ShitterFont.styled(.caption2))
+                        .shitterFont(.caption2)
                         .lineLimit(1)
                     }
                 }
@@ -829,7 +849,7 @@ struct SessionsScreen: View {
 
     private func lineageChip(title: String, count: Int, isInteractive: Bool) -> some View {
         Text("\(title) \(count)")
-            .font(ShitterFont.styled(.caption2))
+            .shitterFont(.caption2)
             .foregroundColor(isInteractive ? ShitterTheme.accent : ShitterTheme.textMuted)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -839,6 +859,36 @@ struct SessionsScreen: View {
                     .stroke(isInteractive ? ShitterTheme.accent.opacity(0.5) : ShitterTheme.border.opacity(0.5), lineWidth: 1)
             )
             .cornerRadius(5)
+    }
+
+    @ViewBuilder
+    private func subagentStatusIndicator(_ status: SubagentStatus) -> some View {
+        switch status {
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .shitterFont(size: 8)
+                .foregroundColor(ShitterTheme.success)
+                .frame(width: 8, height: 8)
+        case .errored:
+            Image(systemName: "exclamationmark.circle.fill")
+                .shitterFont(size: 8)
+                .foregroundColor(ShitterTheme.danger)
+                .frame(width: 8, height: 8)
+        case .shutdown:
+            Image(systemName: "stop.circle.fill")
+                .shitterFont(size: 8)
+                .foregroundColor(ShitterTheme.textMuted)
+                .frame(width: 8, height: 8)
+        case .interrupted:
+            Image(systemName: "pause.circle.fill")
+                .shitterFont(size: 8)
+                .foregroundColor(ShitterTheme.warning)
+                .frame(width: 8, height: 8)
+        default:
+            Circle()
+                .fill(ShitterTheme.textMuted.opacity(0.4))
+                .frame(width: 8, height: 8)
+        }
     }
 
     private func visibleSessionRows(for group: WorkspaceSessionGroup) -> [SessionTreeRow] {

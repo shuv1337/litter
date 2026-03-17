@@ -1,26 +1,24 @@
 Summary
 
-- Home screen: new dashboard shows recent sessions and connected servers at a glance, with direct entry points for new and existing sessions.
-- Streamlined navigation: sidebar overlay replaced with a simpler back-button flow between home, sessions, and conversations.
-- Rich conversation items: shell commands, file changes, MCP tool calls, web searches, multi-agent actions, and generative UI widgets now render as structured inline cards.
-- Tasks and plans: todo lists show live progress, and proposed plans render as expandable markdown sections.
-- File diffs: turn-level file diffs now appear inline.
-- Collapsible turns: previous turns can collapse into preview cards from Settings -> Conversation -> Collapse Turns.
-- Improved networking: better reconnect behavior after backgrounding, more reliable notification streaming, and improved thread sync on resume.
-- Improved markdown: migrated to a new markdown renderer for better performance and compatibility.
-- Compact Dynamic Island: live activity indicator is smaller during active turns.
-- Smaller tool cards: command cards are more compact and wrap command text correctly.
-- Bug fixes: fixed the home toolbar disappearing after navigating back, and fixed turn grouping that could split user and assistant messages.
+- New home screen: recent sessions and connected servers are easier to see and open.
+- Simpler navigation: moving between home, sessions, and conversations is more straightforward.
+- Better conversation cards: commands, file changes, web/tool actions, plans, and diffs are easier to scan in the chat.
+- Better subagent support: subagent threads and status are easier to spot and follow.
+- Bigger text controls: you can now change text size across the whole app, not just in conversations.
+- Better default readability: the app now starts with a larger default text size.
+- Simpler text settings: font size controls now live under Appearance.
+- New Fast option: you can turn on Fast mode from the model picker for quicker responses.
+- Clearer status badges: the bottom context and rate limit badges are larger and easier to read.
 
 What to test
 
-- Launch to the new home dashboard and confirm recent sessions and connected servers update correctly.
-- Start a new session from home, then reopen a recent session from home without using the old sidebar flow.
-- Navigate home -> sessions -> conversation and back again, verifying the back-button flow stays consistent.
-- In a conversation, verify structured cards render for commands, file changes, MCP calls, web searches, agent actions, widgets, tasks, plans, and diffs.
-- Turn on Settings -> Conversation -> Collapse Turns and confirm older turns collapse into preview cards without breaking navigation.
-- Background and foreground the app during or after a turn, then verify reconnect, streaming, and resumed thread state behave correctly.
-- Confirm markdown-heavy responses still render correctly after the renderer migration.
-- Check the live activity / Dynamic Island presentation and confirm the compact layout during active turns.
-- Verify compact tool cards wrap long command text cleanly.
-- Regression test the home toolbar after navigating back and confirm turn grouping keeps each user message attached to its assistant response.
+- Open the home screen and make sure recent sessions and connected servers look correct and open the right conversation.
+- Move between home, sessions, and a conversation a few times and make sure the navigation feels consistent.
+- In a conversation, check that command cards, file changes, tool/web actions, plans, diffs, and subagent activity all render clearly.
+- Start or open a thread with subagent activity and confirm subagent threads are easy to find and understand.
+- Open Settings -> Appearance and move the text size slider. Check that text changes across the home screen, sessions, settings, and conversations.
+- Close and reopen the app and make sure your chosen text size is remembered.
+- In a conversation, open the model picker, turn Fast on, and send a message. Confirm the lightning icon appears in the header while Fast mode is enabled.
+- Turn Fast off again and confirm the lightning icon disappears for the next message.
+- Check the bottom badges and context pills in a conversation and confirm they are easier to read and tap.
+- Try a few different text sizes and make sure the layout still looks good in the header, composer, and settings screens.

@@ -96,6 +96,7 @@ struct ThreadStartParams: Encodable {
     let sandbox: String?
     let dynamicTools: [DynamicToolSpec]?
     let persistExtendedHistory: Bool? = true
+    let developerInstructions: String?
 }
 
 struct ThreadStartResponse: Decodable {
@@ -283,6 +284,7 @@ struct TurnStartParams: Encodable {
     var sandboxPolicy: TurnSandboxPolicy?
     var model: String?
     var effort: String?
+    var serviceTier: String?
 }
 
 enum TurnSandboxPolicy: Encodable {
@@ -592,6 +594,7 @@ struct ThreadResumeParams: Encodable {
     var approvalPolicy: String?
     var sandbox: String?
     let persistExtendedHistory: Bool? = true
+    let developerInstructions: String?
 }
 
 struct ThreadResumeResponse: Decodable {
@@ -665,6 +668,7 @@ struct ThreadForkParams: Encodable {
     var approvalPolicy: String?
     var sandbox: String?
     let persistExtendedHistory: Bool? = true
+    let developerInstructions: String?
 }
 
 struct ThreadForkResponse: Decodable {

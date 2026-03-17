@@ -75,7 +75,7 @@ private struct AccountConnectionView: View {
     private var currentAccountSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("CURRENT ACCOUNT")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
@@ -85,11 +85,11 @@ private struct AccountConnectionView: View {
                     .frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(authTitle)
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                     if let sub = authSubtitle {
                         Text(sub)
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
@@ -98,7 +98,7 @@ private struct AccountConnectionView: View {
                     Button("Logout") {
                         Task { await connection.logout() }
                     }
-                    .font(ShitterFont.styled(.footnote))
+                    .shitterFont(.footnote)
                     .foregroundColor(ShitterTheme.danger)
                 }
             }
@@ -113,7 +113,7 @@ private struct AccountConnectionView: View {
     private var loginSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("LOGIN")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .padding(.horizontal, 20)
 
@@ -131,7 +131,7 @@ private struct AccountConnectionView: View {
                     }
                     Image(systemName: "person.crop.circle.badge.checkmark")
                     Text("Login with ChatGPT")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                 }
                 .foregroundColor(ShitterTheme.textOnAccent)
                 .frame(maxWidth: .infinity)
@@ -143,13 +143,13 @@ private struct AccountConnectionView: View {
             .disabled(isWorking)
 
             Text("— or use an API key —")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 8) {
                 SecureField("sk-...", text: $apiKey)
-                    .font(ShitterFont.styled(.subheadline))
+                    .shitterFont(.subheadline)
                     .foregroundColor(ShitterTheme.textPrimary)
                     .padding(12)
                     .background(ShitterTheme.surface)
@@ -170,7 +170,7 @@ private struct AccountConnectionView: View {
                     }
                 } label: {
                     Text("Save API Key")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -245,10 +245,10 @@ private struct AccountDisconnectedView: View {
                 ShitterTheme.backgroundGradient.ignoresSafeArea()
                 VStack(spacing: 16) {
                     Text("Connect to a server first")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                     Text("Account settings are tied to the active server connection.")
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)

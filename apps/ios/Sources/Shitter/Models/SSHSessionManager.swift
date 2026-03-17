@@ -13,7 +13,7 @@ actor SSHSessionManager {
     private var forwardedRemotePort: UInt16?
     private var forwardedRemoteHost: String?
     private var launchedServerPID: Int?
-    private let defaultRemotePort: UInt16 = 8390
+    private let defaultRemotePort: UInt16 = 9234
 
     private enum ServerLaunchCommand {
         case codex(executable: String)

@@ -50,3 +50,6 @@ apps/android/kls_database.db
 
 .pi/
 node_modules/
+
+# Factory/Droid
+.factory/

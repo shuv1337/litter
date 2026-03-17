@@ -18,10 +18,10 @@ struct ExperimentalFeaturesView: View {
                         Toggle(isOn: binding(for: feature)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(feature.displayName)
-                                    .font(ShitterFont.styled(.subheadline))
+                                    .shitterFont(.subheadline)
                                     .foregroundColor(ShitterTheme.textPrimary)
                                 Text(feature.description)
-                                    .font(ShitterFont.styled(.caption))
+                                    .shitterFont(.caption)
                                     .foregroundColor(ShitterTheme.textSecondary)
                             }
                         }

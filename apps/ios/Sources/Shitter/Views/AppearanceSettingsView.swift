@@ -3,11 +3,13 @@ import SwiftUI
 struct AppearanceSettingsView: View {
     @Environment(ThemeManager.self) private var themeManager
     @State private var activeThemePicker: ThemePickerKind?
+    @AppStorage("conversationTextSizeStep") private var textSizeStep = ConversationTextSize.large.rawValue
 
     var body: some View {
         ZStack {
             ShitterTheme.backgroundGradient.ignoresSafeArea()
             Form {
+                fontSizeSection
                 conversationPreviewSection
                 lightThemeSection
                 darkThemeSection
@@ -26,6 +28,52 @@ struct AppearanceSettingsView: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+    }
+
+    // MARK: - Font Size
+
+    private var fontSizeSection: some View {
+        Section {
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Font Size")
+                        .shitterFont(.subheadline)
+                        .foregroundColor(ShitterTheme.textPrimary)
+                    Spacer()
+                    Text(ConversationTextSize.clamped(rawValue: textSizeStep).label)
+                        .shitterFont(.subheadline)
+                        .foregroundColor(ShitterTheme.textSecondary)
+                }
+
+                HStack(spacing: 6) {
+                    Text("A")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(ShitterTheme.textMuted)
+
+                    Slider(
+                        value: Binding(
+                            get: { Double(textSizeStep) },
+                            set: { textSizeStep = Int($0.rounded()) }
+                        ),
+                        in: Double(ConversationTextSize.tiny.rawValue)...Double(ConversationTextSize.huge.rawValue),
+                        step: 1
+                    )
+                    .tint(ShitterTheme.accent)
+
+                    Text("A")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(ShitterTheme.textMuted)
+                }
+            }
+            .padding(.vertical, 4)
+            .listRowBackground(ShitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Font Size")
+                .foregroundColor(ShitterTheme.textSecondary)
+        } footer: {
+            Text("Pinch in conversations to adjust, or use this slider. Applies across the app.")
+                .foregroundColor(ShitterTheme.textMuted)
         }
     }
 
@@ -61,6 +109,7 @@ struct AppearanceSettingsView: View {
                 UserBubble(text: "That was you, clanker", compact: true)
             }
             .padding(.vertical, 6)
+            .environment(\.textScale, ConversationTextSize.clamped(rawValue: textSizeStep).scale)
             .id(themeManager.themeVersion)
             .listRowBackground(ShitterTheme.backgroundGradient)
             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
@@ -180,7 +229,7 @@ private struct ThemePickerRow: View {
             )
 
             Text(entry?.name ?? "Unknown Theme")
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(ShitterTheme.textPrimary)
                 .lineLimit(1)
 
@@ -191,11 +240,11 @@ private struct ThemePickerRow: View {
                 EmptyView()
             case .chevron:
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11))
+                    .shitterFont(size: 11)
                     .foregroundColor(ShitterTheme.textMuted)
             case .checkmark:
                 Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .shitterFont(size: 12, weight: .semibold)
                     .foregroundColor(ShitterTheme.accent)
             }
         }
@@ -288,10 +337,10 @@ private struct ThemePickerSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(ShitterTheme.textMuted)
-                .font(.system(size: 14, weight: .medium))
+                .shitterFont(size: 14, weight: .medium)
 
             TextField("Search themes", text: $searchQuery)
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(ShitterTheme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
@@ -302,7 +351,7 @@ private struct ThemePickerSheet: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(ShitterTheme.textMuted)
-                        .font(.system(size: 14))
+                        .shitterFont(size: 14)
                 }
                 .buttonStyle(.plain)
             }
@@ -321,16 +370,16 @@ private struct ThemePickerSheet: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 18, weight: .medium))
+                .shitterFont(size: 18, weight: .medium)
                 .foregroundColor(ShitterTheme.textMuted)
 
             Text("No matching themes")
-                .font(ShitterFont.styled(.subheadline))
+                .shitterFont(.subheadline)
                 .foregroundColor(ShitterTheme.textPrimary)
 
             if !trimmedSearchQuery.isEmpty {
                 Text(trimmedSearchQuery)
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textSecondary)
             }
         }

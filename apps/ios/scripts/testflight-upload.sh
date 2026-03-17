@@ -59,6 +59,10 @@ require_cmd jq
 require_cmd xcodebuild
 require_cmd xcodegen
 
+if [[ -x "$SCRIPT_DIR/sanitize-ios-frameworks.sh" ]]; then
+    "$SCRIPT_DIR/sanitize-ios-frameworks.sh"
+fi
+
 mkdir -p "$BUILD_DIR"
 
 trim() {

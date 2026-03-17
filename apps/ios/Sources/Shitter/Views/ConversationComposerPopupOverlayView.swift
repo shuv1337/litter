@@ -27,10 +27,10 @@ struct ConversationComposerPopupOverlayView: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Text("/\(command.rawValue)")
-                                    .font(ShitterFont.styled(.body))
+                                    .shitterFont(.body)
                                     .foregroundColor(ShitterTheme.success)
                                 Text(command.description)
-                                    .font(ShitterFont.styled(.body))
+                                    .shitterFont(.body)
                                     .foregroundColor(ShitterTheme.textSecondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
@@ -63,10 +63,10 @@ struct ConversationComposerPopupOverlayView: View {
                             } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: "folder")
-                                        .font(.system(.caption))
+                                        .shitterFont(.caption)
                                         .foregroundColor(ShitterTheme.textSecondary)
                                     Text(suggestion.path)
-                                        .font(ShitterFont.styled(.footnote))
+                                        .shitterFont(.footnote)
                                         .foregroundColor(ShitterTheme.textPrimary)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
@@ -98,10 +98,10 @@ struct ConversationComposerPopupOverlayView: View {
                             } label: {
                                 HStack(spacing: 8) {
                                     Text("$\(skill.name)")
-                                        .font(ShitterFont.styled(.footnote))
+                                        .shitterFont(.footnote)
                                         .foregroundColor(ShitterTheme.success)
                                     Text(skill.description)
-                                        .font(ShitterFont.styled(.footnote))
+                                        .shitterFont(.footnote)
                                         .foregroundColor(ShitterTheme.textSecondary)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
@@ -124,7 +124,7 @@ struct ConversationComposerPopupOverlayView: View {
     @ViewBuilder
     private func popupStateText(_ text: String, color: Color = ShitterTheme.textSecondary) -> some View {
         Text(text)
-            .font(ShitterFont.styled(.footnote))
+            .shitterFont(.footnote)
             .foregroundColor(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)

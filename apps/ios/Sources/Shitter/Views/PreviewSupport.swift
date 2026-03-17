@@ -10,7 +10,7 @@ enum ShitterPreviewData {
         id: "preview-remote",
         name: "Newspaper Solver",
         hostname: "192.168.1.228",
-        port: 8390,
+        port: 9234,
         source: .manual,
         hasCodexServer: true,
         wakeMAC: "12:18:c7:14:74:e3",
@@ -33,7 +33,7 @@ enum ShitterPreviewData {
         id: "preview-bonjour",
         name: "Kitchen iMac",
         hostname: "imac.local",
-        port: 8390,
+        port: 9234,
         source: .bonjour,
         hasCodexServer: true
     )
@@ -254,7 +254,7 @@ enum ShitterPreviewData {
         let manager = ServerManager()
 
         if includeConnection {
-            let target = server.connectionTarget ?? .remote(host: server.hostname, port: server.port ?? 8390)
+            let target = server.connectionTarget ?? .remote(host: server.hostname, port: server.port ?? 9234)
             let connection = ServerConnection(server: server, target: target)
             connection.connectionHealth = .connected
             connection.connectionPhase = "ready"

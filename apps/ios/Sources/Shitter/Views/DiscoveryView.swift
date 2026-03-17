@@ -9,8 +9,8 @@ struct DiscoveryView: View {
     @State private var pendingSSHServer: DiscoveredServer?
     @State private var showManualEntry = false
     @State private var manualConnectionMode: ManualConnectionMode = .ssh
+    @State private var manualCodexURL = ""
     @State private var manualHost = ""
-    @State private var manualCodexPort = "8390"
     @State private var manualSSHPort = "22"
     @State private var manualWakeMAC = ""
     @State private var manualUseSSHPortForward = true
@@ -59,7 +59,8 @@ struct DiscoveryView: View {
                 source: liveServer.source,
                 hasCodexServer: liveServer.hasCodexServer,
                 wakeMAC: savedServer.wakeMAC ?? liveServer.wakeMAC,
-                sshPortForwardingEnabled: savedServer.sshPortForwardingEnabled || liveServer.sshPortForwardingEnabled
+                sshPortForwardingEnabled: savedServer.sshPortForwardingEnabled || liveServer.sshPortForwardingEnabled,
+                websocketURL: savedServer.websocketURL
             )
         }
         return mergeServers(discovered + reconciledSaved)
@@ -90,7 +91,8 @@ struct DiscoveryView: View {
                     source: candidate.source,
                     hasCodexServer: candidate.hasCodexServer,
                     wakeMAC: candidate.wakeMAC ?? existing.wakeMAC,
-                    sshPortForwardingEnabled: candidate.sshPortForwardingEnabled || existing.sshPortForwardingEnabled
+                    sshPortForwardingEnabled: candidate.sshPortForwardingEnabled || existing.sshPortForwardingEnabled,
+                    websocketURL: candidate.websocketURL ?? existing.websocketURL
                 )
                 let betterSource = sourceRank(candidate.source) < sourceRank(existing.source)
                 let hasCodexUpgrade = candidate.hasCodexServer && !existing.hasCodexServer
@@ -108,7 +110,8 @@ struct DiscoveryView: View {
                         source: existing.source,
                         hasCodexServer: existing.hasCodexServer,
                         wakeMAC: candidateWithWakeMAC.wakeMAC,
-                        sshPortForwardingEnabled: existing.sshPortForwardingEnabled || candidateWithWakeMAC.sshPortForwardingEnabled
+                        sshPortForwardingEnabled: existing.sshPortForwardingEnabled || candidateWithWakeMAC.sshPortForwardingEnabled,
+                        websocketURL: existing.websocketURL ?? candidateWithWakeMAC.websocketURL
                     )
                 }
             } else {
@@ -268,13 +271,13 @@ struct DiscoveryView: View {
                     HStack {
                         ProgressView().tint(ShitterTheme.textMuted).scaleEffect(0.7)
                         Text("Scanning...")
-                            .font(ShitterFont.styled(.footnote))
+                            .shitterFont(.footnote)
                             .foregroundColor(ShitterTheme.textMuted)
                     }
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 } else {
                     Text("No servers found")
-                        .font(ShitterFont.styled(.footnote))
+                        .shitterFont(.footnote)
                         .foregroundColor(ShitterTheme.textMuted)
                         .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 }
@@ -282,6 +285,18 @@ struct DiscoveryView: View {
                 ForEach(allServers) { server in
                     serverRow(server)
                 }
+            }
+
+            if let notice = discovery.tailscaleDiscoveryNotice {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "network.slash")
+                        .foregroundColor(ShitterTheme.textSecondary)
+                        .frame(width: 18, alignment: .top)
+                    Text(notice)
+                        .shitterFont(.caption)
+                        .foregroundColor(ShitterTheme.textSecondary)
+                }
+                .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
         } header: {
             HStack(spacing: 8) {
@@ -308,7 +323,7 @@ struct DiscoveryView: View {
                     Image(systemName: "plus.circle")
                         .foregroundColor(ShitterTheme.accent)
                     Text("Add Server")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.accent)
                 }
             }
@@ -330,17 +345,17 @@ struct DiscoveryView: View {
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                     Text(serverSubtitle(server))
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.textSecondary)
                 }
                 Spacer()
                 if let health = serverManager.connections[server.id]?.connectionHealth,
                    health != .disconnected {
                     Text(health.settingsLabel.lowercased())
-                        .font(ShitterFont.styled(.caption2))
+                        .shitterFont(.caption2)
                         .foregroundColor(health.settingsColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -524,7 +539,7 @@ struct DiscoveryView: View {
         if let preferred {
             ports.append(preferred)
         }
-        ports.append(contentsOf: [8390, 4222])
+        ports.append(contentsOf: [9234, 8390, 4222])
 
         var seen = Set<UInt16>()
         return ports.filter { seen.insert($0).inserted }
@@ -697,31 +712,44 @@ struct DiscoveryView: View {
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
                     Section {
-                        TextField("hostname or IP", text: $manualHost)
-                            .font(ShitterFont.styled(.footnote))
-                            .foregroundColor(ShitterTheme.textPrimary)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                        TextField(manualConnectionMode.portPlaceholder, text: portBinding(for: manualConnectionMode))
-                            .font(ShitterFont.styled(.footnote))
-                            .foregroundColor(ShitterTheme.textPrimary)
-                            .keyboardType(.numberPad)
-                        if manualConnectionMode == .ssh {
+                        if manualConnectionMode == .codex {
+                            TextField("ws://host:port or wss://...", text: $manualCodexURL)
+                                .shitterFont(.footnote)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
+                                .keyboardType(.URL)
+                        } else {
+                            TextField("hostname or IP", text: $manualHost)
+                                .shitterFont(.footnote)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
+                            TextField("ssh port", text: $manualSSHPort)
+                                .shitterFont(.footnote)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                                .keyboardType(.numberPad)
                             Toggle(isOn: $manualUseSSHPortForward) {
                                 Text("Use SSH port forward")
-                                    .font(ShitterFont.styled(.footnote))
+                                    .shitterFont(.footnote)
                                     .foregroundColor(ShitterTheme.textPrimary)
                             }
                             .tint(ShitterTheme.accent)
+                            TextField("wake MAC (optional)", text: $manualWakeMAC)
+                                .shitterFont(.footnote)
+                                .foregroundColor(ShitterTheme.textPrimary)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
                         }
-                        TextField("wake MAC (optional)", text: $manualWakeMAC)
-                            .font(ShitterFont.styled(.footnote))
-                            .foregroundColor(ShitterTheme.textPrimary)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
                     } header: {
                         Text(manualConnectionMode.formHeader)
                             .foregroundColor(ShitterTheme.textSecondary)
+                    } footer: {
+                        if manualConnectionMode == .codex {
+                            Text("Run: codex app-server --listen ws://0.0.0.0:9234\nFor reverse proxies: wss://example.com/ws?token=SECRET\nDo not expose directly to the internet unless you know what you are doing.")
+                                .shitterFont(.caption2)
+                                .foregroundColor(ShitterTheme.textMuted)
+                        }
                     }
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
@@ -730,7 +758,7 @@ struct DiscoveryView: View {
                             submitManualEntry()
                         }
                         .foregroundColor(ShitterTheme.accent)
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                     }
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
                 }
@@ -795,16 +823,70 @@ struct DiscoveryView: View {
         )
     }
 
-    private func portBinding(for mode: ManualConnectionMode) -> Binding<String> {
-        switch mode {
+    private func submitManualEntry() {
+        switch manualConnectionMode {
         case .codex:
-            return $manualCodexPort
+            submitManualCodexEntry()
         case .ssh:
-            return $manualSSHPort
+            submitManualSSHEntry()
         }
     }
 
-    private func submitManualEntry() {
+    private func submitManualCodexEntry() {
+        let raw = manualCodexURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return }
+
+        // Full URL: ws:// or wss://
+        if let url = URL(string: raw),
+           let scheme = url.scheme?.lowercased(),
+           (scheme == "ws" || scheme == "wss"),
+           let host = url.host, !host.isEmpty {
+            let port = url.port.flatMap { UInt16(exactly: $0) }
+            let server = DiscoveredServer(
+                id: "manual-url-\(raw)",
+                name: host,
+                hostname: host,
+                port: port,
+                sshPort: nil,
+                source: .manual,
+                hasCodexServer: true,
+                websocketURL: raw
+            )
+            showManualEntry = false
+            Task { await connectToServer(server) }
+            return
+        }
+
+        // Bare host:port (e.g. "192.168.1.5:9234" or "myhost:9234")
+        let parts = raw.split(separator: ":", maxSplits: 1)
+        let host: String
+        let port: UInt16
+        if parts.count == 2, let p = UInt16(parts[1]) {
+            host = String(parts[0])
+            port = p
+        } else if parts.count == 1 {
+            host = raw
+            port = 9234
+        } else {
+            connectError = "Enter a ws:// URL or host:port"
+            return
+        }
+
+        guard !host.isEmpty else { return }
+        let server = DiscoveredServer(
+            id: "manual-\(host):\(port)",
+            name: host,
+            hostname: host,
+            port: port,
+            sshPort: nil,
+            source: .manual,
+            hasCodexServer: true
+        )
+        showManualEntry = false
+        Task { await connectToServer(server) }
+    }
+
+    private func submitManualSSHEntry() {
         let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else { return }
 
@@ -815,43 +897,22 @@ struct DiscoveryView: View {
             return
         }
 
-        switch manualConnectionMode {
-        case .codex:
-            guard let port = UInt16(manualCodexPort) else {
-                connectError = "Codex port must be a valid number"
-                return
-            }
-            let server = DiscoveredServer(
-                id: "manual-\(host):\(port)",
-                name: host,
-                hostname: host,
-                port: port,
-                sshPort: nil,
-                source: .manual,
-                hasCodexServer: true,
-                wakeMAC: normalizedWakeMAC,
-                sshPortForwardingEnabled: false
-            )
-            showManualEntry = false
-            Task { await connectToServer(server) }
-        case .ssh:
-            guard let sshPort = UInt16(manualSSHPort) else {
-                connectError = "SSH port must be a valid number"
-                return
-            }
-            pendingSSHServer = DiscoveredServer(
-                id: "manual-ssh-\(host):\(sshPort)",
-                name: host,
-                hostname: host,
-                port: nil,
-                sshPort: sshPort,
-                source: .manual,
-                hasCodexServer: false,
-                wakeMAC: normalizedWakeMAC,
-                sshPortForwardingEnabled: manualUseSSHPortForward
-            )
-            showManualEntry = false
+        guard let sshPort = UInt16(manualSSHPort) else {
+            connectError = "SSH port must be a valid number"
+            return
         }
+        pendingSSHServer = DiscoveredServer(
+            id: "manual-ssh-\(host):\(sshPort)",
+            name: host,
+            hostname: host,
+            port: nil,
+            sshPort: sshPort,
+            source: .manual,
+            hasCodexServer: false,
+            wakeMAC: normalizedWakeMAC,
+            sshPortForwardingEnabled: manualUseSSHPortForward
+        )
+        showManualEntry = false
     }
 }
 
@@ -891,15 +952,6 @@ private enum ManualConnectionMode: String, CaseIterable, Identifiable {
             return "Codex Server"
         case .ssh:
             return "SSH Bootstrap"
-        }
-    }
-
-    var portPlaceholder: String {
-        switch self {
-        case .codex:
-            return "codex port"
-        case .ssh:
-            return "ssh port"
         }
     }
 

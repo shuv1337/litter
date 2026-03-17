@@ -2,12 +2,10 @@ import SwiftUI
 
 struct ToolCallCardView: View {
     let model: ToolCallCardModel
-    var textScale: CGFloat = 1.0
     @State private var expanded: Bool
 
-    init(model: ToolCallCardModel, textScale: CGFloat = 1.0) {
+    init(model: ToolCallCardModel) {
         self.model = model
-        self.textScale = textScale
         _expanded = State(initialValue: model.defaultExpanded)
     }
 
@@ -15,11 +13,11 @@ struct ToolCallCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: model.kind.iconName)
-                    .font(.system(size: 12 * textScale, weight: .semibold))
+                    .shitterFont(size: 12, weight: .semibold)
                     .foregroundColor(kindAccent)
 
                 Text(model.summary)
-                    .font(ShitterFont.styled(.caption, scale: textScale))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.textSystem)
                     .lineLimit(1)
 
@@ -27,13 +25,13 @@ struct ToolCallCardView: View {
 
                 if let duration = model.duration, !duration.isEmpty {
                     Text(duration)
-                        .font(ShitterFont.styled(.caption2, scale: textScale))
+                        .shitterFont(.caption2)
                         .foregroundColor(durationStatusColor)
                         .accessibilityLabel(durationAccessibilityLabel(duration))
                 }
 
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11 * textScale, weight: .medium))
+                    .shitterFont(size: 11, weight: .medium)
                     .foregroundColor(ShitterTheme.textMuted)
             }
             .contentShape(Rectangle())
@@ -114,10 +112,10 @@ struct ToolCallCardView: View {
                         ForEach(identifiedKeyValueEntries(entries)) { entry in
                             HStack(alignment: .top, spacing: 8) {
                                 Text(entry.value.key + ":")
-                                    .font(ShitterFont.styled(.caption2, weight: .semibold, scale: textScale))
+                                    .shitterFont(.caption2, weight: .semibold)
                                     .foregroundColor(ShitterTheme.textSecondary)
                                 Text(entry.value.value)
-                                    .font(ShitterFont.styled(.caption2, scale: textScale))
+                                    .shitterFont(.caption2)
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -145,10 +143,10 @@ struct ToolCallCardView: View {
                         ForEach(identifiedTextItems(items, prefix: "list")) { item in
                             HStack(alignment: .top, spacing: 6) {
                                 Text("•")
-                                    .font(ShitterFont.styled(.caption, scale: textScale))
+                                    .shitterFont(.caption)
                                     .foregroundColor(ShitterTheme.textSecondary)
                                 Text(item.value)
-                                    .font(ShitterFont.styled(.caption, scale: textScale))
+                                    .shitterFont(.caption)
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                             }
@@ -172,7 +170,7 @@ struct ToolCallCardView: View {
                                     .frame(width: 6, height: 6)
                                     .padding(.top, 5)
                                 Text(item.value)
-                                    .font(ShitterFont.styled(.caption, scale: textScale))
+                                    .shitterFont(.caption)
                                     .foregroundColor(ShitterTheme.textSystem)
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -189,14 +187,14 @@ struct ToolCallCardView: View {
 
     private func sectionLabel(_ label: String) -> some View {
         Text(label.uppercased())
-            .font(ShitterFont.styled(.caption2, weight: .bold, scale: textScale))
+            .shitterFont(.caption2, weight: .bold)
             .foregroundColor(ShitterTheme.textSecondary)
     }
 
     private func codeLikeSection(label: String, language: String, content: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionLabel(label)
-            CodeBlockView(language: language, code: content, fontSize: 13 * textScale)
+            CodeBlockView(language: language, code: content, fontSize: 13)
         }
     }
 
@@ -204,7 +202,7 @@ struct ToolCallCardView: View {
         VStack(alignment: .leading, spacing: 6) {
             sectionLabel(label)
             Text(verbatim: content)
-                .font(ShitterFont.monospaced(size: 12 * textScale))
+                .shitterMonoFont(size: 12)
                 .foregroundColor(ShitterTheme.textBody)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -224,7 +222,7 @@ struct ToolCallCardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text(verbatim: line.isEmpty ? " " : line)
-                        .font(ShitterFont.monospaced(size: 12 * textScale))
+                        .shitterMonoFont(size: 12)
                         .foregroundStyle(diffForegroundColor(for: line))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)

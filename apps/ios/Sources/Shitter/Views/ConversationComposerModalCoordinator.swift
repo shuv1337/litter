@@ -96,7 +96,7 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                                     HStack {
                                         Text(preset.title)
                                             .foregroundColor(ShitterTheme.textPrimary)
-                                            .font(ShitterFont.styled(.subheadline))
+                                            .shitterFont(.subheadline)
                                         Spacer()
                                         if preset.approvalPolicy == appState.approvalPolicy && preset.sandboxMode == appState.sandboxMode {
                                             Image(systemName: "checkmark")
@@ -105,7 +105,7 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                                     }
                                     Text(preset.description)
                                         .foregroundColor(ShitterTheme.textSecondary)
-                                        .font(ShitterFont.styled(.caption))
+                                        .shitterFont(.caption)
                                 }
                             }
                             .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -130,7 +130,7 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                             ProgressView().tint(ShitterTheme.accent)
                         } else if experimentalFeatures.isEmpty {
                             Text("No experimental features available")
-                                .font(ShitterFont.styled(.footnote))
+                                .shitterFont(.footnote)
                                 .foregroundColor(ShitterTheme.textMuted)
                         } else {
                             List {
@@ -138,10 +138,10 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                                     HStack(alignment: .top, spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(feature.displayName ?? feature.name)
-                                                .font(ShitterFont.styled(.subheadline))
+                                                .shitterFont(.subheadline)
                                                 .foregroundColor(ShitterTheme.textPrimary)
                                             Text(feature.description ?? feature.stage)
-                                                .font(ShitterFont.styled(.caption))
+                                                .shitterFont(.caption)
                                                 .foregroundColor(ShitterTheme.textSecondary)
                                         }
                                         Spacer(minLength: 0)
@@ -186,7 +186,7 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                             ProgressView().tint(ShitterTheme.accent)
                         } else if skills.isEmpty {
                             Text("No skills available for this workspace")
-                                .font(ShitterFont.styled(.footnote))
+                                .shitterFont(.footnote)
                                 .foregroundColor(ShitterTheme.textMuted)
                         } else {
                             List {
@@ -194,20 +194,20 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         HStack {
                                             Text(skill.name)
-                                                .font(ShitterFont.styled(.subheadline))
+                                                .shitterFont(.subheadline)
                                                 .foregroundColor(ShitterTheme.textPrimary)
                                             Spacer()
                                             if skill.enabled {
                                                 Text("enabled")
-                                                    .font(ShitterFont.styled(.caption2))
+                                                    .shitterFont(.caption2)
                                                     .foregroundColor(ShitterTheme.accent)
                                             }
                                         }
                                         Text(skill.description)
-                                            .font(ShitterFont.styled(.caption))
+                                            .shitterFont(.caption)
                                             .foregroundColor(ShitterTheme.textSecondary)
                                         Text(skill.path)
-                                            .font(ShitterFont.styled(.caption2))
+                                            .shitterFont(.caption2)
                                             .foregroundColor(ShitterTheme.textMuted)
                                     }
                                     .listRowBackground(ShitterTheme.surface.opacity(0.6))

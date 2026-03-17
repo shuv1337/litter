@@ -45,7 +45,7 @@ class ServerConfigPersistenceTest {
                 id = "legacy",
                 name = "Legacy",
                 host = "127.0.0.1",
-                port = 8390,
+                port = 9234,
                 source = "manual",
                 hasCodexServer = true,
             ).toServerConfig()

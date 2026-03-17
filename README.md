@@ -116,15 +116,20 @@ Sync/apply patch (idempotent):
 ./apps/ios/scripts/sync-codex.sh
 ```
 
+This preserves the current `shared/third_party/codex` checkout by default, applies the iOS patch, and fails if the patch no longer matches that checkout cleanly.
+Pass `--recorded-gitlink` if you explicitly want to reset the submodule to the commit recorded in the superproject.
+
 ## Build the Rust bridge
 
 ```bash
 ./apps/ios/scripts/build-rust.sh
 ```
 
+By default this builds device + Apple Silicon simulator slices. Pass `--with-intel-sim` only if you need an Intel Mac simulator slice too.
+
 This script:
 
-1. Syncs `shared/third_party/codex` and applies the iOS hook patch
+1. Preserves the current `shared/third_party/codex` checkout by default, applies the iOS hook patch for the build, and restores the prior patch state afterward
 2. Builds `shared/rust-bridge/codex-bridge` for device + simulator targets
 3. Repackages `apps/ios/Frameworks/codex_bridge.xcframework`
 

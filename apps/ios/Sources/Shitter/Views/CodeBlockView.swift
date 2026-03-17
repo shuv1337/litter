@@ -8,7 +8,7 @@ struct CodeBlockView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(code)
-                .font(ShitterFont.monospaced(size: fontSize))
+                .shitterMonoFont(size: fontSize)
                 .foregroundColor(ShitterTheme.textBody)
                 .textSelection(.enabled)
                 .padding(12)

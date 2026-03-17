@@ -24,8 +24,8 @@ struct SettingsView: View {
                 ShitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
                     appearanceSection
-                    conversationSection
                     fontSection
+                    conversationSection
                     experimentalSection
                     accountSection
                     serversSection
@@ -55,7 +55,7 @@ struct SettingsView: View {
                         .foregroundColor(ShitterTheme.accent)
                         .frame(width: 20)
                     Text("Appearance")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                 }
             }
@@ -77,10 +77,10 @@ struct SettingsView: View {
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Collapse Turns")
-                            .font(ShitterFont.styled(.subheadline))
+                            .shitterFont(.subheadline)
                             .foregroundColor(ShitterTheme.textPrimary)
                         Text("Collapse previous turns into cards")
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
@@ -104,7 +104,7 @@ struct SettingsView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(option.displayName)
-                                .font(ShitterFont.styled(.subheadline))
+                                .shitterFont(.subheadline)
                                 .foregroundColor(ShitterTheme.textPrimary)
                             Text("The quick brown fox")
                                 .font(ShitterFont.sampleFont(family: option, size: 14))
@@ -113,7 +113,7 @@ struct SettingsView: View {
                         Spacer()
                         if fontFamily == option.rawValue {
                             Image(systemName: "checkmark")
-                                .font(.system(.subheadline, weight: .semibold))
+                                .shitterFont(.subheadline, weight: .semibold)
                                 .foregroundColor(ShitterTheme.accentStrong)
                         }
                     }
@@ -138,7 +138,7 @@ struct SettingsView: View {
                         .foregroundColor(ShitterTheme.accent)
                         .frame(width: 20)
                     Text("Experimental Features")
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                 }
             }
@@ -167,7 +167,7 @@ struct SettingsView: View {
         Section {
             if connectedServers.isEmpty {
                 Text("No servers connected")
-                    .font(ShitterFont.styled(.footnote))
+                    .shitterFont(.footnote)
                     .foregroundColor(ShitterTheme.textMuted)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
             } else {
@@ -178,17 +178,17 @@ struct SettingsView: View {
                             .frame(width: 20)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(conn.server.name)
-                                .font(ShitterFont.styled(.footnote))
+                                .shitterFont(.footnote)
                                 .foregroundColor(ShitterTheme.textPrimary)
                             Text(conn.connectionHealth.settingsLabel)
-                                .font(ShitterFont.styled(.caption))
+                                .shitterFont(.caption)
                                 .foregroundColor(conn.connectionHealth.settingsColor)
                         }
                         Spacer()
                         Button("Remove") {
                             serverManager.removeServer(id: conn.id)
                         }
-                        .font(ShitterFont.styled(.caption))
+                        .shitterFont(.caption)
                         .foregroundColor(ShitterTheme.danger)
                     }
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
@@ -221,11 +221,11 @@ private struct SettingsConnectionAccountSection: View {
                     .frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(authTitle)
-                        .font(ShitterFont.styled(.subheadline))
+                        .shitterFont(.subheadline)
                         .foregroundColor(ShitterTheme.textPrimary)
                     if let sub = authSubtitle {
                         Text(sub)
-                            .font(ShitterFont.styled(.caption))
+                            .shitterFont(.caption)
                             .foregroundColor(ShitterTheme.textSecondary)
                     }
                 }
@@ -234,7 +234,7 @@ private struct SettingsConnectionAccountSection: View {
                     Button("Logout") {
                         Task { await connection.logout() }
                     }
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.danger)
                 }
             }
@@ -255,7 +255,7 @@ private struct SettingsConnectionAccountSection: View {
                         }
                         Image(systemName: "person.crop.circle.badge.checkmark")
                         Text("Login with ChatGPT")
-                            .font(ShitterFont.styled(.subheadline))
+                            .shitterFont(.subheadline)
                     }
                     .foregroundColor(ShitterTheme.accent)
                 }
@@ -264,7 +264,7 @@ private struct SettingsConnectionAccountSection: View {
 
                 HStack(spacing: 8) {
                     SecureField("sk-...", text: $apiKey)
-                        .font(ShitterFont.styled(.footnote))
+                        .shitterFont(.footnote)
                         .foregroundColor(ShitterTheme.textPrimary)
                         .textInputAutocapitalization(.never)
                     Button("Save") {
@@ -277,7 +277,7 @@ private struct SettingsConnectionAccountSection: View {
                             isAuthWorking = false
                         }
                     }
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.accent)
                     .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty || isAuthWorking)
                 }
@@ -286,7 +286,7 @@ private struct SettingsConnectionAccountSection: View {
 
             if let authError {
                 Text(authError)
-                    .font(ShitterFont.styled(.caption))
+                    .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.danger)
                     .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
@@ -363,7 +363,7 @@ private struct SettingsDisconnectedAccountSection: View {
     var body: some View {
         Section {
             Text("Connect to a server first")
-                .font(ShitterFont.styled(.caption))
+                .shitterFont(.caption)
                 .foregroundColor(ShitterTheme.textMuted)
                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
         } header: {

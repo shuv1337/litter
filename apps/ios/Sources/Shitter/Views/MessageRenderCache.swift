@@ -36,6 +36,16 @@ final class MessageRenderCache {
 
     var assistantEntryCount: Int { assistantCache.count }
     var systemEntryCount: Int { systemCache.count }
+    var markdownEntryCount: Int {
+        assistantCache.values.reduce(0) { count, segments in
+            count + segments.reduce(0) { segmentCount, segment in
+                if case .markdown = segment.kind {
+                    return segmentCount + 1
+                }
+                return segmentCount
+            }
+        }
+    }
 
     func assistantSegments(
         for message: ChatMessage,

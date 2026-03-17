@@ -16,13 +16,17 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -52,6 +56,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,7 +69,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -80,6 +84,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
@@ -124,8 +129,11 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -151,6 +159,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -213,6 +222,34 @@ private const val PERF_LOG_TAG = "ShitterComposePerf"
 
 private fun Context.monospaceTypeface(): Typeface = Typeface.MONOSPACE
 
+private fun abbreviateHomePath(path: String): String {
+    val trimmed = path.trim()
+    if (trimmed.isEmpty()) {
+        return "~"
+    }
+    for (basePrefix in listOf("/Users/", "/home/")) {
+        if (!trimmed.startsWith(basePrefix)) {
+            continue
+        }
+        val remainder = trimmed.removePrefix(basePrefix)
+        val slashIndex = remainder.indexOf('/')
+        if (slashIndex >= 0) {
+            return "~${remainder.substring(slashIndex)}"
+        }
+        return "~"
+    }
+    return trimmed
+}
+
+private fun headerMiddleEllipsize(text: String, maxLength: Int = 28): String {
+    if (text.length <= maxLength) {
+        return text
+    }
+    val keepStart = (maxLength - 1) / 2
+    val keepEnd = maxLength - keepStart - 1
+    return text.take(keepStart) + "…" + text.takeLast(keepEnd)
+}
+
 @Composable
 private fun DebugRecomposeCheckpoint(name: String) {
     if (!BuildConfig.DEBUG) {
@@ -245,12 +282,14 @@ fun ShitterAppShell(
                 models = uiState.models,
                 selectedModelId = uiState.selectedModelId,
                 selectedReasoningEffort = uiState.selectedReasoningEffort,
+                activeThreadModelId = uiState.sessions.firstOrNull { it.key == uiState.activeThreadKey }?.modelProvider,
+                activeThreadKey = uiState.activeThreadKey,
                 connectionStatus = uiState.connectionStatus,
+                currentCwd = uiState.currentCwd,
                 onToggleSidebar = appState::toggleSidebar,
                 onSelectModel = appState::selectModel,
                 onSelectReasoningEffort = appState::selectReasoningEffort,
             )
-            HorizontalDivider(color = ShitterTheme.divider)
 
             if (uiState.activeThreadKey == null) {
                 EmptyState(
@@ -405,10 +444,12 @@ fun ShitterAppShell(
                 onManualBackendKindChanged = appState::updateManualBackendKind,
                 onManualHostChanged = appState::updateManualHost,
                 onManualPortChanged = appState::updateManualPort,
+                onManualUrlChanged = appState::updateManualUrl,
                 onManualUsernameChanged = appState::updateManualUsername,
                 onManualPasswordChanged = appState::updateManualPassword,
                 onManualDirectoryChanged = appState::updateManualDirectory,
                 onConnectManual = appState::connectManualServer,
+                onConnectManualUrl = appState::connectManualUrl,
             )
         }
 
@@ -754,128 +795,400 @@ private fun HeaderBar(
     models: List<ModelOption>,
     selectedModelId: String?,
     selectedReasoningEffort: String?,
+    activeThreadModelId: String?,
+    activeThreadKey: ThreadKey?,
     connectionStatus: ServerConnectionStatus,
+    currentCwd: String = "",
     onToggleSidebar: () -> Unit,
     onSelectModel: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
 ) {
-    Surface(
+    var showModelSelector by remember { mutableStateOf(false) }
+    val selectorAnimationSpec =
+        spring<Float>(
+            dampingRatio = 0.85f,
+            stiffness = Spring.StiffnessMediumLow,
+        )
+
+    LaunchedEffect(activeThreadKey) {
+        showModelSelector = false
+    }
+
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        color = Color.Transparent,
-        tonalElevation = 0.dp,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            IconButton(onClick = onToggleSidebar) {
-                Icon(Icons.Default.Menu, contentDescription = "Toggle sidebar", tint = ShitterTheme.textSecondary)
-            }
-
-            if (backendKind == BackendKind.OPENCODE) {
-                OutlinedButton(
-                    onClick = {},
-                    enabled = false,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                    shape = RoundedCornerShape(22.dp),
-                ) {
-                    Text("OpenCode", color = ShitterTheme.textSecondary)
-                }
-            } else {
-                ModelSelector(
-                    models = models,
-                    selectedModelId = selectedModelId,
-                    selectedReasoningEffort = selectedReasoningEffort,
-                    onSelectModel = onSelectModel,
-                    onSelectReasoningEffort = onSelectReasoningEffort,
+            // Menu button with glass circle
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(ShitterTheme.surfaceLight)
+                    .border(1.dp, ShitterTheme.border.copy(alpha = 0.4f), CircleShape)
+                    .clickable { onToggleSidebar() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Menu,
+                    contentDescription = "Toggle sidebar",
+                    tint = ShitterTheme.textSecondary,
+                    modifier = Modifier.size(18.dp),
                 )
             }
 
             Spacer(modifier = Modifier.weight(1f))
 
-            StatusDot(connectionStatus = connectionStatus)
+            if (backendKind == BackendKind.OPENCODE) {
+                // OpenCode static button
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = ShitterTheme.surfaceLight,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border.copy(alpha = 0.4f)),
+                ) {
+                    Text(
+                        "OpenCode",
+                        color = ShitterTheme.textSecondary,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            } else {
+                // Model selector button - iOS style
+                ModelSelectorButton(
+                    models = models,
+                    selectedModelId = selectedModelId,
+                    selectedReasoningEffort = selectedReasoningEffort,
+                    activeThreadModelId = activeThreadModelId,
+                    connectionStatus = connectionStatus,
+                    currentCwd = currentCwd,
+                    isExpanded = showModelSelector,
+                    onClick = { showModelSelector = !showModelSelector },
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Reload button with glass circle
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(ShitterTheme.surfaceLight)
+                    .border(1.dp, ShitterTheme.border.copy(alpha = 0.4f), CircleShape)
+                    .clickable { /* TODO: reload action */ },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.ArrowUpward,
+                    contentDescription = "Reload",
+                    tint = ShitterTheme.accent,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+
+        // Inline model selector panel - iOS style
+        AnimatedVisibility(
+            visible = showModelSelector && backendKind != BackendKind.OPENCODE,
+            enter = fadeIn(animationSpec = selectorAnimationSpec) + scaleIn(
+                animationSpec = selectorAnimationSpec,
+                initialScale = 0.95f,
+                transformOrigin = TransformOrigin(0.5f, 0f),
+            ),
+            exit = fadeOut(animationSpec = selectorAnimationSpec) + scaleOut(
+                animationSpec = selectorAnimationSpec,
+                targetScale = 0.95f,
+                transformOrigin = TransformOrigin(0.5f, 0f),
+            ),
+        ) {
+            InlineModelSelectorPanel(
+                models = models,
+                selectedModelId = selectedModelId,
+                selectedReasoningEffort = selectedReasoningEffort,
+                activeThreadModelId = activeThreadModelId,
+                onSelectModel = { modelId ->
+                    onSelectModel(modelId)
+                    showModelSelector = false
+                },
+                onSelectReasoningEffort = { effort ->
+                    onSelectReasoningEffort(effort)
+                    showModelSelector = false
+                },
+                modifier =
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(horizontal = 16.dp),
+            )
         }
     }
 }
 
 @Composable
-private fun ModelSelector(
+private fun ModelSelectorButton(
     models: List<ModelOption>,
     selectedModelId: String?,
     selectedReasoningEffort: String?,
-    onSelectModel: (String) -> Unit,
-    onSelectReasoningEffort: (String) -> Unit,
+    activeThreadModelId: String?,
+    connectionStatus: ServerConnectionStatus,
+    currentCwd: String,
+    isExpanded: Boolean,
+    onClick: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedModel = models.firstOrNull { it.id == selectedModelId } ?: models.firstOrNull()
-    val selectedModelName = (selectedModel?.id ?: "").ifBlank { "shitter" }
+    val resolvedModelId =
+        selectedModelId?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: activeThreadModelId?.trim().takeUnless { it.isNullOrEmpty() }
+    val selectedModel = models.firstOrNull { it.id == resolvedModelId }
+    val modelName = resolvedModelId ?: "shitter"
+    val reasoningLabel = (selectedReasoningEffort ?: selectedModel?.defaultReasoningEffort ?: "").ifBlank { "default" }
+    val directoryLabel = headerMiddleEllipsize(abbreviateHomePath(currentCwd))
 
-    Box {
-        OutlinedButton(
-            onClick = { expanded = true },
-            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-            shape = RoundedCornerShape(22.dp),
+    // Animated status dot
+    val shouldPulse = connectionStatus == ServerConnectionStatus.CONNECTING
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseAlpha",
+    )
+    val statusColor = when (connectionStatus) {
+        ServerConnectionStatus.CONNECTING -> ShitterTheme.statusConnecting
+        ServerConnectionStatus.READY -> ShitterTheme.statusReady
+        ServerConnectionStatus.ERROR -> ShitterTheme.statusError
+        ServerConnectionStatus.DISCONNECTED -> ShitterTheme.statusDisconnected
+    }
+
+    // Chevron rotation
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec =
+            spring(
+                dampingRatio = 0.85f,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        label = "chevronRotation",
+    )
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = ShitterTheme.surfaceLight,
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border.copy(alpha = 0.4f)),
+    ) {
+        // VStack(spacing: 2) equivalent
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            // Top row: status dot, model name, reasoning, chevron (iOS: HStack(spacing: 6))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // Status dot (iOS: Circle().fill(statusDotColor).frame(width: 6, height: 6))
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                        .alpha(if (shouldPulse) pulseAlpha else 1f),
+                )
+
+                // Model name (iOS: Text(sessionModelLabel).foregroundColor(ShitterTheme.textPrimary))
+                Text(
+                    text = modelName,
+                    color = ShitterTheme.textPrimary,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+
+                // Reasoning effort (iOS: Text(sessionReasoningLabel).foregroundColor(ShitterTheme.textSecondary))
+                Text(
+                    text = reasoningLabel,
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                // Chevron (iOS: Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)))
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .graphicsLayer { rotationZ = chevronRotation },
+                    tint = ShitterTheme.textSecondary,
+                )
+            }
+
+            // Bottom row: directory (iOS: .caption2, .semibold, .truncationMode(.middle))
             Text(
-                selectedModelName,
-                color = ShitterTheme.textPrimary,
+                text = directoryLabel,
+                color = ShitterTheme.textSecondary,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = "Select model",
-                modifier = Modifier.size(16.dp),
-                tint = ShitterTheme.textSecondary,
+                overflow = TextOverflow.Clip,
             )
         }
+    }
+}
 
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            models.forEach { model ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            if (model.isDefault) "${model.displayName} (default)" else model.displayName,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    onClick = {
-                        onSelectModel(model.id)
-                        if (model.defaultReasoningEffort != null) {
-                            onSelectReasoningEffort(model.defaultReasoningEffort)
-                        }
-                        expanded = false
-                    },
-                )
-            }
+@Composable
+private fun InlineModelSelectorPanel(
+    models: List<ModelOption>,
+    selectedModelId: String?,
+    selectedReasoningEffort: String?,
+    activeThreadModelId: String?,
+    onSelectModel: (String) -> Unit,
+    onSelectReasoningEffort: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val resolvedModelId =
+        selectedModelId?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: activeThreadModelId?.trim().takeUnless { it.isNullOrEmpty() }
+    val selectedModel = models.firstOrNull { it.id == resolvedModelId }
+    val scrollState = rememberScrollState()
 
-            val efforts = selectedModel?.supportedReasoningEfforts.orEmpty()
-            if (efforts.isNotEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("Reasoning", color = ShitterTheme.textSecondary) },
-                    onClick = {},
-                    enabled = false,
-                )
-                efforts.forEach { effort ->
-                    DropdownMenuItem(
-                        text = {
-                            val label =
-                                if (effort.effort == selectedReasoningEffort) {
-                                    "* ${effort.effort}"
-                                } else {
-                                    effort.effort
-                                }
-                            Text(label)
-                        },
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = ShitterTheme.surfaceLight,
+        border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border.copy(alpha = 0.4f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 4.dp),
+        ) {
+            // Model list
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(scrollState),
+            ) {
+                models.forEachIndexed { index, model ->
+                    ModelListItem(
+                        model = model,
+                        isSelected = model.id == resolvedModelId,
                         onClick = {
-                            onSelectReasoningEffort(effort.effort)
-                            expanded = false
+                            onSelectModel(model.id)
+                            model.defaultReasoningEffort?.let(onSelectReasoningEffort)
                         },
                     )
+                    if (index < models.lastIndex) {
+                        HorizontalDivider(
+                            color = ShitterTheme.divider,
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
+                    }
                 }
             }
+
+            // Reasoning effort chips
+            val efforts = selectedModel?.supportedReasoningEfforts.orEmpty()
+            if (efforts.isNotEmpty()) {
+                HorizontalDivider(
+                    color = ShitterTheme.divider,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    efforts.forEach { effort ->
+                        val isSelected = effort.effort == selectedReasoningEffort
+                        Surface(
+                            onClick = { onSelectReasoningEffort(effort.effort) },
+                            shape = RoundedCornerShape(50),
+                            color = if (isSelected) ShitterTheme.accent else ShitterTheme.surfaceLight,
+                        ) {
+                            Text(
+                                text = effort.effort,
+                                color = if (isSelected) ShitterTheme.onAccentStrong else ShitterTheme.textPrimary,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelListItem(
+    model: ModelOption,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = model.displayName,
+                    color = ShitterTheme.textPrimary,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (model.isDefault) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = ShitterTheme.accent.copy(alpha = 0.15f),
+                    ) {
+                        Text(
+                            text = "default",
+                            color = ShitterTheme.accent,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+            if (model.description.isNotBlank()) {
+                Text(
+                    text = model.description,
+                    color = ShitterTheme.textSecondary,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                modifier = Modifier.size(12.dp),
+                tint = ShitterTheme.accent,
+            )
         }
     }
 }
@@ -4746,291 +5059,295 @@ private fun InputBar(
     }
 
     Column(
-        modifier = modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 16.dp, top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-            if (attachedImagePath != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = ShitterTheme.surfaceLight,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                    modifier = Modifier.padding(bottom = 2.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Image,
-                            contentDescription = null,
-                            tint = ShitterTheme.accent,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            text = attachedImagePath.substringAfterLast('/'),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = ShitterTheme.textPrimary,
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(
-                            onClick = onClearAttachment,
-                            enabled = !isSending,
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(14.dp), tint = ShitterTheme.textSecondary)
-                        }
-                    }
-                }
-            }
-
-            if (!attachmentError.isNullOrBlank()) {
-                Text(
-                    text = attachmentError,
-                    color = ShitterTheme.danger,
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-
-            if (showSlashPopup) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                ) {
-                    Column {
-                        if (activeBackendKind == BackendKind.OPENCODE) {
-                            openCodeSlashSuggestions.forEachIndexed { index, entry ->
-                                Row(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable { applyOpenCodeSlashSuggestion(entry) }
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = entry.displayName.ifBlank { "/${entry.name}" },
-                                        color = ShitterTheme.success,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                    Text(
-                                        text = entry.description.ifBlank { entry.category },
-                                        color = ShitterTheme.textSecondary,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                if (index < openCodeSlashSuggestions.lastIndex) {
-                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
-                                }
-                            }
-                        } else {
-                            codexSlashSuggestions.forEachIndexed { index, command ->
-                                Row(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable { applyCodexSlashSuggestion(command) }
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = "/${command.rawValue}",
-                                        color = ShitterTheme.success,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                    Text(
-                                        text = command.description,
-                                        color = ShitterTheme.textSecondary,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                if (index < codexSlashSuggestions.lastIndex) {
-                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (showFilePopup) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                ) {
-                    when {
-                        fileSearchLoading -> {
-                            Text(
-                                text = "Searching files...",
-                                color = ShitterTheme.textSecondary,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
-                        }
-
-                        !fileSearchError.isNullOrBlank() -> {
-                            Text(
-                                text = fileSearchError.orEmpty(),
-                                color = ShitterTheme.danger,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
-                        }
-
-                        fileSuggestions.isEmpty() -> {
-                            Text(
-                                text = "No matches",
-                                color = ShitterTheme.textSecondary,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
-                        }
-
-                        else -> {
-                            val visibleSuggestions = fileSuggestions.take(8)
-                            Column {
-                                visibleSuggestions.forEachIndexed { index, suggestion ->
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clickable { applyFileSuggestion(suggestion) }
-                                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Folder,
-                                            contentDescription = null,
-                                            tint = ShitterTheme.textSecondary,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                        Text(
-                                            text = suggestion.path,
-                                            color = ShitterTheme.textPrimary,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                    if (index < visibleSuggestions.lastIndex) {
-                                        HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (showSkillPopup) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                ) {
-                    when {
-                        skillsLoading && skillSuggestions.isEmpty() -> {
-                            Text(
-                                text = "Loading skills...",
-                                color = ShitterTheme.textSecondary,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
-                        }
-
-                        skillSuggestions.isEmpty() -> {
-                            Text(
-                                text = "No skills found",
-                                color = ShitterTheme.textSecondary,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
-                        }
-
-                        else -> {
-                            val visibleSuggestions = skillSuggestions.take(8)
-                            Column {
-                                visibleSuggestions.forEachIndexed { index, skill ->
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clickable { applySkillSuggestion(skill) }
-                                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = "\$${skill.name}",
-                                            color = ShitterTheme.success,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                        )
-                                        Text(
-                                            text = skill.description,
-                                            color = ShitterTheme.textSecondary,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                    if (index < visibleSuggestions.lastIndex) {
-                                        HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(26.dp),
-            color = ShitterTheme.surfaceLight,
-            border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-        ) {
-            val actionButtonSize = 36.dp
-            val actionIconSize = 18.dp
-            Row(
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        // Attached image preview
+        if (attachedImagePath != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = ShitterTheme.surfaceLight,
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        tint = ShitterTheme.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = attachedImagePath.substringAfterLast('/'),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = ShitterTheme.textPrimary,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = onClearAttachment,
+                        enabled = !isSending,
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(14.dp), tint = ShitterTheme.textSecondary)
+                    }
+                }
+            }
+        }
+
+        if (!attachmentError.isNullOrBlank()) {
+            Text(
+                text = attachmentError,
+                color = ShitterTheme.danger,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
+
+        // Slash / file / skill popup suggestions
+        if (showSlashPopup) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                Column {
+                    if (activeBackendKind == BackendKind.OPENCODE) {
+                        openCodeSlashSuggestions.forEachIndexed { index, entry ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { applyOpenCodeSlashSuggestion(entry) }
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = entry.displayName.ifBlank { "/${entry.name}" },
+                                    color = ShitterTheme.success,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    text = entry.description.ifBlank { entry.category },
+                                    color = ShitterTheme.textSecondary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (index < openCodeSlashSuggestions.lastIndex) {
+                                HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                            }
+                        }
+                    } else {
+                        codexSlashSuggestions.forEachIndexed { index, command ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { applyCodexSlashSuggestion(command) }
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "/${command.rawValue}",
+                                    color = ShitterTheme.success,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    text = command.description,
+                                    color = ShitterTheme.textSecondary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (index < codexSlashSuggestions.lastIndex) {
+                                HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showFilePopup) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                when {
+                    fileSearchLoading -> {
+                        Text(
+                            text = "Searching files...",
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
+
+                    !fileSearchError.isNullOrBlank() -> {
+                        Text(
+                            text = fileSearchError.orEmpty(),
+                            color = ShitterTheme.danger,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
+
+                    fileSuggestions.isEmpty() -> {
+                        Text(
+                            text = "No matches",
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
+
+                    else -> {
+                        val visibleSuggestions = fileSuggestions.take(8)
+                        Column {
+                            visibleSuggestions.forEachIndexed { index, suggestion ->
+                                Row(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable { applyFileSuggestion(suggestion) }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = ShitterTheme.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = suggestion.path,
+                                        color = ShitterTheme.textPrimary,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (index < visibleSuggestions.lastIndex) {
+                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showSkillPopup) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = ShitterTheme.surfaceLight.copy(alpha = 0.98f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                when {
+                    skillsLoading && skillSuggestions.isEmpty() -> {
+                        Text(
+                            text = "Loading skills...",
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
+
+                    skillSuggestions.isEmpty() -> {
+                        Text(
+                            text = "No skills found",
+                            color = ShitterTheme.textSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
+
+                    else -> {
+                        val visibleSuggestions = skillSuggestions.take(8)
+                        Column {
+                            visibleSuggestions.forEachIndexed { index, skill ->
+                                Row(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable { applySkillSuggestion(skill) }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "\$${skill.name}",
+                                        color = ShitterTheme.success,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        text = skill.description,
+                                        color = ShitterTheme.textSecondary,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (index < visibleSuggestions.lastIndex) {
+                                    HorizontalDivider(color = ShitterTheme.border, thickness = 0.5.dp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // iOS-style entry row: [+circle] [textfield pill] [Cancel capsule OR nothing]
+        val actionButtonSize = 36.dp
+        val actionIconSize = 18.dp
+        val hasText = composerValue.text.isNotBlank()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Plus button outside the pill (iOS: shown when not recording/sending)
+            if (!isSending) {
                 Box {
                     Box(
                         modifier = Modifier
                             .size(actionButtonSize)
                             .clip(CircleShape)
-                            .background(ShitterTheme.surface)
-                            .clickable(enabled = !isSending) { showAttachmentMenu = true },
+                            .background(ShitterTheme.surfaceLight)
+                            .border(1.dp, ShitterTheme.border.copy(alpha = 0.4f), CircleShape)
+                            .clickable { showAttachmentMenu = true },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             Icons.Default.Add,
                             contentDescription = "Attachments",
                             modifier = Modifier.size(actionIconSize),
-                            tint = ShitterTheme.textPrimary
+                            tint = ShitterTheme.textPrimary,
                         )
                     }
-
                     DropdownMenu(
                         expanded = showAttachmentMenu,
                         onDismissRequest = { showAttachmentMenu = false },
@@ -5042,7 +5359,7 @@ private fun InputBar(
                                 showAttachmentMenu = false
                                 onAttachImage()
                             },
-                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) }
+                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) },
                         )
                         DropdownMenuItem(
                             text = { Text("Camera", color = ShitterTheme.textPrimary, style = MaterialTheme.typography.bodyMedium) },
@@ -5050,120 +5367,144 @@ private fun InputBar(
                                 showAttachmentMenu = false
                                 onCaptureImage()
                             },
-                            leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) }
+                            leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp), tint = ShitterTheme.textSecondary) },
                         )
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 4.dp, horizontal = 4.dp),
-                    contentAlignment = Alignment.CenterStart
+            // Text field pill (iOS: GlassRoundedRect cornerRadius=20)
+            Surface(
+                modifier = Modifier.weight(1f).heightIn(min = actionButtonSize),
+                shape = RoundedCornerShape(20.dp),
+                color = ShitterTheme.surfaceLight,
+                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 0.dp, end = 0.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (composerValue.text.isEmpty()) {
-                        Text(
-                            text = "Message shitter...",
-                            color = ShitterTheme.textMuted,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    BasicTextField(
-                        value = composerValue,
-                        onValueChange = { nextValue ->
-                            composerValue = nextValue
-                            commitDraftIfNeeded(nextValue.text)
-                            refreshComposerPopups(nextValue)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = ShitterTheme.textPrimary),
-                        cursorBrush = SolidColor(ShitterTheme.accent),
-                        maxLines = 5,
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                if (isSending) {
                     Box(
                         modifier = Modifier
-                            .size(actionButtonSize)
-                            .clip(CircleShape)
-                            .background(ShitterTheme.surface)
-                            .clickable { onInterrupt() },
-                        contentAlignment = Alignment.Center,
+                            .weight(1f)
+                            .padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+                        contentAlignment = Alignment.CenterStart,
                     ) {
-                        Icon(
-                            Icons.Default.Stop,
-                            contentDescription = "Interrupt",
-                            modifier = Modifier.size(actionIconSize),
-                            tint = ShitterTheme.danger
+                        if (composerValue.text.isEmpty()) {
+                            Text(
+                                text = "Message shitter...",
+                                color = ShitterTheme.textMuted,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        BasicTextField(
+                            value = composerValue,
+                            onValueChange = { nextValue ->
+                                composerValue = nextValue
+                                commitDraftIfNeeded(nextValue.text)
+                                refreshComposerPopups(nextValue)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = ShitterTheme.textPrimary),
+                            cursorBrush = SolidColor(ShitterTheme.accent),
+                            maxLines = 5,
                         )
                     }
-                } else {
-                    val canSend = (composerValue.text.isNotBlank() || attachedImagePath != null)
-                    Box(
-                        modifier = Modifier
-                            .size(actionButtonSize)
-                            .clip(CircleShape)
-                            .background(if (canSend) ShitterTheme.accent else Color.Transparent)
-                            .clickable(enabled = canSend) {
-                                val currentDraft = composerValue.text
-                                val trimmed = currentDraft.trim()
-                                if (attachedImagePath == null) {
-                                    if (activeBackendKind == BackendKind.OPENCODE) {
-                                        val invocation = parseOpenCodeSlashInvocation(trimmed, activeSlashEntries)
-                                        if (invocation != null) {
-                                            composerValue = TextFieldValue(text = "", selection = TextRange(0))
-                                            commitDraftIfNeeded("")
-                                            hideComposerPopups()
-                                            focusManager.clearFocus(force = true)
-                                            keyboardController?.hide()
-                                            if (invocation.entry.kind == SlashKind.ACTION) {
-                                                executeOpenCodeAction(invocation.entry.actionId ?: "", invocation.args)
-                                            } else {
-                                                onExecuteOpenCodeCommand(invocation.entry.name, invocation.args.orEmpty()) { result ->
-                                                    result.onFailure { error ->
-                                                        slashErrorMessage = error.message ?: "Failed to run slash command"
+
+                    // Trailing icon inside pill: send arrow (has text) or mic (idle)
+                    if (hasText) {
+                        Box(
+                            modifier = Modifier
+                                .size(actionButtonSize)
+                                .padding(end = 4.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    val currentDraft = composerValue.text
+                                    val trimmed = currentDraft.trim()
+                                    if (attachedImagePath == null) {
+                                        if (activeBackendKind == BackendKind.OPENCODE) {
+                                            val invocation = parseOpenCodeSlashInvocation(trimmed, activeSlashEntries)
+                                            if (invocation != null) {
+                                                composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                                commitDraftIfNeeded("")
+                                                hideComposerPopups()
+                                                focusManager.clearFocus(force = true)
+                                                keyboardController?.hide()
+                                                if (invocation.entry.kind == SlashKind.ACTION) {
+                                                    executeOpenCodeAction(invocation.entry.actionId ?: "", invocation.args)
+                                                } else {
+                                                    onExecuteOpenCodeCommand(invocation.entry.name, invocation.args.orEmpty()) { result ->
+                                                        result.onFailure { error ->
+                                                            slashErrorMessage = error.message ?: "Failed to run slash command"
+                                                        }
                                                     }
                                                 }
+                                                return@clickable
                                             }
-                                            return@clickable
-                                        }
-                                    } else {
-                                        val invocation = parseSlashCommandInvocation(trimmed)
-                                        if (invocation != null) {
-                                            composerValue = TextFieldValue(text = "", selection = TextRange(0))
-                                            commitDraftIfNeeded("")
-                                            hideComposerPopups()
-                                            focusManager.clearFocus(force = true)
-                                            keyboardController?.hide()
-                                            executeCodexSlashCommand(invocation.command, invocation.args)
-                                            return@clickable
+                                        } else {
+                                            val invocation = parseSlashCommandInvocation(trimmed)
+                                            if (invocation != null) {
+                                                composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                                commitDraftIfNeeded("")
+                                                hideComposerPopups()
+                                                focusManager.clearFocus(force = true)
+                                                keyboardController?.hide()
+                                                executeCodexSlashCommand(invocation.command, invocation.args)
+                                                return@clickable
+                                            }
                                         }
                                     }
-                                }
-                                focusManager.clearFocus(force = true)
-                                keyboardController?.hide()
-                                composerValue = TextFieldValue(text = "", selection = TextRange(0))
-                                commitDraftIfNeeded("")
-                                val skillMentions = collectSkillMentionsForSubmission(currentDraft)
-                                onSend(currentDraft, skillMentions)
-                                hideComposerPopups()
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            modifier = Modifier.size(actionIconSize),
-                            tint = if (canSend) ShitterTheme.surface else ShitterTheme.textMuted
-                        )
+                                    focusManager.clearFocus(force = true)
+                                    keyboardController?.hide()
+                                    composerValue = TextFieldValue(text = "", selection = TextRange(0))
+                                    commitDraftIfNeeded("")
+                                    val skillMentions = collectSkillMentionsForSubmission(currentDraft)
+                                    onSend(currentDraft, skillMentions)
+                                    hideComposerPopups()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.ArrowUpward,
+                                contentDescription = "Send",
+                                modifier = Modifier.size(actionIconSize),
+                                tint = ShitterTheme.accent,
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(actionButtonSize)
+                                .padding(end = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice input",
+                                modifier = Modifier.size(actionIconSize - 2.dp),
+                                tint = ShitterTheme.textSecondary,
+                            )
+                        }
                     }
                 }
-        }
+            }
+
+            // Cancel capsule (iOS: shown when isTurnActive / isSending)
+            if (isSending) {
+                Surface(
+                    onClick = onInterrupt,
+                    shape = RoundedCornerShape(50),
+                    color = ShitterTheme.surfaceLight,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
+                ) {
+                    Text(
+                        text = "Cancel",
+                        color = ShitterTheme.textPrimary,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -6385,10 +6726,12 @@ private fun DiscoverySheet(
     onManualBackendKindChanged: (BackendKind) -> Unit,
     onManualHostChanged: (String) -> Unit,
     onManualPortChanged: (String) -> Unit,
+    onManualUrlChanged: (String) -> Unit,
     onManualUsernameChanged: (String) -> Unit,
     onManualPasswordChanged: (String) -> Unit,
     onManualDirectoryChanged: (String) -> Unit,
     onConnectManual: () -> Unit,
+    onConnectManualUrl: () -> Unit,
 ) {
     val configuration = LocalConfiguration.current
     val useLargeScreenDialog =
@@ -6403,7 +6746,7 @@ private fun DiscoverySheet(
         val manualConnectFocusRequester = remember { FocusRequester() }
         var editingField by remember { mutableStateOf<ManualField?>(null) }
         var editingValue by remember { mutableStateOf("") }
-        val canConnect = state.manualHost.isNotBlank() && state.manualPort.isNotBlank()
+        val canConnect = if (state.manualBackendKind == BackendKind.CODEX) state.manualUrl.isNotBlank() else state.manualHost.isNotBlank() && state.manualPort.isNotBlank()
         val firstServerId = state.servers.firstOrNull()?.id
 
         BackHandler(enabled = editingField != null) {
@@ -6594,7 +6937,21 @@ private fun DiscoverySheet(
                                             }
                                         }
 
-                                        if (editingField == ManualField.HOST) {
+                                        if (state.manualBackendKind == BackendKind.CODEX) {
+                                            OutlinedTextField(
+                                                value = state.manualUrl,
+                                                onValueChange = onManualUrlChanged,
+                                                label = { Text("ws://host:port or wss://...") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                            )
+                                            Text(
+                                                "Run: codex app-server --listen ws://0.0.0.0:9234\nFor reverse proxies: wss://example.com/ws?token=SECRET\nDo not expose directly to the internet unless you know what you are doing.",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ShitterTheme.textMuted,
+                                            )
+                                        } else if (editingField == ManualField.HOST) {
                                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 OutlinedTextField(
                                                     value = editingValue,
@@ -6701,102 +7058,104 @@ private fun DiscoverySheet(
                                             }
                                         }
 
-                                        if (editingField == ManualField.PORT) {
-                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                OutlinedTextField(
-                                                    value = editingValue,
-                                                    onValueChange = {
-                                                        val digitsOnly = it.filter { ch -> ch.isDigit() }
-                                                        editingValue = digitsOnly
-                                                        onManualPortChanged(digitsOnly)
-                                                    },
+                                        if (state.manualBackendKind != BackendKind.CODEX) {
+                                            if (editingField == ManualField.PORT) {
+                                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    OutlinedTextField(
+                                                        value = editingValue,
+                                                        onValueChange = {
+                                                            val digitsOnly = it.filter { ch -> ch.isDigit() }
+                                                            editingValue = digitsOnly
+                                                            onManualPortChanged(digitsOnly)
+                                                        },
+                                                        modifier =
+                                                            Modifier
+                                                                .fillMaxWidth()
+                                                                .focusRequester(manualInlineEditorFocusRequester)
+                                                                .focusProperties {
+                                                                    up = manualHostFocusRequester
+                                                                    down = manualInlineDoneFocusRequester
+                                                                }
+                                                                .onPreviewKeyEvent { event ->
+                                                                    if (event.type != KeyEventType.KeyDown) {
+                                                                        return@onPreviewKeyEvent false
+                                                                    }
+                                                                    when (event.key) {
+                                                                        Key.Back, Key.Escape -> {
+                                                                            editingField = null
+                                                                            true
+                                                                        }
+
+                                                                        Key.DirectionDown -> {
+                                                                            manualInlineDoneFocusRequester.requestFocus()
+                                                                            true
+                                                                        }
+
+                                                                        Key.DirectionUp -> {
+                                                                            manualHostFocusRequester.requestFocus()
+                                                                            true
+                                                                        }
+
+                                                                        else -> false
+                                                                    }
+                                                                },
+                                                        singleLine = true,
+                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                        label = { Text("Port") },
+                                                    )
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        Text(
+                                                            "Editing port",
+                                                            color = ShitterTheme.textMuted,
+                                                            style = MaterialTheme.typography.labelLarge,
+                                                        )
+                                                        TextButton(
+                                                            onClick = { editingField = null },
+                                                            modifier =
+                                                                Modifier
+                                                                    .focusRequester(manualInlineDoneFocusRequester)
+                                                                    .focusProperties {
+                                                                        up = manualInlineEditorFocusRequester
+                                                                        down = if (canConnect) manualConnectFocusRequester else manualHostFocusRequester
+                                                                    },
+                                                        ) {
+                                                            Text("Done")
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                Surface(
                                                     modifier =
                                                         Modifier
                                                             .fillMaxWidth()
-                                                            .focusRequester(manualInlineEditorFocusRequester)
+                                                            .focusRequester(manualPortFocusRequester)
                                                             .focusProperties {
                                                                 up = manualHostFocusRequester
-                                                                down = manualInlineDoneFocusRequester
-                                                            }
-                                                            .onPreviewKeyEvent { event ->
-                                                                if (event.type != KeyEventType.KeyDown) {
-                                                                    return@onPreviewKeyEvent false
-                                                                }
-                                                                when (event.key) {
-                                                                    Key.Back, Key.Escape -> {
-                                                                        editingField = null
-                                                                        true
-                                                                    }
-
-                                                                    Key.DirectionDown -> {
-                                                                        manualInlineDoneFocusRequester.requestFocus()
-                                                                        true
-                                                                    }
-
-                                                                    Key.DirectionUp -> {
-                                                                        manualHostFocusRequester.requestFocus()
-                                                                        true
-                                                                    }
-
-                                                                    else -> false
-                                                                }
+                                                                down = if (canConnect) manualConnectFocusRequester else manualHostFocusRequester
+                                                            }.clickable {
+                                                                editingField = ManualField.PORT
+                                                                editingValue = state.manualPort
                                                             },
-                                                    singleLine = true,
-                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                    label = { Text("Port") },
-                                                )
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    color = ShitterTheme.surfaceLight.copy(alpha = 0.65f),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
                                                 ) {
-                                                    Text(
-                                                        "Editing port",
-                                                        color = ShitterTheme.textMuted,
-                                                        style = MaterialTheme.typography.labelLarge,
-                                                    )
-                                                    TextButton(
-                                                        onClick = { editingField = null },
-                                                        modifier =
-                                                            Modifier
-                                                                .focusRequester(manualInlineDoneFocusRequester)
-                                                                .focusProperties {
-                                                                    up = manualInlineEditorFocusRequester
-                                                                    down = if (canConnect) manualConnectFocusRequester else manualHostFocusRequester
-                                                                },
+                                                    Column(
+                                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(2.dp),
                                                     ) {
-                                                        Text("Done")
+                                                        Text("Port", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
+                                                        Text(
+                                                            if (state.manualPort.isBlank()) "Set port" else state.manualPort,
+                                                            color = if (state.manualPort.isBlank()) ShitterTheme.textMuted else ShitterTheme.textPrimary,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
                                                     }
-                                                }
-                                            }
-                                        } else {
-                                            Surface(
-                                                modifier =
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .focusRequester(manualPortFocusRequester)
-                                                        .focusProperties {
-                                                            up = manualHostFocusRequester
-                                                            down = if (canConnect) manualConnectFocusRequester else manualHostFocusRequester
-                                                        }.clickable {
-                                                            editingField = ManualField.PORT
-                                                            editingValue = state.manualPort
-                                                        },
-                                                color = ShitterTheme.surfaceLight.copy(alpha = 0.65f),
-                                                shape = RoundedCornerShape(8.dp),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, ShitterTheme.border),
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                                ) {
-                                                    Text("Port", color = ShitterTheme.textSecondary, style = MaterialTheme.typography.labelLarge)
-                                                    Text(
-                                                        if (state.manualPort.isBlank()) "Set port" else state.manualPort,
-                                                        color = if (state.manualPort.isBlank()) ShitterTheme.textMuted else ShitterTheme.textPrimary,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                    )
                                                 }
                                             }
                                         }
@@ -6828,7 +7187,7 @@ private fun DiscoverySheet(
                                 }
                                 Spacer(modifier = Modifier.weight(1f))
                                 Button(
-                                    onClick = onConnectManual,
+                                    onClick = if (state.manualBackendKind == BackendKind.CODEX) onConnectManualUrl else onConnectManual,
                                     modifier =
                                         Modifier
                                             .fillMaxWidth()
@@ -6838,7 +7197,7 @@ private fun DiscoverySheet(
                                             },
                                     enabled = canConnect,
                                 ) {
-                                    Text("Connect Manual Server")
+                                    Text("Connect")
                                 }
                             }
                         }
@@ -6971,29 +7330,49 @@ private fun DiscoverySheet(
                         Text("OpenCode")
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                if (state.manualBackendKind == BackendKind.CODEX) {
                     OutlinedTextField(
-                        value = state.manualHost,
-                        onValueChange = onManualHostChanged,
-                        label = { Text("Host") },
-                        modifier = Modifier.weight(1f),
+                        value = state.manualUrl,
+                        onValueChange = onManualUrlChanged,
+                        label = { Text("ws://host:port or wss://...") },
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     )
-                    OutlinedTextField(
-                        value = state.manualPort,
-                        onValueChange = onManualPortChanged,
-                        label = { Text("Port") },
-                        modifier = Modifier.width(110.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
+                    Text(
+                        "Run: codex app-server --listen ws://0.0.0.0:9234\nFor reverse proxies: wss://example.com/ws?token=SECRET\nDo not expose directly to the internet unless you know what you are doing.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShitterTheme.textMuted,
                     )
-                }
-
-                if (state.manualBackendKind == BackendKind.OPENCODE) {
+                    Button(
+                        onClick = onConnectManualUrl,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = state.manualUrl.isNotBlank(),
+                    ) {
+                        Text("Connect")
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = state.manualHost,
+                            onValueChange = onManualHostChanged,
+                            label = { Text("Host") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = state.manualPort,
+                            onValueChange = onManualPortChanged,
+                            label = { Text("Port") },
+                            modifier = Modifier.width(110.dp),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                        )
+                    }
                     OutlinedTextField(
                         value = state.manualUsername,
                         onValueChange = onManualUsernameChanged,
@@ -7015,18 +7394,17 @@ private fun DiscoverySheet(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
+                    Button(
+                        onClick = onConnectManual,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = state.manualHost.isNotBlank() && state.manualPort.isNotBlank(),
+                    ) {
+                        Text("Connect")
+                    }
                 }
-
-                Button(
-                    onClick = onConnectManual,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = state.manualHost.isNotBlank() && state.manualPort.isNotBlank(),
-                ) {
-                    Text("Connect Manual Server")
-                }
-            }
         }
     }
+}
 }
 
 @Composable
