@@ -74,6 +74,7 @@ struct ShitterApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var serverManager = ServerManager()
     @State private var themeManager = ThemeManager.shared
+    @State private var watchRelay = WatchRelay()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -83,11 +84,16 @@ struct ShitterApp: App {
                 .environment(themeManager)
                 .task {
                     appDelegate.serverManager = serverManager
+                    // Activate WatchConnectivity relay
+                    watchRelay.serverManager = serverManager
+                    watchRelay.activate()
                     let forceDiscoveryForUITest =
                         ProcessInfo.processInfo.environment["CODEXIOS_UI_TEST_FORCE_DISCOVERY"] == "1"
                     if !forceDiscoveryForUITest {
                         await serverManager.reconnectAll()
                     }
+                    // Initial broadcast to Watch after connecting
+                    watchRelay.broadcastThreadState()
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -96,9 +102,29 @@ struct ShitterApp: App {
                 serverManager.appDidEnterBackground()
             case .active:
                 serverManager.appDidBecomeActive()
+                // Broadcast current state to Watch when app becomes active
+                watchRelay.broadcastThreadState()
             default:
                 break
             }
+        }
+        // Broadcast thread state changes to Watch
+        .onChange(of: serverManager.threads.count) { _, _ in
+            watchRelay.broadcastThreadState()
+        }
+        .onChange(of: serverManager.connections.count) { _, _ in
+            watchRelay.broadcastThreadState()
+        }
+        // Relay new approval requests to Watch
+        .onChange(of: serverManager.pendingApprovals.count) { oldCount, newCount in
+            if newCount > oldCount {
+                let newApprovals = serverManager.pendingApprovals.suffix(newCount - oldCount)
+                for approval in newApprovals {
+                    watchRelay.sendApprovalToWatch(approval)
+                }
+            }
+            // Also broadcast thread state since approval state changed
+            watchRelay.broadcastThreadState()
         }
     }
 }
