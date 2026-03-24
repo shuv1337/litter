@@ -97,6 +97,21 @@ actor JSONRPCClient {
         Task { try? await self.sendText(str) }
     }
 
+    func sendError(id: String, code: Int = -32000, message: String) {
+        let idValue: Any = Int(id).map { $0 as Any } ?? id
+        let response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": idValue,
+            "error": [
+                "code": code,
+                "message": message
+            ]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: response),
+              let str = String(data: data, encoding: .utf8) else { return }
+        Task { try? await self.sendText(str) }
+    }
+
     func sendRequest<P: Encodable, R: Decodable>(
         method: String,
         params: P,

@@ -21,11 +21,15 @@ codex-cloud-requirements = { path = "../../third_party/codex/codex-rs/cloud-requ
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+webrtc-audio-processing = { version = "2.0.0", features = ["bundled"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [patch.crates-io]
+webrtc-audio-processing-sys = { path = "../vendor/webrtc-audio-processing-sys" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }

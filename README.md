@@ -138,7 +138,7 @@ This script:
 Regenerate project if `apps/ios/project.yml` changed:
 
 ```bash
-xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj
+./apps/ios/scripts/regenerate-project.sh
 ```
 
 Open in Xcode:

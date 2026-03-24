@@ -55,6 +55,11 @@ struct SessionsScreen: View {
     private func screenContent(derived: SessionsDerivedData) -> some View {
         let base = screenLayout(derived: derived)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    refreshToolbarButton
+                }
+            }
             .enableInjection()
 
         let lifecycle = attachLifecycleHandlers(to: base, derived: derived)
@@ -340,6 +345,25 @@ struct SessionsScreen: View {
             .accessibilityIdentifier("sessions.newSessionButton")
         }
         .padding(16)
+    }
+
+    private var refreshToolbarButton: some View {
+        Button(action: refreshSessions) {
+            Group {
+                if isLoading && hasLoadedInitialSessions {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(ShitterTheme.accent)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .shitterFont(.subheadline, weight: .semibold)
+                        .foregroundColor(serverManager.hasAnyConnection ? ShitterTheme.accent : ShitterTheme.textMuted)
+                }
+            }
+        }
+        .disabled(isLoading || !serverManager.hasAnyConnection)
+        .accessibilityLabel("Refresh sessions")
+        .accessibilityIdentifier("sessions.refreshButton")
     }
 
     private var serversRow: some View {
@@ -710,7 +734,7 @@ struct SessionsScreen: View {
                     } else if thread.isSubagent {
                         subagentStatusIndicator(thread.agentStatus).padding(.top, 3)
                     } else {
-                        Circle().fill(Color.clear).frame(width: 8, height: 8).padding(.top, 3)
+                        Circle().fill(ShitterTheme.textMuted.opacity(0.4)).frame(width: 8, height: 8).padding(.top, 3)
                     }
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -984,6 +1008,12 @@ struct SessionsScreen: View {
         isLoading = false
     }
 
+    private func refreshSessions() {
+        Task {
+            await loadSessions()
+        }
+    }
+
     private func resumeSession(_ thread: ThreadState) async {
         guard resumingKey == nil else { return }
         resumingKey = thread.key
@@ -1027,7 +1057,6 @@ struct SessionsScreen: View {
         )
         if let startedKey {
             onOpenConversation(startedKey)
-            _ = RecentDirectoryStore.shared.record(path: cwd, for: serverId)
         } else {
             sessionActionErrorMessage = "Failed to start a new session."
         }

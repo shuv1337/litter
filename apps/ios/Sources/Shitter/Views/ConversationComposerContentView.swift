@@ -8,15 +8,52 @@ struct ConversationComposerContentView: View {
     let contextPercent: Int64?
     let isTurnActive: Bool
     let voiceManager: VoiceTranscriptionManager
+    @Binding var showAttachMenu: Bool
     let onClearAttachment: () -> Void
     let onRespondToPendingUserInput: ([String: [String]]) -> Void
-    let onShowAttachMenu: () -> Void
+    let onPasteImage: (UIImage) -> Void
     let onSendText: () -> Void
     let onStopRecording: () -> Void
     let onStartRecording: () -> Void
     let onInterrupt: () -> Void
     @Binding var inputText: String
-    let isComposerFocused: FocusState<Bool>.Binding
+    @Binding var isComposerFocused: Bool
+
+    init(
+        attachedImage: UIImage?,
+        pendingUserInputRequest: ServerManager.PendingUserInputRequest?,
+        rateLimits: RateLimitSnapshot?,
+        contextPercent: Int64?,
+        isTurnActive: Bool,
+        voiceManager: VoiceTranscriptionManager,
+        showAttachMenu: Binding<Bool>,
+        onClearAttachment: @escaping () -> Void,
+        onRespondToPendingUserInput: @escaping ([String: [String]]) -> Void,
+        onPasteImage: @escaping (UIImage) -> Void,
+        onSendText: @escaping () -> Void,
+        onStopRecording: @escaping () -> Void,
+        onStartRecording: @escaping () -> Void,
+        onInterrupt: @escaping () -> Void,
+        inputText: Binding<String>,
+        isComposerFocused: Binding<Bool>
+    ) {
+        self.attachedImage = attachedImage
+        self.pendingUserInputRequest = pendingUserInputRequest
+        self.rateLimits = rateLimits
+        self.contextPercent = contextPercent
+        self.isTurnActive = isTurnActive
+        self.voiceManager = voiceManager
+        _showAttachMenu = showAttachMenu
+        self.onClearAttachment = onClearAttachment
+        self.onRespondToPendingUserInput = onRespondToPendingUserInput
+        self.onPasteImage = onPasteImage
+        self.onSendText = onSendText
+        self.onStopRecording = onStopRecording
+        self.onStartRecording = onStartRecording
+        self.onInterrupt = onInterrupt
+        _inputText = inputText
+        _isComposerFocused = isComposerFocused
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,11 +89,13 @@ struct ConversationComposerContentView: View {
                 }
 
                 ConversationComposerEntryRowView(
+                    showAttachMenu: $showAttachMenu,
                     inputText: $inputText,
-                    isComposerFocused: isComposerFocused,
+                    isComposerFocused: $isComposerFocused,
                     voiceManager: voiceManager,
                     isTurnActive: isTurnActive,
-                    onShowAttachMenu: onShowAttachMenu,
+                    hasAttachment: attachedImage != nil,
+                    onPasteImage: onPasteImage,
                     onSendText: onSendText,
                     onStopRecording: onStopRecording,
                     onStartRecording: onStartRecording,

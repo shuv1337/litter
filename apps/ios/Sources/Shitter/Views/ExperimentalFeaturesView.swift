@@ -1,13 +1,7 @@
 import SwiftUI
 
 struct ExperimentalFeaturesView: View {
-    @State private var toggleStates: [ShitterFeature: Bool] = {
-        var states: [ShitterFeature: Bool] = [:]
-        for feature in ShitterFeature.allCases {
-            states[feature] = ExperimentalFeatures.shared.isEnabled(feature)
-        }
-        return states
-    }()
+    @State private var experimentalFeatures = ExperimentalFeatures.shared
 
     var body: some View {
         ZStack {
@@ -44,10 +38,9 @@ struct ExperimentalFeaturesView: View {
 
     private func binding(for feature: ShitterFeature) -> Binding<Bool> {
         Binding(
-            get: { toggleStates[feature] ?? feature.defaultEnabled },
+            get: { experimentalFeatures.isEnabled(feature) },
             set: { newValue in
-                toggleStates[feature] = newValue
-                ExperimentalFeatures.shared.setEnabled(feature, newValue)
+                experimentalFeatures.setEnabled(feature, newValue)
             }
         )
     }

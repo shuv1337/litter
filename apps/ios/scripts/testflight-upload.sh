@@ -180,7 +180,7 @@ if [[ -z "$WHAT_TO_TEST" ]]; then
 fi
 
 echo "==> Regenerating Xcode project"
-xcodegen generate --spec "$REPO_DIR/project.yml" --project "$PROJECT_DIR"
+"$PROJECT_DIR/scripts/regenerate-project.sh"
 
 auth_args=()
 if [[ -n "$AUTH_KEY_PATH" && -n "$AUTH_KEY_ID" && -n "$AUTH_ISSUER_ID" ]]; then

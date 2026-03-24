@@ -1,17 +1,22 @@
 use codex_app_server::AppServerTransport;
-use codex_app_server::in_process::{InProcessClientSender, InProcessServerEvent, InProcessStartArgs};
+use codex_app_server::in_process::{
+    InProcessClientSender, InProcessServerEvent, InProcessStartArgs,
+};
 use codex_app_server::run_main_with_transport;
 use codex_app_server_protocol::{
-    ClientNotification, ClientRequest, InitializeCapabilities, InitializeParams,
-    ClientInfo, RequestId,
+    ClientInfo, ClientNotification, ClientRequest, InitializeCapabilities, InitializeParams,
+    RequestId,
 };
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_core::ThreadManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthManager;
+use codex_core::auth::load_auth_dot_json;
+use codex_core::auth::save_auth;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::ThreadManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
@@ -20,13 +25,16 @@ use std::fs;
 use std::net::SocketAddr;
 use std::os::raw::c_char;
 use std::path::PathBuf;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
 #[cfg(target_os = "ios")]
-mod ios_exec;
+mod aec;
 #[cfg(target_os = "android")]
 mod android_jni;
+#[cfg(target_os = "ios")]
+mod ios_exec;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -39,68 +47,125 @@ fn runtime() -> &'static Runtime {
     })
 }
 
+fn ffi_guard_i32(name: &str, f: impl FnOnce() -> i32) -> i32 {
+    match std::panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(code) => code,
+        Err(payload) => {
+            let message = if let Some(msg) = payload.downcast_ref::<&str>() {
+                *msg
+            } else if let Some(msg) = payload.downcast_ref::<String>() {
+                msg.as_str()
+            } else {
+                "non-string panic payload"
+            };
+            eprintln!("[codex-bridge] {name} panicked: {message}");
+            -127
+        }
+    }
+}
+
+fn ffi_guard_unit(name: &str, f: impl FnOnce()) {
+    let _ = ffi_guard_i32(name, || {
+        f();
+        0
+    });
+}
+
+#[cfg(target_os = "ios")]
+fn normalize_ios_auth_storage(config: &mut codex_core::config::Config) {
+    let original_mode = config.cli_auth_credentials_store_mode;
+    if original_mode == AuthCredentialsStoreMode::File {
+        return;
+    }
+
+    match load_auth_dot_json(&config.codex_home, original_mode) {
+        Ok(Some(auth)) => {
+            if let Err(err) = save_auth(&config.codex_home, &auth, AuthCredentialsStoreMode::File) {
+                eprintln!("[codex-bridge] failed to migrate auth to file storage: {err}");
+            } else {
+                eprintln!(
+                    "[codex-bridge] migrated auth from {:?} to file storage",
+                    original_mode
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "[codex-bridge] failed to read auth from {:?} storage: {err}",
+                original_mode
+            );
+        }
+    }
+
+    config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+}
+
 /// Start the codex app-server on an available loopback port.
 /// Writes the actual port to `*out_port`.
 /// Returns 0 on success, negative on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn codex_start_server(out_port: *mut u16) -> i32 {
-    init_codex_home();
-    #[cfg(target_os = "ios")]
-    init_tls_roots();
+    ffi_guard_i32("codex_start_server", || {
+        init_codex_home();
+        #[cfg(target_os = "ios")]
+        init_tls_roots();
 
-    let port = match std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-    {
-        Ok(p) => p,
-        Err(_) => return -1,
-    };
+        let port = match std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+        {
+            Ok(p) => p,
+            Err(_) => return -1,
+        };
 
-    unsafe { *out_port = port; }
+        unsafe {
+            *out_port = port;
+        }
 
-    #[cfg(target_os = "ios")]
-    {
-        ios_exec::init();
-        codex_core::exec::set_ios_exec_hook(ios_exec::run_command);
-    }
+        #[cfg(target_os = "ios")]
+        {
+            ios_exec::init();
+            codex_core::exec::set_ios_exec_hook(ios_exec::run_command);
+        }
 
-    let bind_address: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    eprintln!("[codex-bridge] starting server on {bind_address}");
+        let bind_address: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        eprintln!("[codex-bridge] starting server on {bind_address}");
 
-    runtime().spawn(async move {
-        let handle = runtime().spawn(async move {
-            run_main_with_transport(
-                Default::default(),
-                CliConfigOverrides::default(),
-                LoaderOverrides::default(),
-                false,
-                AppServerTransport::WebSocket { bind_address },
-            )
-            .await
+        runtime().spawn(async move {
+            let handle = runtime().spawn(async move {
+                run_main_with_transport(
+                    Default::default(),
+                    CliConfigOverrides::default(),
+                    LoaderOverrides::default(),
+                    false,
+                    AppServerTransport::WebSocket { bind_address },
+                )
+                .await
+            });
+
+            match handle.await {
+                Ok(Ok(())) => eprintln!("[codex-bridge] server exited normally"),
+                Ok(Err(e)) => eprintln!("[codex-bridge] server error: {e}"),
+                Err(join_err) if join_err.is_panic() => {
+                    eprintln!("[codex-bridge] server PANICKED: {join_err}");
+                }
+                Err(join_err) => eprintln!("[codex-bridge] server task error: {join_err}"),
+            }
         });
 
-        match handle.await {
-            Ok(Ok(())) => eprintln!("[codex-bridge] server exited normally"),
-            Ok(Err(e)) => eprintln!("[codex-bridge] server error: {e}"),
-            Err(join_err) if join_err.is_panic() => {
-                eprintln!("[codex-bridge] server PANICKED: {join_err}");
+        let ready = runtime().block_on(async {
+            for _ in 0..300 {
+                if tokio::net::TcpStream::connect(bind_address).await.is_ok() {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
-            Err(join_err) => eprintln!("[codex-bridge] server task error: {join_err}"),
-        }
-    });
+            false
+        });
 
-    // Block until the server is actually accepting connections.
-    let ready = runtime().block_on(async {
-        for _ in 0..300 {
-            if tokio::net::TcpStream::connect(bind_address).await.is_ok() {
-                return true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        false
-    });
-
-    if ready { 0 } else { -2 }
+        if ready { 0 } else { -2 }
+    })
 }
 
 /// Stop the codex app-server. Currently a no-op; connections close naturally.
@@ -146,11 +211,14 @@ impl CallbackHandle {
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
-        unsafe { (self.cb)(self.ctx, json.as_ptr() as *const c_char, json.len()); }
+        unsafe {
+            (self.cb)(self.ctx, json.as_ptr() as *const c_char, json.len());
+        }
     }
 
     fn mark_closed(&self) {
-        self.closed.store(true, std::sync::atomic::Ordering::Release);
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -158,14 +226,19 @@ fn serialize_server_event(event: &InProcessServerEvent) -> Option<String> {
     match event {
         InProcessServerEvent::ServerRequest(req) => serde_json::to_string(req).ok(),
         InProcessServerEvent::ServerNotification(notif) => serde_json::to_string(notif).ok(),
-        InProcessServerEvent::LegacyNotification(notif) => serde_json::to_string(notif).ok(),
+        InProcessServerEvent::LegacyNotification(notif) => {
+            if notif.method.starts_with("codex/event/realtime_conversation_") {
+                None
+            } else {
+                serde_json::to_string(notif).ok()
+            }
+        }
         InProcessServerEvent::Lagged { skipped } => {
             eprintln!("[codex-channel] dropped {skipped} events due to backpressure");
             None
         }
     }
 }
-
 
 /// Open an in-process channel to the codex app-server.
 /// Performs the initialize handshake internally.
@@ -176,26 +249,29 @@ pub extern "C" fn codex_channel_open(
     callback_ctx: *mut c_void,
     out_handle: *mut *mut c_void,
 ) -> i32 {
-    init_codex_home();
-    #[cfg(target_os = "ios")]
-    init_tls_roots();
-    #[cfg(target_os = "ios")]
-    {
-        ios_exec::init();
-        codex_core::exec::set_ios_exec_hook(ios_exec::run_command);
-    }
+    ffi_guard_i32("codex_channel_open", || {
+        init_codex_home();
+        #[cfg(target_os = "ios")]
+        init_tls_roots();
+        #[cfg(target_os = "ios")]
+        {
+            ios_exec::init();
+            codex_core::exec::set_ios_exec_hook(ios_exec::run_command);
+        }
 
-    eprintln!("[codex-channel] opening in-process channel");
+        eprintln!("[codex-channel] opening in-process channel");
 
-    let result: Result<ChannelState, String> = runtime().block_on(async {
+        let result: Result<ChannelState, String> = runtime().block_on(async {
         let cli_overrides = Vec::new();
 
         // Build config with defaults (mirrors run_main_with_transport's setup).
-        let config = ConfigBuilder::default()
+        let mut config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .build()
             .await
             .map_err(|e| format!("config build failed: {e}"))?;
+        #[cfg(target_os = "ios")]
+        normalize_ios_auth_storage(&mut config);
 
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -209,12 +285,14 @@ pub extern "C" fn codex_channel_open(
         );
 
         // Rebuild with cloud requirements for full config resolution.
-        let config = ConfigBuilder::default()
+        let mut config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .cloud_requirements(cloud_requirements.clone())
             .build()
             .await
             .unwrap_or(config);
+        #[cfg(target_os = "ios")]
+        normalize_ios_auth_storage(&mut config);
 
         let feedback = CodexFeedback::new();
         let session_source: SessionSource = SessionSource::VSCode;
@@ -266,18 +344,51 @@ pub extern "C" fn codex_channel_open(
 
         // Spawn the event loop that delivers server events to Swift via callback.
         let closed_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cb_handle = CallbackHandle { cb: callback, ctx: callback_ctx, closed: closed_flag.clone() };
+        let cb_handle = CallbackHandle {
+            cb: callback,
+            ctx: callback_ctx,
+            closed: closed_flag.clone(),
+        };
         let event_task = runtime().spawn(async move {
             while let Some(event) = handle.next_event().await {
+                if let InProcessServerEvent::LegacyNotification(notification) = &event {
+                    if notification.method.starts_with("codex/event/realtime_conversation_") {
+                        eprintln!(
+                            "[codex-channel] dropping legacy realtime notification {}",
+                            notification.method
+                        );
+                        continue;
+                    }
+                }
                 let event_kind = match &event {
-                    InProcessServerEvent::ServerRequest(r) => format!("ServerRequest({})", serde_json::to_value(r).ok().and_then(|v| v.get("method").and_then(|m| m.as_str().map(String::from))).unwrap_or_default()),
-                    InProcessServerEvent::ServerNotification(n) => format!("ServerNotification({})", serde_json::to_value(n).ok().and_then(|v| v.get("method").and_then(|m| m.as_str().map(String::from))).unwrap_or_default()),
-                    InProcessServerEvent::LegacyNotification(n) => format!("LegacyNotification({})", &n.method),
+                    InProcessServerEvent::ServerRequest(r) => format!(
+                        "ServerRequest({})",
+                        serde_json::to_value(r)
+                            .ok()
+                            .and_then(|v| v
+                                .get("method")
+                                .and_then(|m| m.as_str().map(String::from)))
+                            .unwrap_or_default()
+                    ),
+                    InProcessServerEvent::ServerNotification(n) => format!(
+                        "ServerNotification({})",
+                        serde_json::to_value(n)
+                            .ok()
+                            .and_then(|v| v
+                                .get("method")
+                                .and_then(|m| m.as_str().map(String::from)))
+                            .unwrap_or_default()
+                    ),
+                    InProcessServerEvent::LegacyNotification(n) => {
+                        format!("LegacyNotification({})", &n.method)
+                    }
                     InProcessServerEvent::Lagged { skipped } => format!("Lagged({skipped})"),
                 };
                 eprintln!("[codex-channel] event: {event_kind}");
                 if let Some(json) = serialize_server_event(&event) {
-                    unsafe { cb_handle.deliver(&json); }
+                    unsafe {
+                        cb_handle.deliver(&json);
+                    }
                 }
             }
             eprintln!("[codex-channel] event stream ended");
@@ -293,20 +404,23 @@ pub extern "C" fn codex_channel_open(
             event_task,
             request_tasks: std::sync::Mutex::new(Vec::new()),
         })
-    });
+        });
 
-    match result {
-        Ok(state) => {
-            let boxed = Box::new(state);
-            unsafe { *out_handle = Box::into_raw(boxed) as *mut c_void; }
-            eprintln!("[codex-channel] channel opened successfully");
-            0
+        match result {
+            Ok(state) => {
+                let boxed = Box::new(state);
+                unsafe {
+                    *out_handle = Box::into_raw(boxed) as *mut c_void;
+                }
+                eprintln!("[codex-channel] channel opened successfully");
+                0
+            }
+            Err(e) => {
+                eprintln!("[codex-channel] failed to open: {e}");
+                -1
+            }
         }
-        Err(e) => {
-            eprintln!("[codex-channel] failed to open: {e}");
-            -1
-        }
-    }
+    })
 }
 
 /// Send a JSON-RPC message from client to server.
@@ -317,174 +431,181 @@ pub extern "C" fn codex_channel_send(
     json: *const c_char,
     json_len: usize,
 ) -> i32 {
-    if handle.is_null() || json.is_null() {
-        return -1;
-    }
-
-    let state = unsafe { &*(handle as *const ChannelState) };
-    let json_bytes = unsafe { std::slice::from_raw_parts(json as *const u8, json_len) };
-    let json_str = match std::str::from_utf8(json_bytes) {
-        Ok(s) => s,
-        Err(_) => return -2,
-    };
-
-    let value: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return -3,
-    };
-
-    let has_id = value.get("id").is_some();
-    let has_method = value.get("method").is_some();
-    let has_result = value.get("result").is_some();
-    let has_error = value.get("error").is_some();
-
-    if has_method && has_id {
-        // Client request — fire-and-forget, response delivered via callback.
-        let request: ClientRequest = match serde_json::from_value(value.clone()) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[codex-channel] failed to parse request: {e}");
-                return -4;
-            }
-        };
-
-        let request_id = value["id"].clone();
-        let sender = state.sender.clone();
-        let cb_handle = state.cb_handle.clone();
-
-        let request_task = runtime().spawn(async move {
-            match sender.request(request).await {
-                Ok(result) => {
-                    let response = match result {
-                        Ok(value) => serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": value,
-                        }),
-                        Err(error) => serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": error.code,
-                                "message": error.message,
-                            },
-                        }),
-                    };
-                    if let Ok(json) = serde_json::to_string(&response) {
-                        unsafe { cb_handle.deliver(&json); }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[codex-channel] send request failed: {e}");
-                    let error_response = serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": { "code": -32603, "message": e.to_string() },
-                    });
-                    if let Ok(json) = serde_json::to_string(&error_response) {
-                        unsafe { cb_handle.deliver(&json); }
-                    }
-                }
-            }
-        });
-
-        if let Ok(mut tasks) = state.request_tasks.lock() {
-            tasks.push(request_task);
-        } else {
-            request_task.abort();
-            return -5;
+    ffi_guard_i32("codex_channel_send", || {
+        if handle.is_null() || json.is_null() {
+            return -1;
         }
 
-        0
-    } else if has_method && !has_id {
-        // Client notification
-        let notification: ClientNotification = match serde_json::from_value(value) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("[codex-channel] failed to parse notification: {e}");
-                return -4;
-            }
+        let state = unsafe { &*(handle as *const ChannelState) };
+        let json_bytes = unsafe { std::slice::from_raw_parts(json as *const u8, json_len) };
+        let json_str = match std::str::from_utf8(json_bytes) {
+            Ok(s) => s,
+            Err(_) => return -2,
         };
 
-        match state.sender.notify(notification) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("[codex-channel] notify failed: {e}");
-                -5
-            }
-        }
-    } else if has_id && (has_result || has_error) {
-        // Response to a server request
-        let id = match &value["id"] {
-            serde_json::Value::Number(n) => RequestId::Integer(n.as_i64().unwrap_or(0)),
-            serde_json::Value::String(s) => RequestId::String(s.clone()),
-            _ => return -6,
+        let value: serde_json::Value = match serde_json::from_str(json_str) {
+            Ok(v) => v,
+            Err(_) => return -3,
         };
 
-        if has_result {
-            let result: codex_app_server_protocol::Result = value["result"].clone();
-            match state.sender.respond_to_server_request(id, result) {
-                Ok(()) => 0,
+        let has_id = value.get("id").is_some();
+        let has_method = value.get("method").is_some();
+        let has_result = value.get("result").is_some();
+        let has_error = value.get("error").is_some();
+
+        if has_method && has_id {
+            let request: ClientRequest = match serde_json::from_value(value.clone()) {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[codex-channel] respond failed: {e}");
-                    -5
+                    eprintln!("[codex-channel] failed to parse request: {e}");
+                    return -4;
                 }
-            }
-        } else {
-            let error = codex_app_server_protocol::JSONRPCErrorError {
-                code: value["error"]["code"].as_i64().unwrap_or(-1),
-                message: value["error"]["message"].as_str().unwrap_or("unknown").to_string(),
-                data: value["error"]["data"].clone().into(),
             };
-            match state.sender.fail_server_request(id, error) {
+
+            let request_id = value["id"].clone();
+            let sender = state.sender.clone();
+            let cb_handle = state.cb_handle.clone();
+
+            let request_task = runtime().spawn(async move {
+                match sender.request(request).await {
+                    Ok(result) => {
+                        let response = match result {
+                            Ok(value) => serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "result": value,
+                            }),
+                            Err(error) => serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": error.code,
+                                    "message": error.message,
+                                },
+                            }),
+                        };
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            unsafe {
+                                cb_handle.deliver(&json);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[codex-channel] send request failed: {e}");
+                        let error_response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": { "code": -32603, "message": e.to_string() },
+                        });
+                        if let Ok(json) = serde_json::to_string(&error_response) {
+                            unsafe {
+                                cb_handle.deliver(&json);
+                            }
+                        }
+                    }
+                }
+            });
+
+            if let Ok(mut tasks) = state.request_tasks.lock() {
+                tasks.push(request_task);
+            } else {
+                request_task.abort();
+                return -5;
+            }
+
+            0
+        } else if has_method && !has_id {
+            let notification: ClientNotification = match serde_json::from_value(value) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("[codex-channel] failed to parse notification: {e}");
+                    return -4;
+                }
+            };
+
+            match state.sender.notify(notification) {
                 Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("[codex-channel] fail_server_request failed: {e}");
+                    eprintln!("[codex-channel] notify failed: {e}");
                     -5
                 }
             }
+        } else if has_id && (has_result || has_error) {
+            let id = match &value["id"] {
+                serde_json::Value::Number(n) => RequestId::Integer(n.as_i64().unwrap_or(0)),
+                serde_json::Value::String(s) => RequestId::String(s.clone()),
+                _ => return -6,
+            };
+
+            if has_result {
+                let result: codex_app_server_protocol::Result = value["result"].clone();
+                match state.sender.respond_to_server_request(id, result) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("[codex-channel] respond failed: {e}");
+                        -5
+                    }
+                }
+            } else {
+                let error = codex_app_server_protocol::JSONRPCErrorError {
+                    code: value["error"]["code"].as_i64().unwrap_or(-1),
+                    message: value["error"]["message"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    data: value["error"]["data"].clone().into(),
+                };
+                match state.sender.fail_server_request(id, error) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("[codex-channel] fail_server_request failed: {e}");
+                        -5
+                    }
+                }
+            }
+        } else {
+            eprintln!("[codex-channel] unrecognized JSON-RPC message shape");
+            -6
         }
-    } else {
-        eprintln!("[codex-channel] unrecognized JSON-RPC message shape");
-        -6
-    }
+    })
 }
 
 /// Close the channel and release resources.
 #[unsafe(no_mangle)]
 pub extern "C" fn codex_channel_close(handle: *mut c_void) {
-    if handle.is_null() {
-        return;
-    }
-    let state = unsafe { Box::from_raw(handle as *mut ChannelState) };
-
-    // Mark closed FIRST — prevents any in-flight callback from touching Swift memory.
-    state.cb_handle.mark_closed();
-
-    let ChannelState {
-        sender: _sender,
-        cb_handle: _cb_handle,
-        event_task,
-        request_tasks,
-    } = *state;
-
-    let mut request_tasks = match request_tasks.into_inner() {
-        Ok(tasks) => tasks,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    event_task.abort();
-    for task in &request_tasks {
-        task.abort();
-    }
-
-    runtime().block_on(async move {
-        let _ = event_task.await;
-        for task in request_tasks.drain(..) {
-            let _ = task.await;
+    ffi_guard_unit("codex_channel_close", || {
+        if handle.is_null() {
+            return;
         }
+        let state = unsafe { Box::from_raw(handle as *mut ChannelState) };
+
+        state.cb_handle.mark_closed();
+
+        let ChannelState {
+            sender: _sender,
+            cb_handle: _cb_handle,
+            event_task,
+            request_tasks,
+        } = *state;
+
+        let mut request_tasks = match request_tasks.into_inner() {
+            Ok(tasks) => tasks,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        event_task.abort();
+        for task in &request_tasks {
+            task.abort();
+        }
+
+        runtime().block_on(async move {
+            let _ = event_task.await;
+            for task in request_tasks.drain(..) {
+                let _ = task.await;
+            }
+        });
+        eprintln!("[codex-channel] channel closed");
     });
-    eprintln!("[codex-channel] channel closed");
 }
 
 fn init_codex_home() {
@@ -498,7 +619,11 @@ fn init_codex_home() {
         let home = PathBuf::from(home);
         #[cfg(target_os = "ios")]
         {
-            candidates.push(home.join("Library").join("Application Support").join("codex"));
+            candidates.push(
+                home.join("Library")
+                    .join("Application Support")
+                    .join("codex"),
+            );
             candidates.push(home.join("Documents").join(".codex"));
         }
         candidates.push(home.join(".codex"));
@@ -548,6 +673,8 @@ fn init_tls_roots() {
             return;
         }
     }
-    unsafe { std::env::set_var("SSL_CERT_FILE", &pem_path); }
+    unsafe {
+        std::env::set_var("SSL_CERT_FILE", &pem_path);
+    }
     eprintln!("[codex-bridge] SSL_CERT_FILE={}", pem_path.display());
 }

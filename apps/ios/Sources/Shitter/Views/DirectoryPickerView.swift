@@ -285,7 +285,7 @@ private final class DirectoryPickerSheetModel {
 
     func removeRecentEntry(_ entry: RecentDirectoryEntry, selectedServerId: String) {
         withAnimation(.easeInOut(duration: 0.2)) {
-            recentEntries = RecentDirectoryStore.shared.remove(path: entry.path, for: selectedServerId)
+            recentEntries = RecentDirectoryStore.shared.remove(path: entry.path, for: selectedServerId, limit: 3)
         }
     }
 
@@ -296,7 +296,7 @@ private final class DirectoryPickerSheetModel {
     }
 
     private func refreshRecentEntries(serverId: String) {
-        recentEntries = RecentDirectoryStore.shared.recentDirectories(for: serverId)
+        recentEntries = RecentDirectoryStore.shared.recentDirectories(for: serverId, limit: 3)
     }
 
     private func resolveHome(

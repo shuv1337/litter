@@ -35,7 +35,7 @@ struct LockScreenCardView: View {
                     )
 
                 Text(prompt)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(.system(size: 13, weight: .medium, design: ShitterPalette.fontDesign))
                     .foregroundStyle(primaryText)
                     .lineLimit(1)
 
@@ -46,7 +46,7 @@ struct LockScreenCardView: View {
             }
 
             Text(displayText)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11, design: ShitterPalette.fontDesign))
                 .foregroundStyle(snippetColor)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -57,7 +57,7 @@ struct LockScreenCardView: View {
                 phaseBadge
 
                 Text(model)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10, design: ShitterPalette.fontDesign))
                     .foregroundStyle(tertiaryText)
                     .padding(.leading, 8)
 
@@ -132,7 +132,7 @@ struct LockScreenCardView: View {
             }
         }()
         return Text(text)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(size: 10, weight: .medium, design: ShitterPalette.fontDesign))
             .foregroundStyle(fg)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
@@ -145,7 +145,7 @@ struct LockScreenCardView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(mutedText)
             Text(text)
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 10, design: ShitterPalette.fontDesign))
                 .foregroundStyle(tertiaryText)
                 .lineLimit(1)
         }
@@ -157,7 +157,7 @@ struct LockScreenCardView: View {
         let fg: Color = percent >= 80 ? dangerText : percent >= 60 ? warningText : tertiaryText
         let bg: Color = percent >= 80 ? dangerText.opacity(0.1) : percent >= 60 ? warningText.opacity(0.1) : chipBgBase.opacity(0.05)
         return Text("\(percent)%")
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(.system(size: 9, weight: .semibold, design: ShitterPalette.fontDesign))
             .foregroundStyle(fg)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)

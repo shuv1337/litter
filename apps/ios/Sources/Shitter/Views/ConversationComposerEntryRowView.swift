@@ -1,24 +1,59 @@
 import SwiftUI
+import UIKit
 
 struct ConversationComposerEntryRowView: View {
+    @Binding var showAttachMenu: Bool
     @Binding var inputText: String
-    let isComposerFocused: FocusState<Bool>.Binding
+    @Binding var isComposerFocused: Bool
     let voiceManager: VoiceTranscriptionManager
     let isTurnActive: Bool
-    let onShowAttachMenu: () -> Void
+    let hasAttachment: Bool
+    let onPasteImage: (UIImage) -> Void
     let onSendText: () -> Void
     let onStopRecording: () -> Void
     let onStartRecording: () -> Void
     let onInterrupt: () -> Void
 
+    init(
+        showAttachMenu: Binding<Bool>,
+        inputText: Binding<String>,
+        isComposerFocused: Binding<Bool>,
+        voiceManager: VoiceTranscriptionManager,
+        isTurnActive: Bool,
+        hasAttachment: Bool,
+        onPasteImage: @escaping (UIImage) -> Void,
+        onSendText: @escaping () -> Void,
+        onStopRecording: @escaping () -> Void,
+        onStartRecording: @escaping () -> Void,
+        onInterrupt: @escaping () -> Void
+    ) {
+        _showAttachMenu = showAttachMenu
+        _inputText = inputText
+        _isComposerFocused = isComposerFocused
+        self.voiceManager = voiceManager
+        self.isTurnActive = isTurnActive
+        self.hasAttachment = hasAttachment
+        self.onPasteImage = onPasteImage
+        self.onSendText = onSendText
+        self.onStopRecording = onStopRecording
+        self.onStartRecording = onStartRecording
+        self.onInterrupt = onInterrupt
+    }
+
     private var hasText: Bool {
         !inputText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var canSend: Bool {
+        hasText || hasAttachment
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if !voiceManager.isRecording && !voiceManager.isTranscribing && !isTurnActive {
-                Button(action: onShowAttachMenu) {
+                Button {
+                    showAttachMenu = true
+                } label: {
                     Image(systemName: "plus")
                         .shitterFont(.body, weight: .semibold)
                         .foregroundColor(ShitterTheme.textPrimary)
@@ -29,17 +64,24 @@ struct ConversationComposerEntryRowView: View {
             }
 
             HStack(spacing: 0) {
-                TextField("Message shitter...", text: $inputText, axis: .vertical)
-                    .shitterFont(.body)
-                    .foregroundColor(ShitterTheme.textPrimary)
-                    .lineLimit(1...5)
-                    .focused(isComposerFocused)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
-                    .padding(.leading, 16)
-                    .padding(.vertical, 10)
+                ZStack(alignment: .topLeading) {
+                    ConversationComposerTextView(
+                        text: $inputText,
+                        isFocused: $isComposerFocused,
+                        onPasteImage: onPasteImage
+                    )
 
-                if hasText {
+                    if inputText.isEmpty {
+                        Text("Message shitter...")
+                            .shitterFont(.body)
+                            .foregroundColor(ShitterTheme.textMuted)
+                            .padding(.leading, 16)
+                            .padding(.top, 10)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                if canSend {
                     Button(action: onSendText) {
                         Image(systemName: "arrow.up.circle.fill")
                             .shitterFont(.title2)
@@ -89,6 +131,7 @@ struct ConversationComposerEntryRowView: View {
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.86), value: isTurnActive)
         .padding(.horizontal, 12)

@@ -11,11 +11,10 @@ struct SettingsView: View {
     }
 
     private var connectedServers: [ServerConnection] {
-        serverManager.connections.values
-            .filter { $0.isConnected }
-            .sorted { lhs, rhs in
-                lhs.server.name.localizedCaseInsensitiveCompare(rhs.server.name) == .orderedAscending
-            }
+        HomeDashboardSupport.sortedConnectedServers(
+            from: Array(serverManager.connections.values),
+            activeServerId: serverManager.activeThreadKey?.serverId
+        )
     }
 
     var body: some View {
@@ -100,6 +99,7 @@ struct SettingsView: View {
             ForEach(FontFamilyOption.allCases) { option in
                 Button {
                     fontFamily = option.rawValue
+                    ThemeManager.shared.syncFontPreference()
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
@@ -206,8 +206,6 @@ private struct SettingsConnectionAccountSection: View {
     let connection: ServerConnection
     @State private var apiKey = ""
     @State private var isAuthWorking = false
-    @State private var authError: String?
-    @State private var showOAuth = false
 
     private var authStatus: AuthStatus {
         connection.authStatus
@@ -240,17 +238,44 @@ private struct SettingsConnectionAccountSection: View {
             }
             .listRowBackground(ShitterTheme.surface.opacity(0.6))
 
+            if connection.target == .local, connection.hasOpenAIApiKey {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .foregroundColor(Color(hex: "#00AAFF"))
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Realtime API Key Saved")
+                            .shitterFont(.subheadline)
+                            .foregroundColor(ShitterTheme.textPrimary)
+                        Text("Realtime can use the saved OpenAI API key while keeping your current account auth.")
+                            .shitterFont(.caption)
+                            .foregroundColor(ShitterTheme.textSecondary)
+                    }
+                    Spacer()
+                    Button("Delete") {
+                        Task {
+                            isAuthWorking = true
+                            await connection.clearOpenAIApiKey()
+                            isAuthWorking = false
+                        }
+                    }
+                    .shitterFont(.caption)
+                    .foregroundColor(ShitterTheme.danger)
+                    .disabled(isAuthWorking)
+                }
+                .listRowBackground(ShitterTheme.surface.opacity(0.6))
+            }
+
             if case .notLoggedIn = authStatus {
                 Button {
                     Task {
                         isAuthWorking = true
-                        authError = nil
                         await connection.loginWithChatGPT()
                         isAuthWorking = false
                     }
                 } label: {
                     HStack {
-                        if isAuthWorking {
+                        if isAuthWorking || connection.isChatGPTLoginInProgress {
                             ProgressView().tint(ShitterTheme.textPrimary).scaleEffect(0.8)
                         }
                         Image(systemName: "person.crop.circle.badge.checkmark")
@@ -259,21 +284,29 @@ private struct SettingsConnectionAccountSection: View {
                     }
                     .foregroundColor(ShitterTheme.accent)
                 }
-                .disabled(isAuthWorking)
+                .disabled(isAuthWorking || connection.isChatGPTLoginInProgress)
                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
+            }
 
+            if connection.target == .local, authStatus == .notLoggedIn || authStatus.isChatGPT {
                 HStack(spacing: 8) {
-                    SecureField("sk-...", text: $apiKey)
-                        .shitterFont(.footnote)
-                        .foregroundColor(ShitterTheme.textPrimary)
-                        .textInputAutocapitalization(.never)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if authStatus.isChatGPT {
+                            Text(connection.hasOpenAIApiKey ? "Update API key for local realtime" : "Save API key for local realtime")
+                                .shitterFont(.caption)
+                                .foregroundColor(ShitterTheme.textSecondary)
+                        }
+                        SecureField("sk-...", text: $apiKey)
+                            .shitterFont(.footnote)
+                            .foregroundColor(ShitterTheme.textPrimary)
+                            .textInputAutocapitalization(.never)
+                    }
                     Button("Save") {
                         let key = apiKey.trimmingCharacters(in: .whitespaces)
                         guard !key.isEmpty else { return }
                         Task {
                             isAuthWorking = true
-                            authError = nil
-                            await connection.loginWithApiKey(key)
+                            await connection.saveOpenAIApiKey(key)
                             isAuthWorking = false
                         }
                     }
@@ -284,7 +317,7 @@ private struct SettingsConnectionAccountSection: View {
                 .listRowBackground(ShitterTheme.surface.opacity(0.6))
             }
 
-            if let authError {
+            if let authError = connection.lastAuthError {
                 Text(authError)
                     .shitterFont(.caption)
                     .foregroundColor(ShitterTheme.danger)
@@ -293,43 +326,6 @@ private struct SettingsConnectionAccountSection: View {
         } header: {
             Text("Account")
                 .foregroundColor(ShitterTheme.textSecondary)
-        }
-        .sheet(isPresented: $showOAuth) {
-            oauthSheet
-        }
-        .onChange(of: connection.oauthURL) { _, url in
-            showOAuth = url != nil
-        }
-        .onChange(of: connection.loginCompleted) { _, completed in
-            if completed == true {
-                showOAuth = false
-                connection.loginCompleted = false
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var oauthSheet: some View {
-        if let url = connection.oauthURL {
-            NavigationStack {
-                OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
-                    connection.forwardOAuthCallback(callbackURL)
-                }) {
-                    Task { await connection.cancelLogin() }
-                }
-                .ignoresSafeArea()
-                .navigationTitle("Login with ChatGPT")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel") {
-                            Task { await connection.cancelLogin() }
-                            showOAuth = false
-                        }
-                        .foregroundColor(ShitterTheme.danger)
-                    }
-                }
-            }
         }
     }
 
@@ -352,10 +348,23 @@ private struct SettingsConnectionAccountSection: View {
 
     private var authSubtitle: String? {
         switch authStatus {
-        case .chatgpt: return "ChatGPT account"
-        case .apiKey: return "OpenAI API key"
+        case .chatgpt:
+            return connection.hasOpenAIApiKey
+                ? "ChatGPT account with saved realtime API key"
+                : "ChatGPT account"
+        case .apiKey:
+            return connection.hasOpenAIApiKey ? "OpenAI API key saved" : "OpenAI API key"
         default: return nil
         }
+    }
+}
+
+private extension AuthStatus {
+    var isChatGPT: Bool {
+        if case .chatgpt = self {
+            return true
+        }
+        return false
     }
 }
 

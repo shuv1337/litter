@@ -1,6 +1,6 @@
+use jni::JNIEnv;
 use jni::objects::JClass;
 use jni::sys::jint;
-use jni::JNIEnv;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_latitudes_shitter_android_core_bridge_NativeCodexBridge_nativeStartServerPort(

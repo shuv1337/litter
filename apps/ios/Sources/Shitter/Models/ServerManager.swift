@@ -52,15 +52,24 @@ enum AgentLabelFormatter {
 @MainActor
 @Observable
 final class ServerManager {
+    private static let localServerID = "local"
+    private static let persistedLocalVoiceThreadIDKey = "shitter.voice.local.thread_id"
+
     var connections: [String: ServerConnection] = [:]
     var threads: [ThreadKey: ThreadState] = [:]
     var activeThreadKey: ThreadKey?
     var pendingApprovals: [PendingApproval] = []
     var pendingUserInputRequests: [PendingUserInputRequest] = []
     var composerPrefillRequest: ComposerPrefillRequest?
+    var activeVoiceSession: VoiceSessionState?
     private(set) var agentDirectoryVersion: Int = 0
 
     @ObservationIgnored private let savedServersKey = "codex_saved_servers"
+    @ObservationIgnored private var voiceHandoffThreads: [String: ThreadKey] = [:]
+    private(set) var handoffThreadKeys: [String: ThreadKey] = [:]
+    @ObservationIgnored var handoffModel: String?
+    @ObservationIgnored var handoffEffort: String?
+    @ObservationIgnored var handoffFastMode: Bool = false
     @ObservationIgnored private var liveItemMessageIndices: [ThreadKey: [String: Int]] = [:]
     @ObservationIgnored private var liveTurnDiffMessageIndices: [ThreadKey: [String: Int]] = [:]
     @ObservationIgnored private var serversUsingItemNotifications: Set<String> = []
@@ -76,6 +85,7 @@ final class ServerManager {
     @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var bgWakeCount: Int = 0
     @ObservationIgnored private var liveActivities: [ThreadKey: Activity<CodexTurnAttributes>] = [:]
+    @ObservationIgnored private var voiceCallActivity: Activity<CodexVoiceCallAttributes>?
     @ObservationIgnored private var liveActivityStartDates: [ThreadKey: Date] = [:]
     @ObservationIgnored private var liveActivityToolCallCounts: [ThreadKey: Int] = [:]
     @ObservationIgnored private var liveActivityOutputSnippets: [ThreadKey: String] = [:]
@@ -89,6 +99,14 @@ final class ServerManager {
     @ObservationIgnored private var pushProxyRegistrationId: String?
     @ObservationIgnored private var suppressNotifications = false
     @ObservationIgnored var devicePushToken: Data?
+    @ObservationIgnored private let voiceSessionCoordinator = VoiceSessionCoordinator()
+    @ObservationIgnored private var voiceInputDecayToken: UUID?
+    @ObservationIgnored private var voiceOutputDecayToken: UUID?
+    @ObservationIgnored private var voicePreviousActiveThreadKey: ThreadKey?
+    @ObservationIgnored private var voiceStopRequestedThreadKey: ThreadKey?
+    @ObservationIgnored private var lastHandledVoiceEndRequestToken: String?
+    @ObservationIgnored private var lastRealtimeTranscriptDelta: [ThreadKey: (speaker: String, delta: String, timestamp: CFAbsoluteTime)] = [:]
+    @ObservationIgnored private var pendingRealtimeMessageIDs: [ThreadKey: (user: String?, assistant: String?)] = [:]
     @ObservationIgnored private let notificationDecodeQueue = DispatchQueue(label: "Shitter.ServerManager.NotificationDecode", qos: .userInitiated)
     @ObservationIgnored private var notificationWorkTask: Task<Void, Never>?
     @ObservationIgnored private let networkMonitor = NetworkMonitor()
@@ -124,6 +142,20 @@ final class ServerManager {
             byThreadId = byThreadId.filter { !$0.key.hasPrefix(prefix) }
             byAgentId = byAgentId.filter { !$0.key.hasPrefix(prefix) }
         }
+    }
+
+    init() {
+        voiceSessionCoordinator.onEvent = { [weak self] event in
+            self?.handleVoiceSessionCoordinatorEvent(event)
+        }
+        installVoiceSessionControlObserver()
+    }
+
+    deinit {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+        let name = CFNotificationName(VoiceSessionControl.endRequestDarwinNotification as CFString)
+        CFNotificationCenterRemoveObserver(center, observer, name, nil)
     }
 
     enum ApprovalKind: String, Codable {
@@ -217,6 +249,159 @@ final class ServerManager {
 
     var hasInstalledNetworkMonitorCallbacks: Bool {
         networkMonitor.onNetworkLost != nil && networkMonitor.onNetworkRestored != nil
+    }
+
+    private func persistedLocalVoiceThreadId() -> String? {
+        let stored = UserDefaults.standard.string(forKey: Self.persistedLocalVoiceThreadIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? nil : stored
+    }
+
+    private func setPersistedLocalVoiceThreadId(_ threadId: String?) {
+        let trimmed = threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.persistedLocalVoiceThreadIDKey)
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: Self.persistedLocalVoiceThreadIDKey)
+        }
+    }
+
+    private func clearPersistedLocalVoiceThreadIfNeeded(_ key: ThreadKey) {
+        guard key.serverId == Self.localServerID,
+              persistedLocalVoiceThreadId() == key.threadId else {
+            return
+        }
+        setPersistedLocalVoiceThreadId(nil)
+    }
+
+    private func makeLocalServer() throws -> DiscoveredServer {
+        guard OnDeviceCodexFeature.isEnabled else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3304,
+                userInfo: [NSLocalizedDescriptionKey: "Home-screen voice requires the local on-device Codex server"]
+            )
+        }
+
+        return DiscoveredServer(
+            id: Self.localServerID,
+            name: UIDevice.current.name,
+            hostname: "127.0.0.1",
+            port: nil,
+            source: .local,
+            hasCodexServer: true
+        )
+    }
+
+    private func ensureLocalConnection() async throws -> ServerConnection {
+        if let existing = connections[Self.localServerID] {
+            if !existing.isConnected {
+                await existing.connect()
+                if existing.isConnected {
+                    await refreshSessions(for: existing.id)
+                }
+            }
+            guard existing.isConnected else {
+                throw NSError(
+                    domain: "Shitter",
+                    code: 3305,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not connect to the local Codex server"]
+                )
+            }
+            return existing
+        }
+
+        let localServer = try makeLocalServer()
+        await addServer(localServer, target: .local)
+        guard let connection = connections[Self.localServerID], connection.isConnected else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3306,
+                userInfo: [NSLocalizedDescriptionKey: "Could not start the local Codex server"]
+            )
+        }
+        return connection
+    }
+
+    private func discardThreadState(_ key: ThreadKey) {
+        cancelThreadMetadataRefresh(for: key)
+        deferredThreadMessageHydrationTasks[key]?.cancel()
+        deferredThreadMessageHydrationTasks.removeValue(forKey: key)
+        threads.removeValue(forKey: key)
+        threadTurnCounts.removeValue(forKey: key)
+        liveItemMessageIndices.removeValue(forKey: key)
+        liveTurnDiffMessageIndices.removeValue(forKey: key)
+    }
+
+    private func preferredVoiceThreadCwd(for key: ThreadKey?, fallback: String) -> String {
+        let existingCwd = key.flatMap {
+            threads[$0]?.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        } ?? ""
+        if !existingCwd.isEmpty {
+            return existingCwd
+        }
+
+        let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFallback.isEmpty {
+            return trimmedFallback
+        }
+
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
+    }
+
+    private func ensurePinnedLocalVoiceThread(
+        cwd: String,
+        model: String? = nil,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws -> ThreadKey {
+        let connection = try await ensureLocalConnection()
+        let serverId = connection.id
+
+        if let storedThreadId = persistedLocalVoiceThreadId() {
+            let key = ThreadKey(serverId: serverId, threadId: storedThreadId)
+            if await resumeThread(
+                serverId: serverId,
+                threadId: storedThreadId,
+                cwd: preferredVoiceThreadCwd(for: key, fallback: cwd),
+                approvalPolicy: approvalPolicy,
+                sandboxMode: sandboxMode
+            ) {
+                return key
+            }
+
+            setPersistedLocalVoiceThreadId(nil)
+            discardThreadState(key)
+        }
+
+        return try await createPinnedLocalVoiceThread(
+            serverId: serverId,
+            cwd: cwd,
+            model: model,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+    }
+
+    private func createPinnedLocalVoiceThread(
+        serverId: String,
+        cwd: String,
+        model: String? = nil,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws -> ThreadKey {
+        let key = try await startThread(
+            serverId: serverId,
+            cwd: preferredVoiceThreadCwd(for: nil, fallback: cwd),
+            model: model,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode,
+            dynamicTools: ExperimentalFeatures.shared.isEnabled(.generativeUI)
+                ? GenerativeUITools.buildDynamicToolSpecs()
+                : nil
+        )
+        setPersistedLocalVoiceThreadId(key.threadId)
+        return key
     }
 
     private func debugAgentDirectoryLog(_ message: @autoclosure () -> String) {
@@ -320,7 +505,8 @@ final class ServerManager {
 
     // MARK: - Server Lifecycle
 
-    func addServer(_ server: DiscoveredServer, target: ConnectionTarget) async {
+    @discardableResult
+    func addServer(_ server: DiscoveredServer, target: ConnectionTarget) async -> String {
         startNetworkMonitorIfNeeded()
 
         if let existing = connections[server.id] {
@@ -332,11 +518,22 @@ final class ServerManager {
                         await refreshSessions(for: server.id)
                     }
                 }
-                return
+                return server.id
             }
 
             existing.disconnect()
             connections.removeValue(forKey: server.id)
+        }
+
+        if let existing = connections.values.first(where: { $0.server.deduplicationKey == server.deduplicationKey }) {
+            configureConnectionCallbacks(existing, serverId: existing.id)
+            if !existing.isConnected {
+                await existing.connect()
+                if existing.isConnected {
+                    await refreshSessions(for: existing.id)
+                }
+            }
+            return existing.id
         }
 
         let conn = ServerConnection(server: server, target: target)
@@ -347,6 +544,7 @@ final class ServerManager {
         if conn.isConnected {
             await refreshSessions(for: server.id)
         }
+        return server.id
     }
 
     private func configureConnectionCallbacks(_ conn: ServerConnection, serverId: String) {
@@ -365,6 +563,10 @@ final class ServerManager {
             NSLog("[%@ ws] disconnected server=%@", self?.ts ?? "?", serverId)
             self?.removePendingApprovals(forServerId: serverId)
             self?.removePendingUserInputRequests(forServerId: serverId)
+            if self?.activeVoiceSession?.threadKey.serverId == serverId {
+                let key = self?.activeVoiceSession?.threadKey ?? ThreadKey(serverId: serverId, threadId: "")
+                self?.failVoiceSession("Realtime voice disconnected")
+            }
         }
         conn.onLoginCompleted = { [weak self, weak conn] in
             guard let self else { return }
@@ -388,6 +590,12 @@ final class ServerManager {
     }
 
     func removeServer(id: String) {
+        if activeVoiceSession?.threadKey.serverId == id {
+            endVoiceSessionImmediately()
+        }
+        if id == Self.localServerID {
+            setPersistedLocalVoiceThreadId(nil)
+        }
         if let conn = connections[id] {
             if conn.target == .local {
                 Task { await CodexBridge.shared.stop() }
@@ -470,7 +678,8 @@ final class ServerManager {
         model: String? = nil,
         approvalPolicy: String = "never",
         sandboxMode: String? = nil,
-        dynamicTools: [DynamicToolSpec]? = nil
+        dynamicTools: [DynamicToolSpec]? = nil,
+        activate: Bool = true
     ) async throws -> ThreadKey {
         guard let conn = connections[serverId] else {
             throw NSError(domain: "Shitter", code: 1, userInfo: [NSLocalizedDescriptionKey: "No connection for server"])
@@ -512,7 +721,10 @@ final class ServerManager {
         threadTurnCounts[key] = 0
         liveItemMessageIndices[key] = nil
         liveTurnDiffMessageIndices[key] = nil
-        activeThreadKey = key
+        if activate {
+            activeThreadKey = key
+        }
+        _ = RecentDirectoryStore.shared.record(path: resp.cwd, for: serverId)
         scheduleThreadMetadataRefresh(for: key, cwd: resp.cwd)
         return key
     }
@@ -550,6 +762,11 @@ final class ServerManager {
             )
             return true
         } catch {
+            if containsLocalRealtimeItems(state.items), isMissingRolloutError(error) {
+                state.status = .ready
+                state.requiresOpenHydration = false
+                return true
+            }
             state.status = .error(error.localizedDescription)
             return false
         }
@@ -585,6 +802,11 @@ final class ServerManager {
             )
             return true
         } catch {
+            if containsLocalRealtimeItems(thread.items), isMissingRolloutError(error) {
+                thread.status = .ready
+                thread.requiresOpenHydration = false
+                return true
+            }
             thread.status = .error(error.localizedDescription)
             return false
         }
@@ -614,6 +836,7 @@ final class ServerManager {
             thread.requiresOpenHydration = false
             activeThreadKey = key
             let cwd = thread.cwd.isEmpty ? "/tmp" : thread.cwd
+            _ = RecentDirectoryStore.shared.record(path: cwd, for: key.serverId)
             scheduleThreadMetadataRefresh(for: key, cwd: cwd)
             return true
         }
@@ -633,6 +856,304 @@ final class ServerManager {
             approvalPolicy: approvalPolicy,
             sandboxMode: sandboxMode
         )
+    }
+
+    private var knownRealtimeVoiceThreadKeys: [ThreadKey] {
+        var keys = Set<ThreadKey>()
+        if let activeKey = activeVoiceSession?.threadKey,
+           !activeKey.threadId.isEmpty {
+            keys.insert(activeKey)
+        }
+        if let stopKey = voiceStopRequestedThreadKey,
+           !stopKey.threadId.isEmpty {
+            keys.insert(stopKey)
+        }
+        if let persistedLocalThreadId = persistedLocalVoiceThreadId(),
+           !persistedLocalThreadId.isEmpty,
+           connections[Self.localServerID] != nil {
+            keys.insert(ThreadKey(serverId: Self.localServerID, threadId: persistedLocalThreadId))
+        }
+        return Array(keys)
+    }
+
+    private func cleanupKnownRealtimeVoiceSessions(beforeStartingOn key: ThreadKey? = nil) async {
+        let candidateKeys = knownRealtimeVoiceThreadKeys
+        guard !candidateKeys.isEmpty else { return }
+
+        for candidate in candidateKeys {
+            guard candidate != key,
+                  let connection = connections[candidate.serverId],
+                  connection.isConnected else {
+                continue
+            }
+            if candidate == activeVoiceSession?.threadKey {
+                recordVoiceSessionDebug(
+                    "-> thread/realtime/stop cleanup \(debugJSONString(ThreadRealtimeStopParams(threadId: candidate.threadId)))",
+                    for: candidate
+                )
+            }
+            do {
+                try await connection.stopRealtimeConversation(threadId: candidate.threadId)
+                if candidate == activeVoiceSession?.threadKey {
+                    recordVoiceSessionDebug(
+                        "<- thread/realtime/stop cleanup {}",
+                        for: candidate
+                    )
+                }
+            } catch {
+                if candidate == activeVoiceSession?.threadKey {
+                    recordVoiceSessionDebug(
+                        "<- thread/realtime/stop cleanup error \(error.localizedDescription)",
+                        for: candidate
+                    )
+                }
+            }
+        }
+    }
+
+    private func updateVoiceSessionForPendingStop(_ key: ThreadKey) {
+        guard var session = activeVoiceSession, session.threadKey == key else { return }
+
+        session.phase = .thinking
+        session.isListening = false
+        session.isSpeaking = false
+        session.inputLevel = 0
+        session.outputLevel = 0
+        session.transcriptSpeaker = "System"
+        session.transcriptText = "Hanging up..."
+        session.transcriptLiveMessageID = nil
+        session.lastError = nil
+        appendVoiceSessionDebug("phase stopping", to: &session)
+        activeVoiceSession = session
+        syncVoiceCallActivity()
+    }
+
+    func startPinnedLocalVoiceCall(
+        cwd: String,
+        model: String? = nil,
+        approvalPolicy: String = "never",
+        sandboxMode: String? = nil
+    ) async throws {
+        if let existing = activeVoiceSession, existing.phase != .error {
+            return
+        }
+        if activeVoiceSession != nil {
+            endVoiceSessionImmediately()
+        }
+
+        let previousKey = activeThreadKey
+        let key = try await ensurePinnedLocalVoiceThread(
+            cwd: cwd,
+            model: model,
+            approvalPolicy: approvalPolicy,
+            sandboxMode: sandboxMode
+        )
+        if let previousKey, previousKey != key {
+            activeThreadKey = previousKey
+        } else if previousKey == nil {
+            activeThreadKey = nil
+        }
+
+        do {
+            try await startRealtimeVoiceSession(
+                for: key,
+                model: model,
+                previousActiveThreadKey: previousKey
+            )
+        } catch {
+            guard isUnsupportedRealtimeThreadError(error) else {
+                throw error
+            }
+
+            setPersistedLocalVoiceThreadId(nil)
+            discardThreadState(key)
+            endVoiceSessionImmediately()
+
+            let freshKey = try await createPinnedLocalVoiceThread(
+                serverId: Self.localServerID,
+                cwd: cwd,
+                model: model,
+                approvalPolicy: approvalPolicy,
+                sandboxMode: sandboxMode
+            )
+            if let previousKey, previousKey != freshKey {
+                activeThreadKey = previousKey
+            } else if previousKey == nil {
+                activeThreadKey = nil
+            }
+
+            try await startRealtimeVoiceSession(
+                for: freshKey,
+                model: model,
+                previousActiveThreadKey: previousKey
+            )
+        }
+    }
+
+    func startVoiceOnThread(_ key: ThreadKey) async throws {
+        if let existing = activeVoiceSession, existing.phase != .error {
+            return
+        }
+        if activeVoiceSession != nil {
+            endVoiceSessionImmediately()
+        }
+        guard key.serverId == Self.localServerID else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3310,
+                userInfo: [NSLocalizedDescriptionKey: "Voice is only available on the local server"]
+            )
+        }
+
+        try await startRealtimeVoiceSession(
+            for: key,
+            previousActiveThreadKey: activeThreadKey
+        )
+    }
+
+    private func startRealtimeVoiceSession(
+        for key: ThreadKey,
+        model: String? = nil,
+        previousActiveThreadKey: ThreadKey?
+    ) async throws {
+        guard let thread = threads[key],
+              let connection = connections[key.serverId],
+              connection.isConnected else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3302,
+                userInfo: [NSLocalizedDescriptionKey: "Voice mode requires an active server connection"]
+            )
+        }
+
+        if key.serverId == Self.localServerID {
+            await connection.prepareLocalRealtimeConversationIfNeeded()
+        }
+
+        let features = try await connection.listExperimentalFeatures(limit: 200)
+        guard Self.isRealtimeConversationEnabled(features.data) else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3303,
+                userInfo: [NSLocalizedDescriptionKey: "This app-server does not have realtime conversation enabled"]
+            )
+        }
+
+        await cleanupKnownRealtimeVoiceSessions(beforeStartingOn: key)
+        let runtimeSessionId = "shitter-voice-\(UUID().uuidString.lowercased())"
+
+        voicePreviousActiveThreadKey = previousActiveThreadKey
+        pendingRealtimeMessageIDs[key] = (nil, nil)
+        activeVoiceSession = VoiceSessionState.initial(
+            threadKey: key,
+            threadTitle: thread.preview,
+            model: thread.model.isEmpty ? (model ?? thread.modelProvider) : thread.model
+        )
+        let authSnapshot = await connection.getAuthToken()
+        recordVoiceSessionDebug(
+            "phase connection=\(connection.connectionPhase) auth=\(debugAuthStatus(connection.authStatus)) authMethod=\(authSnapshot.method ?? "nil") tokenPresent=\(authSnapshot.token != nil)",
+            for: key
+        )
+        let remoteServers = connectedRemoteServers()
+        let prompt = VoiceSessionControl.buildPrompt(remoteServers: remoteServers)
+        recordVoiceSessionDebug(
+            "-> thread/realtime/start clientControlledHandoff=true remoteServers=\(remoteServers.map(\.name))",
+            for: key
+        )
+        syncVoiceCallActivity()
+
+        do {
+            try await connection.startRealtimeConversation(
+                threadId: key.threadId,
+                prompt: prompt,
+                sessionId: runtimeSessionId,
+                clientControlledHandoff: true,
+                dynamicTools: CrossServerTools.buildDynamicToolSpecs()
+            )
+            recordVoiceSessionDebug("<- thread/realtime/start {}", for: key)
+        } catch {
+            try? await connection.stopRealtimeConversation(threadId: key.threadId)
+            recordVoiceSessionDebug("<- thread/realtime/start error \(error.localizedDescription)", for: key)
+            failVoiceSession(error.localizedDescription)
+            throw error
+        }
+    }
+
+    private func isUnsupportedRealtimeThreadError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("does not support realtime conversation")
+            || message.contains("doesn't support realtime")
+            || message.contains("doesnt support realtime")
+    }
+
+    func stopActiveVoiceSession() async {
+        guard let session = activeVoiceSession else { return }
+        let key = session.threadKey
+
+        guard voiceStopRequestedThreadKey != key else { return }
+        voiceStopRequestedThreadKey = key
+        updateVoiceSessionForPendingStop(key)
+        recordVoiceSessionDebug(
+            "-> thread/realtime/stop \(debugJSONString(ThreadRealtimeStopParams(threadId: key.threadId)))",
+            for: key
+        )
+
+        guard let connection = connections[key.serverId], connection.isConnected else {
+            recordVoiceSessionDebug("<- thread/realtime/stop skipped disconnected", for: key)
+            voiceStopRequestedThreadKey = nil
+            endVoiceSessionImmediately()
+            return
+        }
+
+        do {
+            try await connection.stopRealtimeConversation(threadId: key.threadId)
+            recordVoiceSessionDebug("<- thread/realtime/stop {}", for: key)
+            if voiceStopRequestedThreadKey == key {
+                voiceStopRequestedThreadKey = nil
+                endVoiceSessionImmediately()
+            }
+        } catch {
+            recordVoiceSessionDebug("<- thread/realtime/stop error \(error.localizedDescription)", for: key)
+            voiceStopRequestedThreadKey = nil
+            failVoiceSession("Failed to hang up: \(error.localizedDescription)")
+        }
+    }
+
+    func toggleActiveVoiceSessionSpeaker() async throws {
+        guard activeVoiceSession != nil else { return }
+        try voiceSessionCoordinator.toggleSpeaker()
+    }
+
+    private static func isRealtimeConversationEnabled(_ features: [ExperimentalFeature]) -> Bool {
+        features.contains { $0.name == VoiceSessionControl.realtimeFeatureName && $0.enabled }
+    }
+
+    private func installVoiceSessionControlObserver() {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+        let callback: CFNotificationCallback = { _, observer, _, _, _ in
+            guard let observer else { return }
+            let manager = Unmanaged<ServerManager>.fromOpaque(observer).takeUnretainedValue()
+            Task { @MainActor in
+                manager.handlePendingVoiceSessionEndRequestIfNeeded()
+            }
+        }
+        CFNotificationCenterAddObserver(
+            center,
+            observer,
+            callback,
+            VoiceSessionControl.endRequestDarwinNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+
+    private func handlePendingVoiceSessionEndRequestIfNeeded() {
+        guard let token = VoiceSessionControl.pendingEndRequestToken(after: lastHandledVoiceEndRequestToken) else {
+            return
+        }
+        lastHandledVoiceEndRequestToken = token
+        Task { await stopActiveVoiceSession() }
     }
 
     func forkThread(
@@ -961,6 +1482,16 @@ final class ServerManager {
             return true
         case "item/tool/call":
             return handleDynamicToolCall(serverId: serverId, requestId: requestId, params: params)
+        case "account/chatgptAuthTokens/refresh":
+            let previousAccountID = extractString(params, keys: ["previousAccountId", "previous_account_id"])
+            Task { @MainActor [weak self] in
+                await self?.handleChatGPTAuthTokensRefresh(
+                    serverId: serverId,
+                    requestId: requestId,
+                    previousAccountID: previousAccountID
+                )
+            }
+            return true
         default:
             return false
         }
@@ -969,7 +1500,38 @@ final class ServerManager {
         return true
     }
 
+    private func handleChatGPTAuthTokensRefresh(
+        serverId: String,
+        requestId: String,
+        previousAccountID: String?
+    ) async {
+        guard let connection = connections[serverId] else { return }
+
+        do {
+            let tokens = try await ChatGPTOAuth.refreshStoredTokens(previousAccountID: previousAccountID)
+            connection.respondToServerRequest(
+                id: requestId,
+                result: [
+                    "accessToken": tokens.accessToken,
+                    "chatgptAccountId": tokens.accountID,
+                    "chatgptPlanType": tokens.planType ?? NSNull()
+                ]
+            )
+        } catch {
+            NSLog("[auth] ChatGPT token refresh failed: %@", error.localizedDescription)
+            connection.respondToServerRequestError(id: requestId, message: error.localizedDescription)
+        }
+    }
+
     // MARK: - Dynamic Tool Calls
+
+    private func localHandoffDynamicToolSpecs() -> [DynamicToolSpec]? {
+        var tools = CrossServerTools.buildDynamicToolSpecs()
+        if ExperimentalFeatures.shared.isEnabled(.generativeUI) {
+            tools.append(contentsOf: GenerativeUITools.buildDynamicToolSpecs())
+        }
+        return tools.isEmpty ? nil : tools
+    }
 
     private func handleDynamicToolCall(serverId: String, requestId: String, params: [String: Any]) -> Bool {
         guard let toolCallParams = DynamicToolCallParams(from: params) else {
@@ -986,12 +1548,74 @@ final class ServerManager {
         case GenerativeUITools.showWidgetToolName:
             handleShowWidgetToolCall(serverId: serverId, requestId: requestId, key: key, params: toolCallParams)
             return true
+        case CrossServerTools.listServersToolName:
+            respondToDynamicToolCall(serverId: serverId, requestId: requestId, result: .success(listServersToolResult()))
+            return true
+        case CrossServerTools.listSessionsToolName:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await self.dynamicToolResult(
+                    for: toolCallParams.tool,
+                    arguments: toolCallParams.arguments
+                )
+                self.respondToDynamicToolCall(serverId: serverId, requestId: requestId, result: result)
+            }
+            return true
+        case CrossServerTools.runOnServerToolName:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await self.dynamicToolResult(
+                    for: toolCallParams.tool,
+                    arguments: toolCallParams.arguments
+                )
+                self.respondToDynamicToolCall(serverId: serverId, requestId: requestId, result: result)
+            }
+            return true
         default:
             connections[serverId]?.respondToServerRequest(
                 id: requestId,
                 result: DynamicToolCallResponse.error("Unknown dynamic tool: \(toolCallParams.tool)").asDictionary
             )
             return true
+        }
+    }
+
+    private func respondToDynamicToolCall(serverId: String, requestId: String, result: Result<String, Error>) {
+        switch result {
+        case .success(let text):
+            connections[serverId]?.respondToServerRequest(
+                id: requestId,
+                result: DynamicToolCallResponse.text(text).asDictionary
+            )
+        case .failure(let error):
+            connections[serverId]?.respondToServerRequest(
+                id: requestId,
+                result: DynamicToolCallResponse.error(error.localizedDescription).asDictionary
+            )
+        }
+    }
+
+    private func dynamicToolResult(
+        for tool: String,
+        arguments: [String: Any]
+    ) async -> Result<String, Error> {
+        do {
+            switch tool {
+            case CrossServerTools.listServersToolName:
+                return .success(listServersToolResult())
+            case CrossServerTools.listSessionsToolName:
+                return .success(try await listSessionsToolResult(arguments: arguments))
+            case CrossServerTools.runOnServerToolName:
+                return .success(try await runOnServerToolResult(arguments: arguments))
+            default:
+                return .failure(NSError(
+                    domain: "Shitter",
+                    code: 3300,
+                    userInfo: [NSLocalizedDescriptionKey: "Unknown dynamic tool: \(tool)"]
+                ))
+            }
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -1037,6 +1661,353 @@ final class ServerManager {
             id: requestId,
             result: DynamicToolCallResponse.text("Widget \"\(widget.title)\" rendered and shown to the user (\(Int(widget.width))x\(Int(widget.height))).").asDictionary
         )
+    }
+
+    private func listServersToolResult() -> String {
+        let items = connections.values
+            .sorted { $0.server.name.localizedCaseInsensitiveCompare($1.server.name) == .orderedAscending }
+            .map { connection in
+                [
+                    "id": connection.id,
+                    "name": truncateTextForToolOutput(connection.server.name, maxBytes: 160),
+                    "hostname": truncateTextForToolOutput(connection.server.hostname, maxBytes: 200),
+                    "isConnected": connection.isConnected,
+                    "isLocal": connection.id == Self.localServerID
+                ]
+            }
+        return serializeDynamicToolPayload([
+            "type": "servers",
+            "items": items
+        ], maxBytes: 24_000)
+    }
+
+    private func listSessionsToolResult(arguments: [String: Any]) async throws -> String {
+        let limit = min(max(1, dynamicToolInt(arguments, keys: ["limit"]) ?? 20), 40)
+        let requestedServer = dynamicToolString(arguments, keys: ["server_id", "server"])
+        let connectionsToQuery = try dynamicToolConnections(matching: requestedServer, allowAllIfMissing: true)
+
+        var items: [[String: Any]] = []
+        var errors: [[String: String]] = []
+
+        for connection in connectionsToQuery {
+            do {
+                let response = try await connection.listThreads(limit: limit)
+                items.append(contentsOf: response.data.map { thread in
+                    [
+                        "id": thread.id,
+                        "preview": truncateTextForToolOutput(thread.preview, maxBytes: 280),
+                        "modelProvider": thread.modelProvider,
+                        "updatedAt": thread.updatedAt,
+                        "cwd": truncateTextForToolOutput(thread.cwd, maxBytes: 240),
+                        "serverId": connection.id,
+                        "serverName": truncateTextForToolOutput(connection.server.name, maxBytes: 160)
+                    ]
+                })
+            } catch {
+                errors.append([
+                    "serverId": connection.id,
+                    "serverName": truncateTextForToolOutput(connection.server.name, maxBytes: 160),
+                    "message": truncateTextForToolOutput(error.localizedDescription, maxBytes: 240)
+                ])
+            }
+        }
+
+        items.sort {
+            let lhs = $0["updatedAt"] as? Int64 ?? 0
+            let rhs = $1["updatedAt"] as? Int64 ?? 0
+            return lhs > rhs
+        }
+        if items.count > limit {
+            items = Array(items.prefix(limit))
+        }
+
+        var payload: [String: Any] = [
+            "type": "sessions",
+            "items": items
+        ]
+        if !errors.isEmpty {
+            payload["errors"] = errors
+        }
+        return serializeDynamicToolPayload(payload, maxBytes: 64_000)
+    }
+
+    private func runOnServerToolResult(arguments: [String: Any]) async throws -> String {
+        let server = try dynamicToolConnection(
+            matching: dynamicToolString(arguments, keys: ["server_id", "server"])
+        )
+        guard let prompt = dynamicToolString(arguments, keys: ["prompt"]),
+              !prompt.isEmpty else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3302,
+                userInfo: [NSLocalizedDescriptionKey: "run_on_server requires prompt"]
+            )
+        }
+
+        let key: ThreadKey
+        if let existingThreadId = dynamicToolString(arguments, keys: ["thread_id"]), !existingThreadId.isEmpty {
+            key = ThreadKey(serverId: server.id, threadId: existingThreadId)
+            ensureThreadExistsByKey(serverId: server.id, threadId: existingThreadId)
+        } else {
+            let cwd = server.id == Self.localServerID ? "/" : "/tmp"
+            key = try await startThread(
+                serverId: server.id,
+                cwd: cwd,
+                approvalPolicy: "never",
+                sandboxMode: server.id == Self.localServerID ? nil : "danger-full-access",
+                dynamicTools: server.id == Self.localServerID ? localHandoffDynamicToolSpecs() : nil,
+                activate: false
+            )
+        }
+
+        let turnResponse = try await server.sendTurn(
+            threadId: key.threadId,
+            text: prompt,
+            approvalPolicy: "never",
+            model: dynamicToolString(arguments, keys: ["model"]),
+            effort: dynamicToolString(arguments, keys: ["effort"]),
+            serviceTier: dynamicToolString(arguments, keys: ["service_tier"])
+        )
+        if let turnId = turnResponse.turnId {
+            threads[key]?.activeTurnId = turnId
+        }
+        threads[key]?.updatedAt = Date()
+
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            if threads[key]?.hasTurnActive != true {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+
+        let response = try await server.readThread(threadId: key.threadId)
+        let items = readableSessionItems(from: response.thread, limit: 12)
+        let assistantText = items.reversed().first { ($0["role"] as? String) == "assistant" }?["text"] as? String
+
+        return serializeDynamicToolPayload([
+            "type": "run_on_server",
+            "serverId": server.id,
+            "serverName": truncateTextForToolOutput(server.server.name, maxBytes: 160),
+            "threadId": response.thread.id,
+            "result": truncateTextForToolOutput(assistantText ?? "", maxBytes: 8_000),
+            "items": items
+        ], maxBytes: 96_000)
+    }
+
+    private func dynamicToolConnections(
+        matching rawServer: String?,
+        allowAllIfMissing: Bool
+    ) throws -> [ServerConnection] {
+        let connected = connections.values.filter(\.isConnected)
+        guard let rawServer = rawServer?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawServer.isEmpty else {
+            if allowAllIfMissing {
+                return connected.sorted {
+                    $0.server.name.localizedCaseInsensitiveCompare($1.server.name) == .orderedAscending
+                }
+            }
+            throw NSError(
+                domain: "Shitter",
+                code: 3303,
+                userInfo: [NSLocalizedDescriptionKey: "A server name or ID is required"]
+            )
+        }
+
+        let lowered = rawServer.lowercased()
+        let matches = connected.filter { connection in
+            connection.id.lowercased() == lowered ||
+                connection.server.name.lowercased() == lowered ||
+                connection.server.hostname.lowercased() == lowered ||
+                (lowered == "local" && connection.id == Self.localServerID)
+        }
+        guard !matches.isEmpty else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3304,
+                userInfo: [NSLocalizedDescriptionKey: "Server '\(rawServer)' is not connected"]
+            )
+        }
+        return matches.sorted {
+            $0.server.name.localizedCaseInsensitiveCompare($1.server.name) == .orderedAscending
+        }
+    }
+
+    private func dynamicToolConnection(matching rawServer: String?) throws -> ServerConnection {
+        let matches = try dynamicToolConnections(matching: rawServer, allowAllIfMissing: false)
+        guard let first = matches.first else {
+            throw NSError(
+                domain: "Shitter",
+                code: 3305,
+                userInfo: [NSLocalizedDescriptionKey: "No matching server connection"]
+            )
+        }
+        return first
+    }
+
+    private func dynamicToolString(_ arguments: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = arguments[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        return nil
+    }
+
+    private func dynamicToolInt(_ arguments: [String: Any], keys: [String]) -> Int? {
+        for key in keys {
+            if let value = arguments[key] as? Int {
+                return value
+            }
+            if let value = arguments[key] as? NSNumber {
+                return value.intValue
+            }
+            if let value = arguments[key] as? String,
+               let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private func serializeDynamicToolPayload(_ payload: Any, maxBytes: Int? = nil) -> String {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        guard let maxBytes else { return text }
+        return truncateTextForToolOutput(text, maxBytes: maxBytes)
+    }
+
+    private func readableSessionItems(from thread: ResumedThread, limit: Int) -> [[String: Any]] {
+        let allItems = thread.turns.flatMap(\.items)
+        let mapped = allItems.compactMap(readableSessionItem)
+        return Array(mapped.suffix(limit))
+    }
+
+    private func readableSessionItem(_ item: ResumedThreadItem) -> [String: Any]? {
+        switch item {
+        case .userMessage(let content, _):
+            let text = content.compactMap { input in
+                switch input.type {
+                case "text":
+                    return input.text
+                case "image":
+                    return input.url ?? input.path ?? input.name
+                default:
+                    return input.text ?? input.path ?? input.name ?? input.url
+                }
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : ["role": "user", "text": truncateTextForToolOutput(text, maxBytes: 8_000)]
+        case .agentMessage(let text, _, _, _, _, _):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : ["role": "assistant", "text": truncateTextForToolOutput(trimmed, maxBytes: 8_000)]
+        case .reasoning(_, let content, _):
+            let text = content.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : ["role": "reasoning", "text": truncateTextForToolOutput(text, maxBytes: 6_000)]
+        case .commandExecution(let command, _, let status, _, let output, _, _, _, _):
+            var entry: [String: Any] = [
+                "role": "tool",
+                "text": truncateTextForToolOutput(command, maxBytes: 600),
+                "status": status
+            ]
+            if let output, !output.isEmpty {
+                entry["output"] = truncateTextForToolOutput(output, maxBytes: 4_000)
+            }
+            return entry
+        case .dynamicToolCall(let tool, _, let status, let contentItems, let success, _, _):
+            var entry: [String: Any] = ["role": "tool", "tool": tool, "status": status]
+            if let success {
+                entry["success"] = success
+            }
+            if let contentItems {
+                entry["contentPreview"] = previewToolValue(contentItems.value, maxBytes: 4_000)
+            }
+            return entry
+        case .proposedPlan(let text, _):
+            return ["role": "plan", "text": truncateTextForToolOutput(text, maxBytes: 4_000)]
+        case .todoList(let items, _):
+            let text = items
+                .compactMap { ($0.step ?? $0.text)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            return text.isEmpty ? nil : ["role": "todo", "text": truncateTextForToolOutput(text, maxBytes: 4_000)]
+        case .fileChange(let changes, let status, _):
+            return ["role": "tool", "status": status, "changes": changes.map(\.path)]
+        case .mcpToolCall(let server, let tool, let status, _, let result, let error, _, _):
+            var entry: [String: Any] = ["role": "tool", "server": server, "tool": tool, "status": status]
+            if let result {
+                entry["result"] = truncateTextForToolOutput(String(describing: result), maxBytes: 4_000)
+            }
+            if let error {
+                entry["error"] = truncateTextForToolOutput(String(describing: error), maxBytes: 2_000)
+            }
+            return entry
+        case .collabAgentToolCall(let tool, let status, _, _, _, let prompt, _):
+            var entry: [String: Any] = ["role": "tool", "tool": tool, "status": status]
+            if let prompt, !prompt.isEmpty {
+                entry["prompt"] = truncateTextForToolOutput(prompt, maxBytes: 2_000)
+            }
+            return entry
+        case .webSearch(let query, _, _, _):
+            return ["role": "tool", "tool": "web_search", "text": truncateTextForToolOutput(query, maxBytes: 1_000)]
+        case .imageView(let path, _):
+            return ["role": "tool", "tool": "image_view", "path": path]
+        case .enteredReviewMode(let review, _):
+            return ["role": "system", "text": truncateTextForToolOutput("Entered review mode: \(review)", maxBytes: 600)]
+        case .exitedReviewMode(let review, _):
+            return ["role": "system", "text": truncateTextForToolOutput("Exited review mode: \(review)", maxBytes: 600)]
+        case .contextCompaction:
+            return ["role": "system", "text": "Context compacted"]
+        case .unknown(let type, _):
+            return ["role": "unknown", "type": type]
+        case .ignored:
+            return nil
+        }
+    }
+
+    private func previewToolValue(_ value: Any, maxBytes: Int) -> String {
+        if let string = value as? String {
+            return truncateTextForToolOutput(string, maxBytes: maxBytes)
+        }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            return truncateTextForToolOutput(text, maxBytes: maxBytes)
+        }
+        return truncateTextForToolOutput(String(describing: value), maxBytes: maxBytes)
+    }
+
+    private func truncateTextForToolOutput(_ text: String, maxBytes: Int) -> String {
+        guard maxBytes > 0 else { return "" }
+        let marker = "\n[truncated]"
+        let textBytes = text.lengthOfBytes(using: .utf8)
+        guard textBytes > maxBytes else { return text }
+
+        let markerBytes = marker.lengthOfBytes(using: .utf8)
+        guard maxBytes > markerBytes else {
+            return String(text.prefix(64))
+        }
+
+        let budget = maxBytes - markerBytes
+        var result = ""
+        result.reserveCapacity(min(text.count, budget))
+        var usedBytes = 0
+        for character in text {
+            let charBytes = String(character).lengthOfBytes(using: .utf8)
+            if usedBytes + charBytes > budget {
+                break
+            }
+            result.append(character)
+            usedBytes += charBytes
+        }
+        return result + marker
     }
 
     private func commandString(from params: [String: Any]) -> String? {
@@ -1098,6 +2069,7 @@ final class ServerManager {
 
     func send(
         _ text: String,
+        attachmentImage: UIImage? = nil,
         skillMentions: [SkillMentionSelection] = [],
         cwd: String,
         model: String? = nil,
@@ -1106,6 +2078,10 @@ final class ServerManager {
         approvalPolicy: String = "never",
         sandboxMode: String? = nil
     ) async {
+        let preparedAttachment = attachmentImage.flatMap(ConversationAttachmentSupport.prepareImage)
+        let images = preparedAttachment.map { [$0.chatImage] } ?? []
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty || !images.isEmpty || !skillMentions.isEmpty else { return }
         var key = activeThreadKey
         if key == nil {
             guard let serverId = connections.values.first(where: { $0.isConnected })?.id else { return }
@@ -1127,7 +2103,7 @@ final class ServerManager {
                     serverName: conn?.server.name ?? "Server",
                     serverSource: conn?.server.source ?? .local
                 )
-                state.items.append(makeUserItem(text: text, sourceTurnId: nil, sourceTurnIndex: nil, isBoundary: true))
+                state.items.append(makeUserItem(text: text, images: images, sourceTurnId: nil, sourceTurnIndex: nil, isBoundary: true))
                 state.items.append(makeErrorItem(message: error.localizedDescription, sourceTurnId: nil, sourceTurnIndex: nil))
                 state.status = .error(error.localizedDescription)
                 threads[errorKey] = state
@@ -1137,14 +2113,22 @@ final class ServerManager {
         }
         guard let key, let thread = threads[key], let conn = connections[key.serverId] else { return }
         let nextTurnIndex = threadTurnCounts[key] ?? inferredTurnCount(from: thread.items)
-        thread.items.append(makeUserItem(text: text, sourceTurnId: nil, sourceTurnIndex: nextTurnIndex, isBoundary: true))
+        thread.items.append(makeUserItem(text: text, images: images, sourceTurnId: nil, sourceTurnIndex: nextTurnIndex, isBoundary: true))
         thread.status = .thinking
         thread.updatedAt = Date()
         requestNotificationPermissionIfNeeded()
-        startLiveActivity(key: key, model: thread.model, cwd: thread.cwd, prompt: text)
+        startLiveActivity(
+            key: key,
+            model: thread.model,
+            cwd: thread.cwd,
+            prompt: !trimmedText.isEmpty ? text : (!images.isEmpty ? "Shared image" : text)
+        )
         do {
-            let skillInputs = skillMentions.map { mention in
+            var additionalInputs = skillMentions.map { mention in
                 UserInput(type: "skill", path: mention.path, name: mention.name)
+            }
+            if let preparedAttachment {
+                additionalInputs.append(preparedAttachment.userInput)
             }
             let resp = try await conn.sendTurn(
                 threadId: key.threadId,
@@ -1154,7 +2138,7 @@ final class ServerManager {
                 model: model,
                 effort: effort,
                 serviceTier: serviceTier,
-                additionalInput: skillInputs
+                additionalInput: additionalInputs
             )
             NSLog("[send] sendTurn succeeded, turnId=%@", resp.turnId ?? "nil")
             thread.activeTurnId = resp.turnId
@@ -1213,6 +2197,7 @@ final class ServerManager {
             throw NSError(domain: "Shitter", code: 1032, userInfo: [NSLocalizedDescriptionKey: "Server unavailable"])
         }
         try await conn.archiveThread(threadId: key.threadId)
+        clearPersistedLocalVoiceThreadIfNeeded(key)
         cancelThreadMetadataRefresh(for: key)
         threads.removeValue(forKey: key)
         threadTurnCounts.removeValue(forKey: key)
@@ -1247,8 +2232,21 @@ final class ServerManager {
         guard let conn = connections[serverId], conn.isConnected else { return }
         do {
             let resp = try await conn.listThreads()
+            var recentDirectoryEntries: [RecentDirectoryEntry] = []
             for summary in resp.data {
                 let key = ThreadKey(serverId: serverId, threadId: summary.id)
+                let updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
+                let normalizedPath = summary.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalizedPath.isEmpty {
+                    recentDirectoryEntries.append(
+                        RecentDirectoryEntry(
+                            serverId: serverId,
+                            path: normalizedPath,
+                            lastUsedAt: updatedAt,
+                            useCount: 0
+                        )
+                    )
+                }
                 if let existing = threads[key] {
                     if existing.preview != summary.preview {
                         existing.preview = summary.preview
@@ -1286,9 +2284,8 @@ final class ServerManager {
                         nickname: existing.agentNickname,
                         role: existing.agentRole
                     )
-                    let nextUpdatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
-                    if existing.updatedAt != nextUpdatedAt {
-                        existing.updatedAt = nextUpdatedAt
+                    if existing.updatedAt != updatedAt {
+                        existing.updatedAt = updatedAt
                     }
                 } else {
                     let state = ThreadState(
@@ -1312,11 +2309,12 @@ final class ServerManager {
                         nickname: state.agentNickname,
                         role: state.agentRole
                     )
-                    state.updatedAt = Date(timeIntervalSince1970: TimeInterval(summary.updatedAt))
+                    state.updatedAt = updatedAt
                     threads[key] = state
                     threadTurnCounts[key] = threadTurnCounts[key] ?? 0
                 }
             }
+            _ = RecentDirectoryStore.shared.mergeSessionDirectories(recentDirectoryEntries, for: serverId)
         } catch {}
     }
 
@@ -1341,6 +2339,21 @@ final class ServerManager {
 
         case "thread/status/changed":
             ensureThreadExists(serverId: serverId, data: data)
+
+        case "thread/realtime/started":
+            handleRealtimeStarted(serverId: serverId, data: data)
+
+        case "thread/realtime/itemAdded":
+            handleRealtimeItemAdded(serverId: serverId, data: data)
+
+        case "thread/realtime/outputAudio/delta":
+            handleRealtimeOutputAudioDelta(serverId: serverId, data: data)
+
+        case "thread/realtime/error":
+            handleRealtimeError(serverId: serverId, data: data)
+
+        case "thread/realtime/closed":
+            handleRealtimeClosed(serverId: serverId, data: data)
 
         case "turn/started":
             let identifiers = await extractThreadIdentifiers(from: data)
@@ -1793,7 +2806,8 @@ final class ServerManager {
             restored,
             on: state,
             key: key,
-            staged: true
+            staged: true,
+            preferLocalMessages: true
         )
         state.requiresOpenHydration = false
         threadTurnCounts[key] = resp.thread.turns.count
@@ -1801,6 +2815,7 @@ final class ServerManager {
         liveTurnDiffMessageIndices[key] = nil
         state.status = .ready
         state.updatedAt = Date()
+        _ = RecentDirectoryStore.shared.record(path: resp.cwd, for: serverId)
         scheduleThreadMetadataRefresh(for: key, cwd: resp.cwd)
     }
 
@@ -1823,6 +2838,1229 @@ final class ServerManager {
            let contextTokens = extractInt64(lastUsage, keys: ["totalTokens", "total_tokens"]) {
             thread.contextTokensUsed = contextTokens
         }
+    }
+
+    private func handleVoiceSessionCoordinatorEvent(_ event: VoiceSessionCoordinator.Event) {
+        guard var session = activeVoiceSession else { return }
+
+        switch event {
+        case .inputLevel(let level):
+            session.inputLevel = level
+            session.isListening = true
+            if level > 0.05, !session.isSpeaking {
+                session.phase = .listening
+            }
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+            let token = UUID()
+            voiceInputDecayToken = token
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard let self,
+                      self.voiceInputDecayToken == token,
+                      var current = self.activeVoiceSession,
+                      current.threadKey == session.threadKey else {
+                    return
+                }
+                current.inputLevel = 0
+                if !current.isSpeaking && current.phase != .error {
+                    current.phase = .thinking
+                }
+                self.activeVoiceSession = current
+                self.syncVoiceCallActivity()
+            }
+
+        case .outputLevel(let level):
+            session.outputLevel = level
+            session.isSpeaking = level > 0.02
+            if session.isSpeaking {
+                session.phase = .speaking
+            }
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+            let token = UUID()
+            voiceOutputDecayToken = token
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard let self,
+                      self.voiceOutputDecayToken == token,
+                      var current = self.activeVoiceSession,
+                      current.threadKey == session.threadKey else {
+                    return
+                }
+                current.outputLevel = 0
+                current.isSpeaking = false
+                if current.phase != .error {
+                    current.phase = .listening
+                }
+                self.activeVoiceSession = current
+                self.syncVoiceCallActivity()
+            }
+
+        case .routeChanged(let route):
+            session.route = route
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+        case .interrupted:
+            session.phase = .thinking
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+        case .failure(let message):
+            failVoiceSession(message)
+        }
+    }
+
+    private func appendRealtimeAudioChunk(_ chunk: ThreadRealtimeAudioChunk, for key: ThreadKey) async {
+        guard activeVoiceSession?.threadKey == key,
+              let connection = connections[key.serverId],
+              connection.isConnected else {
+            return
+        }
+        do {
+            try await connection.appendRealtimeAudio(threadId: key.threadId, audio: chunk)
+        } catch {
+            failVoiceSession(error.localizedDescription)
+        }
+    }
+
+    private func handleRealtimeStarted(serverId: String, data: Data) {
+        guard let notification = try? JSONDecoder().decode(
+            ThreadRealtimeStartedNotification.self,
+            from: extractParams(data)
+        ) else {
+            return
+        }
+        let key = ThreadKey(serverId: serverId, threadId: notification.threadId)
+        guard var session = activeVoiceSession, session.threadKey == key else { return }
+
+        appendVoiceSessionDebug(
+            "<- thread/realtime/started threadId=\(notification.threadId) sessionId=\(notification.sessionId ?? "nil")",
+            to: &session
+        )
+        session.sessionId = notification.sessionId
+        session.phase = .listening
+        session.isListening = true
+        activeVoiceSession = session
+        syncVoiceCallActivity()
+
+        do {
+            try voiceSessionCoordinator.start { [weak self] chunk in
+                guard let self else { return }
+                await self.appendRealtimeAudioChunk(chunk, for: key)
+            }
+        } catch {
+            failVoiceSession(error.localizedDescription)
+        }
+    }
+
+    private func appendFinalRealtimeMessage(
+        role: String,
+        text: String,
+        itemId: String,
+        to session: inout VoiceSessionState
+    ) {
+        guard !text.isEmpty else { return }
+        let speaker = role == "user" ? "You" : "Codex"
+        let messageId = "rtv-\(itemId)"
+        let item = VoiceSessionTranscriptEntry(
+            id: messageId,
+            speaker: speaker,
+            text: text,
+            timestamp: Date()
+        )
+
+        if let existingIndex = session.transcriptHistory.firstIndex(where: { $0.id == messageId }) {
+            session.transcriptHistory[existingIndex] = item
+        } else {
+            session.transcriptHistory.append(item)
+        }
+    }
+
+    private func reserveRealtimeTranscriptMessage(
+        role: String,
+        itemId: String,
+        to session: inout VoiceSessionState
+    ) {
+        let speaker = role == "user" ? "You" : "Codex"
+        let messageId = "rtv-\(itemId)"
+        guard !session.transcriptHistory.contains(where: { $0.id == messageId }) else { return }
+
+        session.transcriptHistory.append(
+            VoiceSessionTranscriptEntry(
+                id: messageId,
+                speaker: speaker,
+                text: "",
+                timestamp: Date()
+            )
+        )
+    }
+
+    private func isProvisionalRealtimeMessageID(_ itemId: String?) -> Bool {
+        guard let itemId, !itemId.isEmpty else { return false }
+        return !itemId.hasPrefix("item_")
+    }
+
+    private func rekeyRealtimeTranscriptMessage(
+        from oldItemId: String?,
+        to newItemId: String,
+        speaker: String,
+        session: inout VoiceSessionState
+    ) {
+        guard let oldItemId,
+              oldItemId != newItemId else {
+            return
+        }
+
+        let oldMessageId = "rtv-\(oldItemId)"
+        let newMessageId = "rtv-\(newItemId)"
+        guard oldMessageId != newMessageId else { return }
+
+        if let oldIndex = session.transcriptHistory.firstIndex(where: { $0.id == oldMessageId }) {
+            let oldEntry = session.transcriptHistory[oldIndex]
+            let mergedEntry = VoiceSessionTranscriptEntry(
+                id: newMessageId,
+                speaker: speaker,
+                text: oldEntry.text,
+                timestamp: oldEntry.timestamp
+            )
+
+            if let existingNewIndex = session.transcriptHistory.firstIndex(where: { $0.id == newMessageId }) {
+                let existingNew = session.transcriptHistory[existingNewIndex]
+                let preferredText = existingNew.text.count >= mergedEntry.text.count ? existingNew.text : mergedEntry.text
+                let preferredTimestamp = oldIndex <= existingNewIndex ? oldEntry.timestamp : existingNew.timestamp
+                let replacement = VoiceSessionTranscriptEntry(
+                    id: newMessageId,
+                    speaker: speaker,
+                    text: preferredText,
+                    timestamp: preferredTimestamp
+                )
+
+                if oldIndex < existingNewIndex {
+                    session.transcriptHistory[oldIndex] = replacement
+                    session.transcriptHistory.remove(at: existingNewIndex)
+                } else {
+                    session.transcriptHistory[existingNewIndex] = replacement
+                    session.transcriptHistory.remove(at: oldIndex)
+                }
+            } else {
+                session.transcriptHistory[oldIndex] = mergedEntry
+            }
+        }
+
+        if session.transcriptLiveMessageID == oldMessageId {
+            session.transcriptLiveMessageID = newMessageId
+        }
+    }
+
+    private func flushRealtimeTranscriptIfNeeded(
+        for key: ThreadKey,
+        session: inout VoiceSessionState,
+        speaker: String? = nil
+    ) {
+        let resolvedSpeaker = speaker ?? session.transcriptSpeaker
+        guard let resolvedSpeaker,
+              let text = session.transcriptText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return
+        }
+
+        let role: String
+        switch resolvedSpeaker {
+        case "You":
+            role = "user"
+        case "Codex":
+            role = "assistant"
+        default:
+            return
+        }
+
+        let pending = pendingRealtimeMessageIDs[key] ?? (nil, nil)
+        let itemId = (role == "user" ? pending.user : pending.assistant) ?? UUID().uuidString
+        appendFinalRealtimeMessage(role: role, text: text, itemId: itemId, to: &session)
+
+        if session.transcriptSpeaker == resolvedSpeaker {
+            session.transcriptText = nil
+            session.transcriptSpeaker = nil
+            session.transcriptLiveMessageID = nil
+        }
+    }
+
+    private func shouldSkipRealtimeTranscriptDelta(
+        _ delta: String,
+        speaker: String,
+        for key: ThreadKey
+    ) -> Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        if let previous = lastRealtimeTranscriptDelta[key],
+           previous.speaker == speaker,
+           previous.delta == delta,
+           now - previous.timestamp < 0.5 {
+            return true
+        }
+        lastRealtimeTranscriptDelta[key] = (speaker: speaker, delta: delta, timestamp: now)
+        return false
+    }
+
+    private func applyRealtimeTranscriptDelta(
+        _ delta: String,
+        speaker: String,
+        phase: VoiceSessionPhase,
+        key: ThreadKey,
+        session: inout VoiceSessionState
+    ) {
+        guard !delta.isEmpty else { return }
+        guard !shouldSkipRealtimeTranscriptDelta(delta, speaker: speaker, for: key) else { return }
+
+        let pending = pendingRealtimeMessageIDs[key] ?? (nil, nil)
+        let pendingItemID: String
+        if speaker == "You" {
+            pendingItemID = pending.user ?? UUID().uuidString
+            if pending.user == nil {
+                pendingRealtimeMessageIDs[key] = (pendingItemID, pending.assistant)
+            }
+        } else {
+            let existingAssistantId = pending.assistant
+            let shouldRotateAssistantRow: Bool = {
+                guard let existingAssistantId else { return true }
+                if isProvisionalRealtimeMessageID(existingAssistantId) {
+                    return false
+                }
+                let existingMessageId = "rtv-\(existingAssistantId)"
+                let hasPersistedText = session.transcriptHistory.contains(where: {
+                    $0.id == existingMessageId && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                })
+                let isCurrentLive = session.transcriptLiveMessageID == existingMessageId
+                return hasPersistedText && !isCurrentLive
+            }()
+
+            if shouldRotateAssistantRow {
+                pendingItemID = UUID().uuidString
+                pendingRealtimeMessageIDs[key] = (pending.user, pendingItemID)
+            } else {
+                pendingItemID = existingAssistantId ?? UUID().uuidString
+                if existingAssistantId == nil {
+                    pendingRealtimeMessageIDs[key] = (pending.user, pendingItemID)
+                }
+            }
+        }
+
+        let messageId = "rtv-\(pendingItemID)"
+        let existingHistoryText = session.transcriptHistory.first(where: { $0.id == messageId })?.text
+        let liveTextForSpeaker: String? = (
+            session.transcriptSpeaker == speaker && session.transcriptLiveMessageID == messageId
+        ) ? session.transcriptText : nil
+        let existing = liveTextForSpeaker ?? existingHistoryText ?? ""
+
+        let mergedText: String
+        if existing == delta || existing.hasSuffix(delta) {
+            mergedText = existing
+        } else if delta.hasPrefix(existing) {
+            mergedText = delta
+        } else if existing.hasPrefix(delta) {
+            mergedText = existing
+        } else {
+            mergedText = existing + delta
+        }
+
+        appendFinalRealtimeMessage(role: speaker == "You" ? "user" : "assistant", text: mergedText, itemId: pendingItemID, to: &session)
+
+        let shouldPromoteToLive: Bool
+        if session.transcriptSpeaker == nil || session.transcriptSpeaker == speaker {
+            shouldPromoteToLive = true
+        } else {
+            // When the backend emits a late transcript replacement for the
+            // previous speaker after the next speaker has already started,
+            // keep the current live speaker on screen and just update the
+            // previous speaker's persisted row in history.
+            shouldPromoteToLive = existingHistoryText == nil
+        }
+
+        if shouldPromoteToLive {
+            session.transcriptText = mergedText
+            session.transcriptSpeaker = speaker
+            session.transcriptLiveMessageID = messageId
+            session.phase = phase
+        }
+
+        activeVoiceSession = session
+        syncVoiceCallActivity()
+    }
+
+    private func handleRealtimeItemAdded(serverId: String, data: Data) {
+        guard let notification = try? JSONDecoder().decode(
+            ThreadRealtimeItemAddedNotification.self,
+            from: extractParams(data)
+        ) else {
+            return
+        }
+        handleRealtimeItemAdded(
+            serverId: serverId,
+            threadId: notification.threadId,
+            item: notification.item
+        )
+    }
+
+    private func handleRealtimeItemAdded(serverId: String, threadId: String, item rawItem: Any?) {
+        let key = ThreadKey(serverId: serverId, threadId: threadId)
+        guard var session = activeVoiceSession,
+              session.threadKey == key else {
+            return
+        }
+
+        let item: [String: Any]
+        if let dict = rawItem as? [String: Any] {
+            item = dict
+        } else if let codable = rawItem as? AnyCodable, let dict = codable.value as? [String: Any] {
+            item = dict
+        } else {
+            return
+        }
+
+        let itemType = extractString(item, keys: ["type"]) ?? ""
+
+        if itemType != "input_transcript_delta" && itemType != "output_transcript_delta" {
+            if let rawJSON = try? JSONSerialization.data(withJSONObject: item, options: [.fragmentsAllowed]),
+               let rawString = String(data: rawJSON, encoding: .utf8) {
+                NSLog("[rtv] itemAdded type=%@ raw=%@", itemType, String(rawString.prefix(500)))
+            }
+        }
+
+        switch itemType {
+        case "message":
+            let role = extractString(item, keys: ["role"]) ?? "assistant"
+            let itemId = extractString(item, keys: ["id"]) ?? UUID().uuidString
+            let content = item["content"] as? [[String: Any]] ?? []
+
+            if role == "user" {
+                flushRealtimeTranscriptIfNeeded(for: key, session: &session, speaker: "Codex")
+                voiceSessionCoordinator.flushPlayback()
+                let pending = pendingRealtimeMessageIDs[key] ?? (nil, nil)
+                if let pendingUserId = pending.user,
+                   isProvisionalRealtimeMessageID(pendingUserId),
+                   (session.transcriptHistory.contains(where: { $0.id == "rtv-\(pendingUserId)" }) ||
+                    session.transcriptLiveMessageID == "rtv-\(pendingUserId)") {
+                    rekeyRealtimeTranscriptMessage(
+                        from: pendingUserId,
+                        to: itemId,
+                        speaker: "You",
+                        session: &session
+                    )
+                }
+                pendingRealtimeMessageIDs[key] = (itemId, pending.assistant)
+                reserveRealtimeTranscriptMessage(role: role, itemId: itemId, to: &session)
+            } else {
+                flushRealtimeTranscriptIfNeeded(for: key, session: &session, speaker: "You")
+                let pending = pendingRealtimeMessageIDs[key] ?? (nil, nil)
+                if let pendingAssistantId = pending.assistant,
+                   isProvisionalRealtimeMessageID(pendingAssistantId),
+                   (session.transcriptHistory.contains(where: { $0.id == "rtv-\(pendingAssistantId)" }) ||
+                    session.transcriptLiveMessageID == "rtv-\(pendingAssistantId)") {
+                    rekeyRealtimeTranscriptMessage(
+                        from: pendingAssistantId,
+                        to: itemId,
+                        speaker: "Codex",
+                        session: &session
+                    )
+                }
+                pendingRealtimeMessageIDs[key] = (pending.user, itemId)
+                reserveRealtimeTranscriptMessage(role: role, itemId: itemId, to: &session)
+            }
+
+            let text = content.compactMap { part -> String? in
+                guard (extractString(part, keys: ["type"]) ?? "") == "text" else { return nil }
+                return extractString(part, keys: ["text"])
+            }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if text.isEmpty {
+                if role == "user", session.transcriptSpeaker == "You" {
+                    session.transcriptLiveMessageID = "rtv-\(itemId)"
+                } else if role == "assistant", session.transcriptSpeaker == "Codex" {
+                    session.transcriptLiveMessageID = "rtv-\(itemId)"
+                }
+                activeVoiceSession = session
+                return
+            }
+
+            appendVoiceSessionDebug("<- thread/realtime/itemAdded role=\(role) text=\(text)", to: &session)
+
+            appendFinalRealtimeMessage(role: role, text: text, itemId: itemId, to: &session)
+
+            session.transcriptText = nil
+            session.transcriptSpeaker = nil
+            session.transcriptLiveMessageID = nil
+            if role == "assistant", !session.isSpeaking {
+                session.phase = .thinking
+            }
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+        case "input_transcript_delta", "output_transcript_delta":
+            let delta = extractString(item, keys: ["delta"]) ?? ""
+            guard !delta.isEmpty else { return }
+            let speaker = itemType == "input_transcript_delta" ? "You" : "Codex"
+            let phase: VoiceSessionPhase = itemType == "input_transcript_delta" ? .listening : .speaking
+            applyRealtimeTranscriptDelta(
+                delta,
+                speaker: speaker,
+                phase: phase,
+                key: key,
+                session: &session
+            )
+
+        case "handoff_request":
+            flushRealtimeTranscriptIfNeeded(for: key, session: &session)
+            let handoffId = extractString(item, keys: ["handoff_id"]) ?? UUID().uuidString
+            let inputTranscript = extractString(item, keys: ["input_transcript"]) ?? ""
+            let transcriptEntries = (item["active_transcript"] as? [[String: Any]]) ?? []
+            let activeTranscript = transcriptEntries
+                .compactMap { entry -> String? in
+                    guard let role = entry["role"] as? String,
+                          let text = entry["text"] as? String else {
+                        return nil
+                    }
+                    return "\(role): \(text)"
+                }
+                .joined(separator: "\n")
+            let transcript = activeTranscript.isEmpty ? inputTranscript : activeTranscript
+
+            appendVoiceSessionDebug(
+                "<- thread/realtime/itemAdded handoff_request id=\(handoffId) transcript=\(transcript)",
+                to: &session
+            )
+
+            let server = extractString(item, keys: ["server"])
+            let userRequest = inputTranscript.isEmpty
+                ? (transcript.isEmpty ? (session.transcriptText ?? "") : transcript)
+                : inputTranscript
+
+            let targetServerId: String?
+            let targetServerName: String
+            let isLocal: Bool
+            if let server, server == "local" {
+                targetServerId = Self.localServerID
+                targetServerName = "local"
+                isLocal = true
+            } else if let server,
+                      let (serverId, connection) = connections.first(where: {
+                          $0.key != Self.localServerID &&
+                          $0.value.server.name.caseInsensitiveCompare(server) == .orderedSame
+                      }) {
+                targetServerId = serverId
+                targetServerName = connection.server.name
+                isLocal = false
+            } else {
+                targetServerId = nil
+                targetServerName = server ?? "unknown"
+                isLocal = false
+            }
+
+            let agentLabel = isLocal ? "local" : targetServerName
+            threads[key]?.items.append(
+                ConversationItem(
+                    id: "rtv-handoff-\(handoffId)",
+                    content: .multiAgentAction(
+                        ConversationMultiAgentActionData(
+                            tool: "handoff",
+                            status: "in_progress",
+                            prompt: userRequest.isEmpty ? nil : userRequest,
+                            targets: [agentLabel],
+                            receiverThreadIds: [],
+                            agentStates: [ConversationMultiAgentState(
+                                targetId: agentLabel,
+                                status: "running",
+                                message: nil
+                            )]
+                        )
+                    ),
+                    timestamp: Date()
+                )
+            )
+            threads[key]?.updatedAt = Date()
+
+            session.phase = .handoff
+            session.transcriptText = nil
+            session.transcriptSpeaker = nil
+            session.transcriptLiveMessageID = nil
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+            if let targetServerId {
+                if isLocal {
+                    Task { [weak self] in
+                        await self?.routeHandoffToLocalCodex(
+                            localKey: key,
+                            handoffId: handoffId,
+                            transcript: userRequest
+                        )
+                    }
+                } else {
+                    Task { [weak self] in
+                        await self?.routeHandoffToRemote(
+                            localKey: key,
+                            remoteServerId: targetServerId,
+                            handoffId: handoffId,
+                            transcript: userRequest
+                        )
+                    }
+                }
+            } else {
+                Task { [weak self] in
+                    await self?.resolveHandoffLocally(
+                        localKey: key,
+                        handoffId: handoffId,
+                        text: "Server '\(targetServerName)' is not available."
+                    )
+                }
+            }
+
+        case "tool_call_request":
+            flushRealtimeTranscriptIfNeeded(for: key, session: &session)
+            let callId = extractString(item, keys: ["call_id", "callId", "id"]) ?? UUID().uuidString
+            let tool = extractString(item, keys: ["tool", "name"]) ?? ""
+            let arguments = realtimeToolCallArguments(from: item["arguments"])
+
+            appendVoiceSessionDebug(
+                "<- thread/realtime/itemAdded tool_call_request id=\(callId) tool=\(tool)",
+                to: &session
+            )
+
+            session.phase = .thinking
+            session.transcriptText = nil
+            session.transcriptSpeaker = nil
+            session.transcriptLiveMessageID = nil
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+
+            Task { @MainActor [weak self] in
+                await self?.handleRealtimeToolCallRequest(
+                    localKey: key,
+                    callId: callId,
+                    tool: tool,
+                    arguments: arguments
+                )
+            }
+
+        case "speech_started":
+            voiceSessionCoordinator.flushPlayback()
+            let pending = pendingRealtimeMessageIDs[key] ?? (nil, nil)
+            pendingRealtimeMessageIDs[key] = (nil, pending.assistant)
+            if session.transcriptSpeaker == "Codex" {
+                flushRealtimeTranscriptIfNeeded(for: key, session: &session, speaker: "Codex")
+            } else if session.transcriptSpeaker != "You" {
+                session.transcriptText = nil
+                session.transcriptSpeaker = nil
+                session.transcriptLiveMessageID = nil
+            }
+            activeVoiceSession = session
+
+        default:
+            appendVoiceSessionDebug(
+                "<- thread/realtime/itemAdded unknown type=\(itemType)",
+                to: &session
+            )
+            activeVoiceSession = session
+        }
+    }
+
+    private func realtimeToolCallArguments(from raw: Any?) -> [String: Any] {
+        if let dict = raw as? [String: Any] {
+            return dict
+        }
+        if let codable = raw as? AnyCodable {
+            if let dict = codable.value as? [String: Any] {
+                return dict
+            }
+            if let string = codable.value as? String,
+               let data = string.data(using: .utf8),
+               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                return dict
+            }
+        }
+        if let string = raw as? String,
+           let data = string.data(using: .utf8),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            return dict
+        }
+        return [:]
+    }
+
+    private func handleRealtimeToolCallRequest(
+        localKey: ThreadKey,
+        callId: String,
+        tool: String,
+        arguments: [String: Any]
+    ) async {
+        guard !tool.isEmpty else {
+            await resolveHandoffLocally(
+                localKey: localKey,
+                handoffId: callId,
+                text: "Error: realtime tool call was missing a tool name."
+            )
+            return
+        }
+
+        let result = await dynamicToolResult(for: tool, arguments: arguments)
+        let outputText: String
+        switch result {
+        case .success(let text):
+            outputText = boundedRealtimeHandoffOutput(text)
+        case .failure(let error):
+            outputText = boundedRealtimeHandoffOutput("Error running \(tool): \(error.localizedDescription)")
+        }
+
+        guard let localConnection = connections[localKey.serverId], localConnection.isConnected else {
+            return
+        }
+
+        recordVoiceSessionDebug(
+            "-> resolveHandoff tool_call id=\(callId) tool=\(tool)",
+            for: localKey
+        )
+        do {
+            try await localConnection.resolveRealtimeHandoff(
+                threadId: localKey.threadId,
+                handoffId: callId,
+                outputText: outputText
+            )
+            recordVoiceSessionDebug(
+                "<- resolveHandoff tool_call success id=\(callId)",
+                for: localKey
+            )
+        } catch {
+            recordVoiceSessionDebug(
+                "resolveHandoff tool_call error: \(error.localizedDescription)",
+                for: localKey
+            )
+        }
+
+        await finalizeHandoff(localKey: localKey, handoffId: callId)
+    }
+
+    private func handleRealtimeOutputAudioDelta(serverId: String, data: Data) {
+        guard let notification = try? JSONDecoder().decode(
+            ThreadRealtimeOutputAudioDeltaNotification.self,
+            from: extractParams(data)
+        ) else {
+            return
+        }
+        let key = ThreadKey(serverId: serverId, threadId: notification.threadId)
+        guard activeVoiceSession?.threadKey == key else { return }
+        if let session = activeVoiceSession,
+           session.debugEntries.filter({ $0.line.contains("thread/realtime/outputAudio/delta") }).count < 3 {
+            recordVoiceSessionDebug(
+                "<- thread/realtime/outputAudio/delta bytes=\(notification.audio.data.count) rate=\(notification.audio.sampleRate)",
+                for: key
+            )
+        }
+        voiceSessionCoordinator.enqueueOutputAudio(notification.audio)
+    }
+
+    private func handleRealtimeError(serverId: String, data: Data) {
+        guard let notification = try? JSONDecoder().decode(
+            ThreadRealtimeErrorNotification.self,
+            from: extractParams(data)
+        ) else {
+            return
+        }
+        let key = ThreadKey(serverId: serverId, threadId: notification.threadId)
+        guard activeVoiceSession?.threadKey == key else { return }
+        recordVoiceSessionDebug(
+            "<- thread/realtime/error threadId=\(notification.threadId) message=\(notification.message)",
+            for: key
+        )
+        if notification.message.contains("active response in progress") {
+            return
+        }
+        failVoiceSession(notification.message)
+    }
+
+    private func handleRealtimeClosed(serverId: String, data: Data) {
+        guard let notification = try? JSONDecoder().decode(
+            ThreadRealtimeClosedNotification.self,
+            from: extractParams(data)
+        ) else {
+            return
+        }
+        let key = ThreadKey(serverId: serverId, threadId: notification.threadId)
+        guard activeVoiceSession?.threadKey == key else { return }
+
+        if var session = activeVoiceSession, session.threadKey == key {
+            flushRealtimeTranscriptIfNeeded(for: key, session: &session)
+            activeVoiceSession = session
+        }
+
+        recordVoiceSessionDebug(
+            "<- thread/realtime/closed threadId=\(notification.threadId) reason=\(notification.reason ?? "nil")",
+            for: key
+        )
+        let reason = notification.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if voiceStopRequestedThreadKey == key || reason == "requested" {
+            voiceStopRequestedThreadKey = nil
+            endVoiceSessionImmediately()
+            return
+        }
+        failVoiceSession(reason.isEmpty ? "Voice session closed" : reason)
+    }
+
+    private func connectedRemoteServers() -> [(name: String, hostname: String)] {
+        connections.values.compactMap { connection in
+            guard connection.id != Self.localServerID, connection.isConnected else {
+                return nil
+            }
+            return (name: connection.server.name, hostname: connection.server.hostname)
+        }
+    }
+
+    private func routeHandoffToLocalCodex(
+        localKey: ThreadKey,
+        handoffId: String,
+        transcript: String
+    ) async {
+        guard connections[Self.localServerID]?.isConnected == true else {
+            await resolveHandoffLocally(
+                localKey: localKey,
+                handoffId: handoffId,
+                text: "Local server is disconnected."
+            )
+            return
+        }
+
+        let handoffKey: ThreadKey
+        if let existing = voiceHandoffThreads[Self.localServerID], threads[existing] != nil {
+            handoffKey = existing
+            recordVoiceSessionDebug("reusing local handoff thread=\(existing.threadId)", for: localKey)
+        } else {
+            do {
+                let key = try await startThread(
+                    serverId: Self.localServerID,
+                    cwd: "/",
+                    approvalPolicy: "never",
+                    dynamicTools: localHandoffDynamicToolSpecs(),
+                    activate: false
+                )
+                voiceHandoffThreads[Self.localServerID] = key
+                handoffKey = key
+                recordVoiceSessionDebug("created local handoff thread=\(key.threadId)", for: localKey)
+            } catch {
+                await resolveHandoffLocally(
+                    localKey: localKey,
+                    handoffId: handoffId,
+                    text: "Failed to start local thread: \(error.localizedDescription)"
+                )
+                return
+            }
+        }
+
+        updateHandoffItem(handoffId: handoffId, threadKey: handoffKey, voiceThreadKey: localKey)
+        handoffThreadKeys[handoffId] = handoffKey
+        if var session = activeVoiceSession, session.threadKey == localKey {
+            session.handoffRemoteThreadKey = handoffKey
+            activeVoiceSession = session
+        }
+
+        let baseItemCount = threads[handoffKey]?.items.count ?? 0
+        guard let localConnection = connections[Self.localServerID] else { return }
+        do {
+            try await localConnection.sendTurn(
+                threadId: handoffKey.threadId,
+                text: transcript,
+                approvalPolicy: "never"
+            )
+        } catch {
+            await resolveHandoffLocally(
+                localKey: localKey,
+                handoffId: handoffId,
+                text: "Failed to send local turn: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        await streamRemoteItemsToHandoff(
+            localKey: localKey,
+            remoteKey: handoffKey,
+            handoffId: handoffId,
+            baseItemCount: baseItemCount,
+            timeout: 120
+        )
+    }
+
+    private func routeHandoffToRemote(
+        localKey: ThreadKey,
+        remoteServerId: String,
+        handoffId: String,
+        transcript: String
+    ) async {
+        guard let remoteConnection = connections[remoteServerId], remoteConnection.isConnected else {
+            await resolveHandoffLocally(
+                localKey: localKey,
+                handoffId: handoffId,
+                text: "Remote server is disconnected."
+            )
+            return
+        }
+
+        let remoteKey: ThreadKey
+        if let existing = voiceHandoffThreads[remoteServerId], threads[existing] != nil {
+            remoteKey = existing
+            recordVoiceSessionDebug("reusing remote thread=\(existing.threadId)", for: localKey)
+        } else {
+            do {
+                let key = try await startThread(
+                    serverId: remoteServerId,
+                    cwd: remoteConnection.server.hostname == "localhost" ? "/" : "/tmp",
+                    approvalPolicy: "never",
+                    sandboxMode: "danger-full-access",
+                    activate: false
+                )
+                voiceHandoffThreads[remoteServerId] = key
+                remoteKey = key
+                recordVoiceSessionDebug("started remote thread=\(key.threadId)", for: localKey)
+            } catch {
+                await resolveHandoffLocally(
+                    localKey: localKey,
+                    handoffId: handoffId,
+                    text: "Failed to start remote thread: \(error.localizedDescription)"
+                )
+                return
+            }
+        }
+
+        updateHandoffItem(handoffId: handoffId, threadKey: remoteKey, voiceThreadKey: localKey)
+        handoffThreadKeys[handoffId] = remoteKey
+        if var session = activeVoiceSession, session.threadKey == localKey {
+            session.handoffRemoteThreadKey = remoteKey
+            activeVoiceSession = session
+        }
+
+        let turnModel = handoffModel?.isEmpty == false ? handoffModel : nil
+        let turnEffort = handoffEffort?.isEmpty == false ? handoffEffort : nil
+        let turnServiceTier: String? = handoffFastMode ? "flex" : nil
+        let baseItemCount = threads[remoteKey]?.items.count ?? 0
+        do {
+            try await remoteConnection.sendTurn(
+                threadId: remoteKey.threadId,
+                text: transcript,
+                approvalPolicy: "never",
+                model: turnModel,
+                effort: turnEffort,
+                serviceTier: turnServiceTier
+            )
+        } catch {
+            await resolveHandoffLocally(
+                localKey: localKey,
+                handoffId: handoffId,
+                text: "Failed to send turn to remote server: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        await streamRemoteItemsToHandoff(
+            localKey: localKey,
+            remoteKey: remoteKey,
+            handoffId: handoffId,
+            baseItemCount: baseItemCount,
+            timeout: 120
+        )
+    }
+
+    private func streamRemoteItemsToHandoff(
+        localKey: ThreadKey,
+        remoteKey: ThreadKey,
+        handoffId: String,
+        baseItemCount: Int,
+        timeout: Int
+    ) async {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeout))
+        var turnStarted = false
+
+        while Date() < deadline {
+            if let thread = threads[remoteKey], thread.hasTurnActive {
+                turnStarted = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+
+        guard turnStarted else {
+            recordVoiceSessionDebug("remote turn did not start within timeout", for: localKey)
+            await finalizeHandoff(localKey: localKey, handoffId: handoffId)
+            return
+        }
+
+        var sentText: [String: String] = [:]
+
+        while Date() < deadline {
+            guard let thread = threads[remoteKey] else { break }
+            guard let localConnection = connections[localKey.serverId], localConnection.isConnected else { break }
+
+            let turnActive = thread.hasTurnActive
+            let currentItems = Array(thread.items.suffix(from: min(baseItemCount, thread.items.count)))
+
+            for item in currentItems {
+                let text = extractItemText(item)
+                guard !text.isEmpty else { continue }
+                if sentText[item.id] == text { continue }
+                if turnActive, case .assistant = item.content, item.id == currentItems.last?.id {
+                    continue
+                }
+
+                sentText[item.id] = text
+                do {
+                    try await localConnection.resolveRealtimeHandoff(
+                        threadId: localKey.threadId,
+                        handoffId: handoffId,
+                        outputText: boundedRealtimeHandoffOutput(text)
+                    )
+                } catch {
+                    recordVoiceSessionDebug("resolveHandoff stream error: \(error.localizedDescription)", for: localKey)
+                }
+            }
+
+            if !turnActive {
+                recordVoiceSessionDebug("<- handoff turn complete (\(sentText.count) items streamed)", for: localKey)
+                break
+            }
+
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+
+        if sentText.isEmpty,
+           let localConnection = connections[localKey.serverId],
+           localConnection.isConnected {
+            do {
+                try await localConnection.resolveRealtimeHandoff(
+                    threadId: localKey.threadId,
+                    handoffId: handoffId,
+                    outputText: boundedRealtimeHandoffOutput("(No response)")
+                )
+            } catch {
+                recordVoiceSessionDebug("resolveHandoff placeholder error: \(error.localizedDescription)", for: localKey)
+            }
+        }
+
+        await finalizeHandoff(localKey: localKey, handoffId: handoffId)
+    }
+
+    private func updateHandoffItem(handoffId: String, threadKey: ThreadKey, voiceThreadKey: ThreadKey) {
+        let itemId = "rtv-handoff-\(handoffId)"
+        guard let thread = threads[voiceThreadKey],
+              let index = thread.items.firstIndex(where: { $0.id == itemId }),
+              case .multiAgentAction(var data) = thread.items[index].content else {
+            return
+        }
+        data.receiverThreadIds = [threadKey.threadId]
+        thread.items[index].content = .multiAgentAction(data)
+        ensureThreadExistsByKey(serverId: threadKey.serverId, threadId: threadKey.threadId)
+        threads[threadKey]?.requiresOpenHydration = false
+    }
+
+    private func completeHandoffItem(handoffId: String, voiceThreadKey: ThreadKey) {
+        let itemId = "rtv-handoff-\(handoffId)"
+        guard let thread = threads[voiceThreadKey],
+              let index = thread.items.firstIndex(where: { $0.id == itemId }),
+              case .multiAgentAction(var data) = thread.items[index].content else {
+            return
+        }
+        data.status = "completed"
+        for idx in data.agentStates.indices {
+            data.agentStates[idx].status = "completed"
+        }
+        thread.items[index].content = .multiAgentAction(data)
+    }
+
+    private func extractItemText(_ item: ConversationItem) -> String {
+        switch item.content {
+        case .assistant(let data):
+            return truncateTextForToolOutput(data.text, maxBytes: 12_000)
+        default:
+            return ""
+        }
+    }
+
+    private func boundedRealtimeHandoffOutput(_ text: String) -> String {
+        truncateTextForToolOutput(text, maxBytes: 180_000)
+    }
+
+    private func finalizeHandoff(localKey: ThreadKey, handoffId: String) async {
+        guard let localConnection = connections[localKey.serverId], localConnection.isConnected else {
+            return
+        }
+        recordVoiceSessionDebug("-> finalizeHandoff handoffId=\(handoffId)", for: localKey)
+        do {
+            try await localConnection.finalizeRealtimeHandoff(
+                threadId: localKey.threadId,
+                handoffId: handoffId
+            )
+            recordVoiceSessionDebug("<- finalizeHandoff success", for: localKey)
+        } catch {
+            recordVoiceSessionDebug("finalizeHandoff error: \(error.localizedDescription)", for: localKey)
+        }
+
+        completeHandoffItem(handoffId: handoffId, voiceThreadKey: localKey)
+        if var session = activeVoiceSession,
+           session.threadKey == localKey {
+            if session.phase == .handoff {
+                session.phase = .listening
+            }
+            session.handoffRemoteThreadKey = nil
+            activeVoiceSession = session
+            syncVoiceCallActivity()
+        }
+        handoffThreadKeys.removeValue(forKey: handoffId)
+    }
+
+    private func resolveHandoffLocally(localKey: ThreadKey, handoffId: String, text: String) async {
+        guard let localConnection = connections[localKey.serverId], localConnection.isConnected else {
+            return
+        }
+        do {
+            try await localConnection.resolveRealtimeHandoff(
+                threadId: localKey.threadId,
+                handoffId: handoffId,
+                outputText: boundedRealtimeHandoffOutput(text)
+            )
+        } catch {
+            recordVoiceSessionDebug("resolveHandoff fallback error: \(error.localizedDescription)", for: localKey)
+        }
+        await finalizeHandoff(localKey: localKey, handoffId: handoffId)
+    }
+
+    private func failVoiceSession(_ message: String) {
+        voiceSessionCoordinator.stop()
+        voiceInputDecayToken = nil
+        voiceOutputDecayToken = nil
+
+        guard var session = activeVoiceSession else {
+            endVoiceSessionImmediately()
+            return
+        }
+
+        flushRealtimeTranscriptIfNeeded(for: session.threadKey, session: &session)
+
+        session.phase = .error
+        session.lastError = message
+        session.isListening = false
+        session.isSpeaking = false
+        session.inputLevel = 0
+        session.outputLevel = 0
+        appendVoiceSessionDebug("phase error \(message)", to: &session)
+        activeVoiceSession = session
+        syncVoiceCallActivity()
+    }
+
+    private func endVoiceSessionImmediately() {
+        if let activeKey = activeVoiceSession?.threadKey {
+            pendingRealtimeMessageIDs.removeValue(forKey: activeKey)
+        }
+        voiceInputDecayToken = nil
+        voiceOutputDecayToken = nil
+        voiceStopRequestedThreadKey = nil
+        voiceSessionCoordinator.stop()
+        if let previousKey = voicePreviousActiveThreadKey,
+           threads[previousKey] != nil {
+            activeThreadKey = previousKey
+        } else if activeVoiceSession != nil {
+            activeThreadKey = nil
+        }
+        voicePreviousActiveThreadKey = nil
+        voiceHandoffThreads.removeAll()
+        handoffThreadKeys.removeAll()
+        activeVoiceSession = nil
+        endVoiceCallActivity()
+    }
+
+    private func syncVoiceCallActivity() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard let session = activeVoiceSession else {
+            endVoiceCallActivity()
+            return
+        }
+
+        if voiceCallActivity == nil {
+            let attributes = CodexVoiceCallAttributes(
+                threadId: session.threadKey.threadId,
+                threadTitle: session.threadTitle,
+                model: session.model,
+                startDate: session.startedAt
+            )
+            do {
+                voiceCallActivity = try Activity.request(
+                    attributes: attributes,
+                    content: .init(state: session.activityContentState, staleDate: nil)
+                )
+            } catch {
+                NSLog("[%@ voice-la] failed to start: %@", ts, error.localizedDescription)
+            }
+            return
+        }
+
+        guard let activity = voiceCallActivity else { return }
+        Task {
+            await activity.update(
+                .init(
+                    state: session.activityContentState,
+                    staleDate: Date(timeIntervalSinceNow: 120)
+                )
+            )
+        }
+    }
+
+    private func endVoiceCallActivity() {
+        guard let activity = voiceCallActivity else { return }
+        Task {
+            await activity.end(nil, dismissalPolicy: .after(.now + 2))
+        }
+        voiceCallActivity = nil
+    }
+
+    private func recordVoiceSessionDebug(_ line: String, for key: ThreadKey) {
+        guard var session = activeVoiceSession, session.threadKey == key else { return }
+        appendVoiceSessionDebug(line, to: &session)
+        activeVoiceSession = session
+    }
+
+    private func debugJSONString<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value),
+              let string = String(data: data, encoding: .utf8) else {
+            return "<encode-failed>"
+        }
+        return string
+    }
+
+    private func appendVoiceSessionDebug(_ line: String, to session: inout VoiceSessionState) {
+        session.debugEntries.append(VoiceSessionDebugEntry(line: line))
+        if session.debugEntries.count > 40 {
+            session.debugEntries.removeFirst(session.debugEntries.count - 40)
+        }
+    }
+
+    private func debugAuthStatus(_ status: AuthStatus) -> String {
+        switch status {
+        case .unknown:
+            return "unknown"
+        case .notLoggedIn:
+            return "notLoggedIn"
+        case .apiKey:
+            return "apiKey"
+        case .chatgpt(let email):
+            return "chatgpt(\(email))"
+        }
+    }
+
+    private func extractParams(_ data: Data) -> Data {
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let params = obj["params"] {
+            return (try? JSONSerialization.data(withJSONObject: params)) ?? data
+        }
+        return data
     }
 
     private func handleItemNotification(serverId: String, method: String, data: Data) async {
@@ -2705,6 +4943,32 @@ final class ServerManager {
         guard let thread = threads[key] else { return }
 
         switch eventType {
+        case "realtime_conversation_realtime":
+            guard var session = activeVoiceSession, session.threadKey == key else { return }
+            let payload = (eventPayload["payload"] as? [String: Any]) ?? [:]
+
+            if let input = payload["InputTranscriptDelta"] as? [String: Any],
+               let delta = extractString(input, keys: ["delta"]),
+               !delta.isEmpty {
+                applyRealtimeTranscriptDelta(
+                    delta,
+                    speaker: "You",
+                    phase: .listening,
+                    key: key,
+                    session: &session
+                )
+            } else if let output = payload["OutputTranscriptDelta"] as? [String: Any],
+                      let delta = extractString(output, keys: ["delta"]),
+                      !delta.isEmpty {
+                applyRealtimeTranscriptDelta(
+                    delta,
+                    speaker: "Codex",
+                    phase: .speaking,
+                    key: key,
+                    session: &session
+                )
+            }
+
         case "exec_command_begin":
             let itemId = extractString(eventPayload, keys: ["call_id", "callId"])
             let command = extractCommandText(eventPayload)
@@ -3281,34 +5545,34 @@ final class ServerManager {
     }
 
     private func shouldPreferLocalMessages(current: [ConversationItem], restored: [ConversationItem]) -> Bool {
-        // Protect against transient/stale resume snapshots that can briefly
-        // return fewer messages and cause the UI to "clear then refill".
-        if !current.isEmpty && restored.isEmpty {
-            return true
-        }
-        if restored.count < current.count {
-            return true
-        }
-
-        let currentToolCount = current.filter(isToolSystemMessage).count
-        let restoredToolCount = restored.filter(isToolSystemMessage).count
-        return currentToolCount > restoredToolCount && restored.count <= current.count
+        // Only protect against fully empty/stale snapshots. Finalized local
+        // realtime utterances are merged onto restored history separately.
+        !current.isEmpty && restored.isEmpty
     }
 
-    private func isToolSystemMessage(_ item: ConversationItem) -> Bool {
-        switch item.content {
-        case .commandExecution,
-             .fileChange,
-             .turnDiff,
-             .mcpToolCall,
-             .dynamicToolCall,
-             .multiAgentAction,
-             .webSearch,
-             .widget:
-            return true
-        default:
-            return false
+    private func isMissingRolloutError(_ error: Error) -> Bool {
+        error.localizedDescription.localizedCaseInsensitiveContains("no rollout found for thread id")
+    }
+
+    private func containsLocalRealtimeItems(_ items: [ConversationItem]) -> Bool {
+        items.contains(where: isLocalRealtimeItem)
+    }
+
+    private func isLocalRealtimeItem(_ item: ConversationItem) -> Bool {
+        item.id.hasPrefix("rtv-") || item.id.hasPrefix("rtv-handoff-") || item.id.hasPrefix("rtv-flush-")
+    }
+
+    private func mergeLocalRealtimeItems(current: [ConversationItem], restored: [ConversationItem]) -> [ConversationItem] {
+        guard containsLocalRealtimeItems(current) else { return restored }
+
+        var merged = restored
+        var existingIDs = Set(restored.map(\.id))
+        for item in current where isLocalRealtimeItem(item) {
+            guard !existingIDs.contains(item.id) else { continue }
+            merged.append(item)
+            existingIDs.insert(item.id)
         }
+        return merged
     }
 
     private func messagesEquivalent(_ lhs: [ConversationItem], _ rhs: [ConversationItem]) -> Bool {
@@ -3345,13 +5609,23 @@ final class ServerManager {
         _ restored: [ConversationItem],
         on thread: ThreadState,
         key: ThreadKey,
-        staged: Bool
+        staged: Bool,
+        preferLocalMessages: Bool = false
     ) {
         cancelDeferredMessageHydration(for: key)
         thread.requiresOpenHydration = false
 
+        let effectiveRestored = preferLocalMessages
+            ? mergeLocalRealtimeItems(current: thread.items, restored: restored)
+            : restored
+
+        if preferLocalMessages,
+           shouldPreferLocalMessages(current: thread.items, restored: effectiveRestored) {
+            return
+        }
+
         let prepared = preparedRestoredMessages(
-            restored,
+            effectiveRestored,
             preservingIdentityFrom: thread.items
         )
 
@@ -3407,6 +5681,7 @@ final class ServerManager {
     // MARK: - Background / Foreground Lifecycle
 
     func appDidEnterBackground() {
+        guard activeVoiceSession == nil else { return }
         let activeTurnKeys = threads.compactMap { (key, thread) -> ThreadKey? in
             thread.hasTurnActive ? key : nil
         }
@@ -3457,6 +5732,12 @@ final class ServerManager {
     }
 
     func appDidBecomeActive() {
+        handlePendingVoiceSessionEndRequestIfNeeded()
+        if activeVoiceSession != nil {
+            deregisterPushProxy()
+            endBackgroundTaskIfNeeded()
+            return
+        }
         NSLog("[%@ bg] becoming active, backgroundedTurnKeys=%d liveActivities=%d bgWakes=%d", ts, backgroundedTurnKeys.count, liveActivities.count, bgWakeCount)
         deregisterPushProxy()
         endBackgroundTaskIfNeeded()
@@ -3497,7 +5778,8 @@ final class ServerManager {
                         restored,
                         on: thread,
                         key: key,
-                        staged: false
+                        staged: false,
+                        preferLocalMessages: true
                     )
                     if let model = response.model { thread.model = model }
                     if let cwd = response.cwd { thread.cwd = cwd }
@@ -3563,7 +5845,8 @@ final class ServerManager {
                     restored,
                     on: thread,
                     key: key,
-                    staged: false
+                    staged: false,
+                    preferLocalMessages: true
                 )
                 if let model = response.model { thread.model = model }
                 if let cwd = response.cwd { thread.cwd = cwd }
@@ -3685,6 +5968,8 @@ final class ServerManager {
     private func updateLiveActivityBGWake(key: ThreadKey) {
         guard let activity = liveActivities[key] else { return }
         let thread = threads[key]
+        // If session already completed, don't update — let endLiveActivity's dismissal finish
+        guard thread?.hasTurnActive == true else { return }
         let elapsed = Int(Date().timeIntervalSince(liveActivityStartDates[key] ?? Date()))
 
         let toolCount = liveActivityToolCallCounts[key, default: 0]

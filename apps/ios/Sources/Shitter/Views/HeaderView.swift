@@ -9,7 +9,6 @@ struct HeaderView: View {
     let serverManager: ServerManager
     let onBack: () -> Void
     @State private var isReloading = false
-    @State private var showOAuth = false
     @State private var pulsing = false
     @AppStorage("fastMode") private var fastMode = false
 
@@ -113,37 +112,6 @@ struct HeaderView: View {
         .task(id: thread.key) {
             await loadModelsIfNeeded()
         }
-        .onChange(of: connection.oauthURL) { _, url in
-            showOAuth = url != nil
-        }
-        .onChange(of: connection.loginCompleted) { _, completed in
-            if completed == true {
-                showOAuth = false
-            }
-        }
-        .sheet(isPresented: $showOAuth) {
-            if let url = connection.oauthURL {
-                NavigationStack {
-                    OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
-                        connection.forwardOAuthCallback(callbackURL)
-                    }) {
-                        Task { await connection.cancelLogin() }
-                    }
-                    .ignoresSafeArea()
-                    .navigationTitle("Login with ChatGPT")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Cancel") {
-                                Task { await connection.cancelLogin() }
-                                showOAuth = false
-                            }
-                            .foregroundColor(ShitterTheme.danger)
-                        }
-                    }
-                }
-            }
-        }
         .enableInjection()
     }
 
@@ -238,8 +206,7 @@ struct HeaderView: View {
             Task {
                 isReloading = true
                 if connection.authStatus == .notLoggedIn {
-                    await connection.logout()
-                    await connection.loginWithChatGPT()
+                    appState.showSettings = true
                 } else {
                     await serverManager.refreshAllSessions()
                     await serverManager.syncActiveThreadFromServer()

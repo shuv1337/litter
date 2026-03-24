@@ -242,9 +242,10 @@ actor SSHSessionManager {
     }
 
     private func candidatePorts() -> [UInt16] {
-        var ports: [UInt16] = [defaultRemotePort]
+        var ports: [UInt16] = [defaultRemotePort, 9234]
         ports.append(contentsOf: (1...20).compactMap { UInt16(exactly: Int(defaultRemotePort) + $0) })
-        return ports
+        var seen = Set<UInt16>()
+        return ports.filter { seen.insert($0).inserted }
     }
 
     private func loginShell(_ script: String) -> String {

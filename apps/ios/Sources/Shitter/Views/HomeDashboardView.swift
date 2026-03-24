@@ -23,7 +23,7 @@ struct HomeDashboardView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 20)
-            .padding(.bottom, 28)
+            .padding(.bottom, 144)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(ShitterTheme.backgroundGradient.ignoresSafeArea())

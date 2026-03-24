@@ -36,16 +36,17 @@ private struct AdaptiveTimer: View {
     let active: Bool
     @Environment(\.colorScheme) private var colorScheme
 
+    private var timerColor: Color {
+        let text = ShitterPalette.textSecondary.color(for: colorScheme)
+        return active ? text : text.opacity(0.65)
+    }
+
     var body: some View {
         Text(text)
-            .font(.system(size: 15, design: .monospaced))
+            .font(.system(size: 15, design: ShitterPalette.fontDesign))
             .monospacedDigit()
             .fontWeight(.regular)
-            .foregroundStyle(
-                colorScheme == .dark
-                    ? Color.white.opacity(active ? 0.7 : 0.45)
-                    : Color.black.opacity(active ? 0.6 : 0.35)
-            )
+            .foregroundStyle(timerColor)
     }
 }
 

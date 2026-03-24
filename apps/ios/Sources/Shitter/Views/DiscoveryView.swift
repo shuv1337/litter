@@ -680,13 +680,13 @@ struct DiscoveryView: View {
             return
         }
 
-        await serverManager.addServer(server, target: target)
+        let connectedServerId = await serverManager.addServer(server, target: target)
 
         connectingServer = nil
-        if serverManager.connections[server.id]?.isConnected == true {
-            navigateAfterConnect(server)
+        if let connection = serverManager.connections[connectedServerId], connection.isConnected {
+            navigateAfterConnect(connection.server)
         } else {
-            let phase = serverManager.connections[server.id]?.connectionPhase
+            let phase = serverManager.connections[connectedServerId]?.connectionPhase
             connectError = phase?.isEmpty == false ? phase : "Failed to connect"
         }
     }

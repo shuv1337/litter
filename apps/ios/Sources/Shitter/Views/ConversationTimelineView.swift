@@ -359,18 +359,18 @@ private struct ConversationTimelineItemRow: View {
         let changedPaths = data.changes.map(\.path)
         let summary: String
         if let first = changedPaths.first {
-            summary = changedPaths.count == 1 ? "Changed \(first)" : "Changed \(changedPaths.count) files"
+            summary = changedPaths.count == 1 ? "Changed \(workspaceTitle(for: first))" : "Changed \(changedPaths.count) files"
         } else {
             summary = "File changes"
         }
 
         var sections: [ToolCallSection] = []
         if !changedPaths.isEmpty {
-            sections.append(.list(label: "Files", items: changedPaths))
+            sections.append(.list(label: "Files", items: changedPaths.map(workspaceTitle(for:))))
         }
         let diffSections = data.changes.compactMap { change -> ToolCallSection? in
             guard !change.diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return .diff(label: change.path, content: change.diff)
+            return .diff(label: workspaceTitle(for: change.path), content: change.diff)
         }
         sections.append(contentsOf: diffSections)
         if let outputDelta = data.outputDelta?.trimmingCharacters(in: .whitespacesAndNewlines), !outputDelta.isEmpty {
@@ -538,17 +538,17 @@ private struct ConversationExplorationGroupRow: View {
         if let action = data.actions.first {
             switch action.kind {
             case .read:
-                return action.path.map { "Read \($0)" } ?? action.command
+                return action.path.map { "Read \(workspaceTitle(for: $0))" } ?? action.command
             case .search:
                 if let query = action.query, let path = action.path {
-                    return "Searched for \(query) in \(path)"
+                    return "Searched for \(query) in \(workspaceTitle(for: path))"
                 }
                 if let query = action.query {
                     return "Searched for \(query)"
                 }
                 return action.command
             case .listFiles:
-                return action.path.map { "Listed files in \($0)" } ?? action.command
+                return action.path.map { "Listed files in \(workspaceTitle(for: $0))" } ?? action.command
             case .unknown:
                 break
             }

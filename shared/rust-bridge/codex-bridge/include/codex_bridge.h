@@ -32,3 +32,32 @@ int codex_channel_send(void *handle, const char *json, size_t json_len);
 
 /// Close the channel and release resources.
 void codex_channel_close(void *handle);
+
+// ---------------------------------------------------------------------------
+// Acoustic Echo Cancellation via WebRTC AudioProcessing
+// ---------------------------------------------------------------------------
+
+/// Create an AEC processor for the given sample rate (for example, 24000 Hz).
+/// Returns an opaque handle, or NULL on failure.
+void *aec_create(uint32_t sample_rate);
+
+/// Destroy an AEC processor previously returned by aec_create().
+void aec_destroy(void *handle);
+
+/// Return the expected frame size in samples (sample_rate / 100).
+size_t aec_get_frame_size(const void *handle);
+
+/// Feed far-end playback audio to the AEC as mono f32 samples.
+/// `count` must be a multiple of aec_get_frame_size(handle).
+/// Returns 0 on success, negative on failure.
+int aec_analyze_render(const void *handle, const float *samples, size_t count);
+
+/// Process far-end playback audio through the render path as mono f32 samples.
+/// `count` must be a multiple of aec_get_frame_size(handle).
+/// Returns 0 on success, negative on failure.
+int aec_process_render(void *handle, float *samples, size_t count);
+
+/// Process microphone capture audio in place as mono f32 samples.
+/// `count` must be a multiple of aec_get_frame_size(handle).
+/// Returns 0 on success, negative on failure.
+int aec_process_capture(void *handle, float *samples, size_t count);

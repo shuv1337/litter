@@ -265,7 +265,7 @@ struct UserInput: Encodable {
         case text
         case path
         case name
-        case imageURL = "image_url"
+        case url
     }
 
     init(type: String, text: String? = nil, path: String? = nil, name: String? = nil, imageURL: String? = nil) {
@@ -274,6 +274,17 @@ struct UserInput: Encodable {
         self.path = path
         self.name = name
         self.imageURL = imageURL
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encodeIfPresent(path, forKey: .path)
+        try container.encodeIfPresent(name, forKey: .name)
+        if type == "image" {
+            try container.encodeIfPresent(imageURL, forKey: .url)
+        }
     }
 }
 
@@ -721,6 +732,83 @@ struct ThreadArchiveParams: Encodable {
 }
 
 struct ThreadArchiveResponse: Decodable {}
+
+struct ThreadRealtimeAudioChunk: Codable, Equatable {
+    let data: String
+    let sampleRate: UInt32
+    let numChannels: UInt16
+    let samplesPerChannel: UInt32?
+}
+
+struct ThreadRealtimeStartParams: Encodable {
+    let threadId: String
+    let prompt: String
+    let sessionId: String?
+    let clientControlledHandoff: Bool?
+    let dynamicTools: [DynamicToolSpec]?
+}
+
+struct ThreadRealtimeStartResponse: Decodable {}
+
+struct ThreadRealtimeAppendAudioParams: Encodable {
+    let threadId: String
+    let audio: ThreadRealtimeAudioChunk
+}
+
+struct ThreadRealtimeAppendAudioResponse: Decodable {}
+
+struct ThreadRealtimeAppendTextParams: Encodable {
+    let threadId: String
+    let text: String
+}
+
+struct ThreadRealtimeAppendTextResponse: Decodable {}
+
+struct ThreadRealtimeStopParams: Encodable {
+    let threadId: String
+}
+
+struct ThreadRealtimeStopResponse: Decodable {}
+
+struct ThreadRealtimeResolveHandoffParams: Encodable {
+    let threadId: String
+    let handoffId: String
+    let outputText: String
+}
+
+struct ThreadRealtimeResolveHandoffResponse: Decodable {}
+
+struct ThreadRealtimeFinalizeHandoffParams: Encodable {
+    let threadId: String
+    let handoffId: String
+}
+
+struct ThreadRealtimeFinalizeHandoffResponse: Decodable {}
+
+struct ThreadRealtimeStartedNotification: Decodable {
+    let threadId: String
+    let sessionId: String?
+}
+
+struct ThreadRealtimeItemAddedNotification: Decodable {
+    let threadId: String
+    let item: AnyCodable
+}
+
+struct ThreadRealtimeOutputAudioDeltaNotification: Decodable {
+    let threadId: String
+    let audio: ThreadRealtimeAudioChunk
+}
+
+struct ThreadRealtimeErrorNotification: Decodable {
+    let threadId: String
+    let message: String
+}
+
+struct ThreadRealtimeClosedNotification: Decodable {
+    let threadId: String
+    let reason: String?
+}
 
 struct ResumedThread: Decodable {
     let id: String
@@ -1489,6 +1577,19 @@ struct ConfigWriteResponse: Decodable {
     let filePath: String
 }
 
+struct ConfigEdit: Encodable {
+    let keyPath: String
+    let value: AnyEncodable
+    let mergeStrategy: String
+}
+
+struct ConfigBatchWriteParams: Encodable {
+    let edits: [ConfigEdit]
+    let filePath: String?
+    let expectedVersion: String?
+    let reloadUserConfig: Bool
+}
+
 // MARK: - Experimental Features
 
 struct ExperimentalFeatureListParams: Encodable {
@@ -1670,6 +1771,13 @@ struct LoginStartApiKeyParams: Encodable {
     let apiKey: String
 }
 
+struct LoginStartChatGPTAuthTokensParams: Encodable {
+    let type = "chatgptAuthTokens"
+    let accessToken: String
+    let chatgptAccountId: String
+    let chatgptPlanType: String?
+}
+
 struct LoginStartResponse: Decodable {
     let type: String
     let loginId: String?
@@ -1713,6 +1821,17 @@ struct AccountLoginCompletedNotification: Decodable {
 
 struct AccountUpdatedNotification: Decodable {
     let authMode: String?   // "apiKey" | "chatgpt" | nil
+}
+
+struct ChatGPTAuthTokensRefreshParams: Decodable {
+    let reason: String?
+    let previousAccountId: String?
+}
+
+struct ChatGPTAuthTokensRefreshResponse: Encodable {
+    let accessToken: String
+    let chatgptAccountId: String
+    let chatgptPlanType: String?
 }
 
 // MARK: - Rate Limits

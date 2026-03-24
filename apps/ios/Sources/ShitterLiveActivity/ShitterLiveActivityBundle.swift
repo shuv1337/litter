@@ -5,5 +5,6 @@ import WidgetKit
 struct ShitterLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         CodexTurnLiveActivity()
+        CodexVoiceCallLiveActivity()
     }
 }

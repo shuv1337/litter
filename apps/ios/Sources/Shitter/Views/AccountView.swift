@@ -23,8 +23,6 @@ private struct AccountConnectionView: View {
 
     @State private var apiKey = ""
     @State private var isWorking = false
-    @State private var errorMsg: String?
-    @State private var showOAuth = false
 
     private var authStatus: AuthStatus {
         connection.authStatus
@@ -39,7 +37,7 @@ private struct AccountConnectionView: View {
                         currentAccountSection
                         Divider().background(ShitterTheme.surfaceLight)
                         loginSection
-                        if let err = errorMsg {
+                        if let err = connection.lastAuthError {
                             Text(err)
                                 .font(.caption)
                                 .foregroundColor(.red)
@@ -56,18 +54,6 @@ private struct AccountConnectionView: View {
                     Button("Done") { dismiss() }
                         .foregroundColor(ShitterTheme.accent)
                 }
-            }
-        }
-        .sheet(isPresented: $showOAuth) {
-            oauthSheet
-        }
-        .onChange(of: connection.oauthURL) { _, url in
-            showOAuth = url != nil
-        }
-        .onChange(of: connection.loginCompleted) { _, completed in
-            if completed == true {
-                showOAuth = false
-                connection.loginCompleted = false
             }
         }
     }
@@ -107,6 +93,28 @@ private struct AccountConnectionView: View {
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .padding(.horizontal, 16)
+
+            if connection.target == .local, connection.hasOpenAIApiKey {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .foregroundColor(Color(hex: "#00AAFF"))
+                    Text("Realtime API key saved")
+                        .shitterFont(.caption)
+                        .foregroundColor(ShitterTheme.textSecondary)
+                    Spacer()
+                    Button("Delete") {
+                        Task {
+                            isWorking = true
+                            await connection.clearOpenAIApiKey()
+                            isWorking = false
+                        }
+                    }
+                    .shitterFont(.caption)
+                    .foregroundColor(ShitterTheme.danger)
+                    .disabled(isWorking)
+                }
+                .padding(.horizontal, 20)
+            }
         }
     }
 
@@ -120,13 +128,12 @@ private struct AccountConnectionView: View {
             Button {
                 Task {
                     isWorking = true
-                    errorMsg = nil
                     await connection.loginWithChatGPT()
                     isWorking = false
                 }
             } label: {
                 HStack {
-                    if isWorking {
+                    if isWorking || connection.isChatGPTLoginInProgress {
                         ProgressView().tint(ShitterTheme.textOnAccent).scaleEffect(0.8)
                     }
                     Image(systemName: "person.crop.circle.badge.checkmark")
@@ -140,71 +147,55 @@ private struct AccountConnectionView: View {
                 .cornerRadius(10)
             }
             .padding(.horizontal, 16)
-            .disabled(isWorking)
+            .disabled(isWorking || connection.isChatGPTLoginInProgress)
 
-            Text("— or use an API key —")
-                .shitterFont(.caption)
-                .foregroundColor(ShitterTheme.textMuted)
-                .frame(maxWidth: .infinity)
+            if connection.target == .local {
+                Text("— or save an API key for local realtime —")
+                    .shitterFont(.caption)
+                    .foregroundColor(ShitterTheme.textMuted)
+                    .frame(maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 8) {
-                SecureField("sk-...", text: $apiKey)
-                    .shitterFont(.subheadline)
-                    .foregroundColor(ShitterTheme.textPrimary)
-                    .padding(12)
-                    .background(ShitterTheme.surface)
-                    .cornerRadius(8)
-                    .padding(.horizontal, 16)
-
-                Button {
-                    let key = apiKey.trimmingCharacters(in: .whitespaces)
-                    guard !key.isEmpty else { return }
-                    Task {
-                        isWorking = true
-                        errorMsg = nil
-                        await connection.loginWithApiKey(key)
-                        isWorking = false
-                        if case .apiKey = connection.authStatus {
-                            dismiss()
-                        }
-                    }
-                } label: {
-                    Text("Save API Key")
+                VStack(alignment: .leading, spacing: 8) {
+                    SecureField("sk-...", text: $apiKey)
                         .shitterFont(.subheadline)
-                        .foregroundColor(ShitterTheme.accent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(ShitterTheme.accent.opacity(0.4), lineWidth: 1)
-                        )
-                }
-                .padding(.horizontal, 16)
-                .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty || isWorking)
-            }
-        }
-    }
+                        .foregroundColor(ShitterTheme.textPrimary)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(12)
+                        .background(ShitterTheme.surface)
+                        .cornerRadius(8)
+                        .padding(.horizontal, 16)
 
-    @ViewBuilder
-    private var oauthSheet: some View {
-        if let url = connection.oauthURL {
-            NavigationStack {
-                OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
-                    connection.forwardOAuthCallback(callbackURL)
-                }) {
-                    Task { await connection.cancelLogin() }
-                }
-                .ignoresSafeArea()
-                .navigationTitle("Login with ChatGPT")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel") {
-                            Task { await connection.cancelLogin() }
-                            showOAuth = false
+                    Button {
+                        let key = apiKey.trimmingCharacters(in: .whitespaces)
+                        guard !key.isEmpty else { return }
+                        Task {
+                            isWorking = true
+                            await connection.saveOpenAIApiKey(key)
+                            isWorking = false
+                            if connection.lastAuthError == nil, connection.hasOpenAIApiKey {
+                                apiKey = ""
+                                dismiss()
+                            }
                         }
-                        .foregroundColor(ShitterTheme.danger)
+                    } label: {
+                        Text("Save API Key")
+                            .shitterFont(.subheadline)
+                            .foregroundColor(ShitterTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(ShitterTheme.accent.opacity(0.4), lineWidth: 1)
+                            )
                     }
+                    .padding(.horizontal, 16)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty || isWorking)
+
+                    Text("If both are saved, Shitter will keep ChatGPT OAuth for normal Codex requests and use the API key for local realtime.")
+                        .shitterFont(.caption)
+                        .foregroundColor(ShitterTheme.textSecondary)
+                        .padding(.horizontal, 20)
                 }
             }
         }
@@ -229,8 +220,12 @@ private struct AccountConnectionView: View {
 
     private var authSubtitle: String? {
         switch authStatus {
-        case .chatgpt: return "ChatGPT account"
-        case .apiKey: return "OpenAI API key"
+        case .chatgpt:
+            return connection.hasOpenAIApiKey
+                ? "ChatGPT account with saved realtime API key"
+                : "ChatGPT account"
+        case .apiKey:
+            return connection.hasOpenAIApiKey ? "OpenAI API key saved" : "OpenAI API key"
         default: return nil
         }
     }

@@ -2,6 +2,7 @@ import SwiftUI
 import Inject
 import UIKit
 import os
+import Observation
 
 
 class AppDelegate: NSObject, UIApplicationDelegate {
@@ -74,6 +75,7 @@ struct ShitterApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var serverManager = ServerManager()
     @State private var themeManager = ThemeManager.shared
+    @State private var watchRelay = WatchRelay()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -83,11 +85,14 @@ struct ShitterApp: App {
                 .environment(themeManager)
                 .task {
                     appDelegate.serverManager = serverManager
+                    watchRelay.serverManager = serverManager
+                    watchRelay.activate()
                     let forceDiscoveryForUITest =
                         ProcessInfo.processInfo.environment["CODEXIOS_UI_TEST_FORCE_DISCOVERY"] == "1"
                     if !forceDiscoveryForUITest {
                         await serverManager.reconnectAll()
                     }
+                    watchRelay.broadcastThreadState()
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -96,9 +101,25 @@ struct ShitterApp: App {
                 serverManager.appDidEnterBackground()
             case .active:
                 serverManager.appDidBecomeActive()
+                watchRelay.broadcastThreadState()
             default:
                 break
             }
+        }
+        .onChange(of: serverManager.threads.count) { _, _ in
+            watchRelay.broadcastThreadState()
+        }
+        .onChange(of: serverManager.connections.count) { _, _ in
+            watchRelay.broadcastThreadState()
+        }
+        .onChange(of: serverManager.pendingApprovals.count) { oldCount, newCount in
+            if newCount > oldCount {
+                let newApprovals = serverManager.pendingApprovals.suffix(newCount - oldCount)
+                for approval in newApprovals {
+                    watchRelay.sendApprovalToWatch(approval)
+                }
+            }
+            watchRelay.broadcastThreadState()
         }
     }
 }
@@ -211,11 +232,13 @@ private struct HomeNavigationView: View {
     @Environment(AppState.self) private var appState
     @Environment(ConversationWarmupCoordinator.self) private var conversationWarmup
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
+    @State private var experimentalFeatures = ExperimentalFeatures.shared
     @State private var homeDashboardModel = HomeDashboardModel()
     @State private var navigationPath: [HomeNavigationRoute] = []
     @State private var directoryPickerSheet: SessionLaunchSupport.DirectoryPickerSheetModel?
     @State private var openingRecentSessionKey: ThreadKey?
     @State private var isStartingNewSession = false
+    @State private var isStartingVoice = false
     @State private var actionErrorMessage: String?
     @State private var hasSeededInitialConversationRoute = false
     let topInset: CGFloat
@@ -224,6 +247,7 @@ private struct HomeNavigationView: View {
     private enum HomeNavigationRoute: Hashable {
         case sessions(serverId: String, title: String)
         case conversation(ThreadKey)
+        case realtimeVoice(ThreadKey)
     }
 
     private var connectedServerOptions: [DirectoryPickerServerOption] {
@@ -265,6 +289,11 @@ private struct HomeNavigationView: View {
                     ShitterTheme.backgroundGradient.ignoresSafeArea()
                 }
             }
+            .overlay(alignment: .bottom) {
+                if isHomeRouteActive, experimentalFeatures.isEnabled(.realtimeVoice) {
+                    homeVoiceLauncher
+                }
+            }
             .navigationDestination(for: HomeNavigationRoute.self) { route in
                 switch route {
                 case let .sessions(serverId, title):
@@ -290,6 +319,20 @@ private struct HomeNavigationView: View {
                         onResumeSessions: { showSessions(for: $0) },
                         onOpenConversation: { replaceTopConversation(with: $0) }
                     )
+                case let .realtimeVoice(threadKey):
+                    RealtimeVoiceScreen(
+                        serverManager: serverManager,
+                        threadKey: threadKey,
+                        onEnd: {
+                            popCurrentRoute()
+                            Task { await serverManager.stopActiveVoiceSession() }
+                        },
+                        onToggleSpeaker: {
+                            Task { try? await serverManager.toggleActiveVoiceSessionSpeaker() }
+                        }
+                    )
+                    .toolbar(.hidden, for: .navigationBar)
+                    .background(ShitterTheme.backgroundGradient.ignoresSafeArea())
                 }
             }
         }
@@ -370,6 +413,75 @@ private struct HomeNavigationView: View {
         }
     }
 
+    private var homeVoiceLauncher: some View {
+        HStack {
+            Spacer()
+            HomeVoiceOrbButton(
+                session: serverManager.activeVoiceSession,
+                isAvailable: OnDeviceCodexFeature.isEnabled,
+                isStarting: isStartingVoice,
+                action: startHomeVoiceSession
+            )
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, max(bottomInset - 12, 6))
+    }
+
+    private func startHomeVoiceSession() {
+        guard !isStartingVoice else { return }
+        isStartingVoice = true
+        actionErrorMessage = nil
+
+        Task {
+            do {
+                let selectedModel = normalizedSelectedModel()
+                let selectedEffort = appState.reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+                serverManager.handoffModel = selectedModel
+                serverManager.handoffEffort = selectedEffort.isEmpty ? nil : selectedEffort
+                serverManager.handoffFastMode = false
+                try await serverManager.startPinnedLocalVoiceCall(
+                    cwd: preferredVoiceWorkingDirectory(),
+                    model: selectedModel,
+                    approvalPolicy: appState.approvalPolicy,
+                    sandboxMode: appState.sandboxMode
+                )
+                if let voiceKey = await MainActor.run(body: { serverManager.activeVoiceSession?.threadKey }) {
+                    await MainActor.run {
+                        openRealtimeVoice(voiceKey)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    actionErrorMessage = error.localizedDescription
+                }
+            }
+            await MainActor.run {
+                isStartingVoice = false
+            }
+        }
+    }
+
+    private func normalizedSelectedModel() -> String? {
+        let trimmed = appState.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func preferredVoiceWorkingDirectory() -> String {
+        let current = appState.currentCwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty {
+            return current
+        }
+
+        let stored = UserDefaults.standard.string(forKey: "workDir")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !stored.isEmpty {
+            return stored
+        }
+
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
+    }
+
     private func openServerSessions(_ connection: ServerConnection) {
         appState.sessionsSelectedServerFilterId = connection.id
         appState.sessionsShowOnlyForks = false
@@ -438,18 +550,24 @@ private struct HomeNavigationView: View {
             return
         }
 
-        _ = RecentDirectoryStore.shared.record(path: cwd, for: serverId)
         openConversation(startedKey)
     }
 
     private func seedInitialConversationIfNeeded(activeKey: ThreadKey?) {
         guard !hasSeededInitialConversationRoute,
+              !isStartingVoice,
               navigationPath.isEmpty,
               let activeKey else { return }
 
-        hasSeededInitialConversationRoute = true
-        Task {
+        Task { @MainActor in
             await conversationWarmup.prewarmIfNeeded()
+            guard !hasSeededInitialConversationRoute,
+                  !isStartingVoice,
+                  navigationPath.isEmpty,
+                  serverManager.activeThreadKey == activeKey else {
+                return
+            }
+            hasSeededInitialConversationRoute = true
             navigationPath = [.conversation(activeKey)]
         }
     }
@@ -459,6 +577,13 @@ private struct HomeNavigationView: View {
         appState.showModelSelector = false
         guard navigationPath.last != .conversation(key) else { return }
         navigationPath.append(.conversation(key))
+    }
+
+    private func openRealtimeVoice(_ key: ThreadKey) {
+        hasSeededInitialConversationRoute = true
+        appState.showModelSelector = false
+        guard navigationPath.last != .realtimeVoice(key) else { return }
+        navigationPath.append(.realtimeVoice(key))
     }
 
     private func replaceTopConversation(with key: ThreadKey) {
@@ -498,6 +623,8 @@ private struct HomeNavigationView: View {
         }
 
         if case .conversation = navigationPath.last {
+            navigationPath.removeLast()
+        } else if case .realtimeVoice = navigationPath.last {
             navigationPath.removeLast()
         }
         navigationPath.append(.sessions(serverId: serverId, title: serverTitle(for: serverId)))

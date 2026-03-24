@@ -75,6 +75,20 @@ struct DiscoveredServer: Identifiable, Hashable {
         sshPort ?? 22
     }
 
+    var deduplicationKey: String {
+        if source == .local {
+            return "local"
+        }
+
+        if let websocketURL, let url = URL(string: websocketURL) {
+            let host = Self.normalizedHostKey(url.host ?? hostname)
+            return host.isEmpty ? id : host
+        }
+
+        let host = Self.normalizedHostKey(hostname)
+        return host.isEmpty ? id : host
+    }
+
     static func normalizeWakeMAC(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let compact = raw
@@ -93,5 +107,18 @@ struct DiscoveredServer: Identifiable, Hashable {
             index = next
         }
         return groups.joined(separator: ":")
+    }
+
+    private static func normalizedHostKey(_ raw: String) -> String {
+        var normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .replacingOccurrences(of: "%25", with: "%")
+
+        if !normalized.contains(":"), let scopeIndex = normalized.firstIndex(of: "%") {
+            normalized = String(normalized[..<scopeIndex])
+        }
+
+        return normalized.lowercased()
     }
 }

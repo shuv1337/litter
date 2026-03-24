@@ -124,10 +124,11 @@ struct ConversationView: View {
         .enableInjection()
     }
 
-    private func sendMessage(_ text: String, skillMentions: [SkillMentionSelection]) {
+    private func sendMessage(_ text: String, attachmentImage: UIImage?, skillMentions: [SkillMentionSelection]) {
         Task {
             await serverManager.send(
                 text,
+                attachmentImage: attachmentImage,
                 skillMentions: skillMentions,
                 cwd: workDir,
                 model: pendingModelOverride,
@@ -210,7 +211,7 @@ private struct ConversationBottomChrome: View {
     let composer: ConversationComposerSnapshot
     let connection: ServerConnection
     let serverManager: ServerManager
-    let onSend: (String, [SkillMentionSelection]) -> Void
+    let onSend: (String, UIImage?, [SkillMentionSelection]) -> Void
     let onFileSearch: (String) async throws -> [FuzzyFileSearchResult]
     var bottomInset: CGFloat = 0
     let onOpenConversation: ((ThreadKey) -> Void)?
@@ -1047,8 +1048,9 @@ private struct ConversationInputBar: View {
     let connection: ServerConnection
     let serverManager: ServerManager
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
+    @AppStorage("fastMode") private var fastMode = false
 
-    let onSend: (String, [SkillMentionSelection]) -> Void
+    let onSend: (String, UIImage?, [SkillMentionSelection]) -> Void
     let onFileSearch: (String) async throws -> [FuzzyFileSearchResult]
     var bottomInset: CGFloat = 0
     let onOpenConversation: ((ThreadKey) -> Void)?
@@ -1091,7 +1093,7 @@ private struct ConversationInputBar: View {
     @State private var showMicPermissionAlert = false
     @State private var hasLoggedFirstFocus = false
     @State private var hasLoggedKeyboardShown = false
-    @FocusState private var isComposerFocused: Bool
+    @State private var isComposerFocused = false
 
     private var pendingUserInputRequest: ServerManager.PendingUserInputRequest? {
         snapshot.pendingUserInputRequest
@@ -1186,30 +1188,33 @@ private struct ConversationInputBar: View {
     }
 
     private var composerSurface: some View {
-        ConversationComposerContentView(
-            attachedImage: attachedImage,
-            pendingUserInputRequest: pendingUserInputRequest,
-            rateLimits: snapshot.rateLimits,
-            contextPercent: contextPercent(),
-            isTurnActive: isTurnActive,
-            voiceManager: voiceManager,
-            onClearAttachment: clearAttachment,
-            onRespondToPendingUserInput: respondToPendingUserInput,
-            onShowAttachMenu: { showAttachMenu = true },
-            onSendText: handleSend,
-            onStopRecording: stopVoiceRecording,
-            onStartRecording: startVoiceRecording,
-            onInterrupt: interruptActiveTurn,
-            inputText: $inputText,
-            isComposerFocused: $isComposerFocused
-        )
-        .overlay(alignment: .bottom) {
-            ConversationComposerPopupOverlayView(
-                state: popupState,
-                onApplySlashSuggestion: applySlashSuggestion,
-                onApplyFileSuggestion: applyFileSuggestion,
-                onApplySkillSuggestion: applySkillSuggestion
+        VStack(spacing: 0) {
+            ConversationComposerContentView(
+                attachedImage: attachedImage,
+                pendingUserInputRequest: pendingUserInputRequest,
+                rateLimits: snapshot.rateLimits,
+                contextPercent: contextPercent(),
+                isTurnActive: isTurnActive,
+                voiceManager: voiceManager,
+                showAttachMenu: $showAttachMenu,
+                onClearAttachment: clearAttachment,
+                onRespondToPendingUserInput: respondToPendingUserInput,
+                onPasteImage: { image in attachedImage = image },
+                onSendText: handleSend,
+                onStopRecording: stopVoiceRecording,
+                onStartRecording: startVoiceRecording,
+                onInterrupt: interruptActiveTurn,
+                inputText: $inputText,
+                isComposerFocused: $isComposerFocused
             )
+            .overlay(alignment: .bottom) {
+                ConversationComposerPopupOverlayView(
+                    state: popupState,
+                    onApplySlashSuggestion: applySlashSuggestion,
+                    onApplyFileSuggestion: applyFileSuggestion,
+                    onApplySkillSuggestion: applySkillSuggestion
+                )
+            }
         }
     }
 
@@ -1239,8 +1244,9 @@ private struct ConversationInputBar: View {
 
     private func handleSend() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        if attachedImage == nil,
+        let image = attachedImage
+        guard !text.isEmpty || image != nil else { return }
+        if image == nil,
            let invocation = parseSlashCommandInvocation(text) {
             inputText = ""
             attachedImage = nil
@@ -1254,7 +1260,7 @@ private struct ConversationInputBar: View {
         hideComposerPopups()
         isComposerFocused = false
         let skillMentions = collectSkillMentionsForSubmission(text)
-        onSend(text, skillMentions)
+        onSend(text, image, skillMentions)
     }
 
     private func startVoiceRecording() {

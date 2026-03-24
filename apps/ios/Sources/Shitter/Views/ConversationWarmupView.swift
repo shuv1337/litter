@@ -14,17 +14,20 @@ struct ConversationWarmupView: View {
     @State private var warmupInputText = ""
     @State private var shouldPrimeKeyboard = false
     @State private var didCompleteWarmup = false
-    @FocusState private var warmupComposerFocused: Bool
+    @State private var warmupComposerFocused = false
+    @State private var warmupShowAttachMenu = false
     @State private var voiceManager = VoiceTranscriptionManager()
 
     var body: some View {
         ZStack {
             ConversationComposerEntryRowView(
+                showAttachMenu: $warmupShowAttachMenu,
                 inputText: $warmupInputText,
                 isComposerFocused: $warmupComposerFocused,
                 voiceManager: voiceManager,
                 isTurnActive: false,
-                onShowAttachMenu: {},
+                hasAttachment: false,
+                onPasteImage: { _ in },
                 onSendText: {},
                 onStopRecording: {},
                 onStartRecording: {},

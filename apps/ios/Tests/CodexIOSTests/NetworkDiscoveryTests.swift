@@ -20,6 +20,31 @@ final class NetworkDiscoveryTests: XCTestCase {
         XCTAssertFalse(availability.shouldSurfaceDiscoveryNotice)
     }
 
+    func testTailscaleDiscoveryNoticeExplainsUnsupportedSurface() {
+        let availability = TailscaleAvailability(appInstalled: true, likelyActiveTunnel: false)
+
+        let notice = NetworkDiscovery.tailscaleDiscoveryNotice(
+            for: TailscalePeerParseError.unsupportedSurface,
+            availability: availability
+        )
+
+        XCTAssertEqual(
+            notice,
+            "Tailscale returned its web UI instead of a peer list, so peer discovery is unavailable here. Add a server manually with its MagicDNS name or Tailscale IP. Saved servers will still appear here."
+        )
+    }
+
+    func testTailscaleDiscoveryNoticeSuppressesUnavailableSurfaceWhenTailscaleIsAbsent() {
+        let availability = TailscaleAvailability(appInstalled: false, likelyActiveTunnel: false)
+
+        let notice = NetworkDiscovery.tailscaleDiscoveryNotice(
+            for: TailscalePeerParseError.unsupportedSurface,
+            availability: availability
+        )
+
+        XCTAssertNil(notice)
+    }
+
     func testParseTailscalePeerCandidatesFiltersOfflineAndNonIPv4Peers() throws {
         let data = """
         {

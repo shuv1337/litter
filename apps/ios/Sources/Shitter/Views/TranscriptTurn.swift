@@ -186,17 +186,17 @@ struct TranscriptTurn: Identifiable, Equatable {
             if let action = data.actions.first {
                 switch action.kind {
                 case .read:
-                    return action.path.map { "Read \($0)" } ?? "Read file"
+                    return action.path.map { "Read \(workspaceTitle(for: $0))" } ?? "Read file"
                 case .search:
                     if let query = action.query, let path = action.path {
-                        return "Searched for \(query) in \(path)"
+                        return "Searched for \(query) in \(workspaceTitle(for: path))"
                     }
                     if let query = action.query {
                         return "Searched for \(query)"
                     }
                     return "Searched files"
                 case .listFiles:
-                    return action.path.map { "Listed files in \($0)" } ?? "Listed files"
+                    return action.path.map { "Listed files in \(workspaceTitle(for: $0))" } ?? "Listed files"
                 case .unknown:
                     break
                 }
@@ -204,7 +204,7 @@ struct TranscriptTurn: Identifiable, Equatable {
             return data.command.isEmpty ? "Ran command" : collapsedExcerpt(from: "Ran \(data.command)")
         case .fileChange(let data):
             if let first = data.changes.first {
-                return "Changed \(first.path)"
+                return "Changed \(workspaceTitle(for: first.path))"
             }
             return "File changes"
         case .turnDiff:

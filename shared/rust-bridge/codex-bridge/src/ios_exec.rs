@@ -30,15 +30,15 @@ fn shell_quote(s: &str) -> String {
     }
 }
 
-pub fn run_command(
-    argv: &[String],
-    cwd: &Path,
-    _env: &HashMap<String, String>,
-) -> (i32, Vec<u8>) {
+pub fn run_command(argv: &[String], cwd: &Path, _env: &HashMap<String, String>) -> (i32, Vec<u8>) {
     // Intercept apply_patch: run in-process instead of through ios_system
     // since ios_system can't execute the app binary with special flags.
-    if argv.iter().any(|a| a == codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1) {
-        let patch_arg = argv.iter()
+    if argv
+        .iter()
+        .any(|a| a == codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1)
+    {
+        let patch_arg = argv
+            .iter()
             .skip_while(|a| *a != codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1)
             .nth(1);
         if let Some(patch) = patch_arg {
@@ -48,7 +48,8 @@ pub fn run_command(
             let _ = std::env::set_current_dir(cwd);
             let mut stdout_buf = Vec::new();
             let mut stderr_buf = Vec::new();
-            let code = match codex_apply_patch::apply_patch(patch, &mut stdout_buf, &mut stderr_buf) {
+            let code = match codex_apply_patch::apply_patch(patch, &mut stdout_buf, &mut stderr_buf)
+            {
                 Ok(()) => 0,
                 Err(e) => {
                     eprintln!("[ios-exec] apply_patch error: {e}");
@@ -63,7 +64,10 @@ pub fn run_command(
             }
             let mut output = stdout_buf;
             output.extend_from_slice(&stderr_buf);
-            eprintln!("[ios-exec] apply_patch exit={code} output_len={}", output.len());
+            eprintln!(
+                "[ios-exec] apply_patch exit={code} output_len={}",
+                output.len()
+            );
             return (code, output);
         }
     }
@@ -102,7 +106,11 @@ pub fn run_command(
     };
 
     let preview = String::from_utf8_lossy(&output);
-    let preview = if preview.len() > 200 { &preview[..200] } else { &preview };
+    let preview = if preview.len() > 200 {
+        &preview[..200]
+    } else {
+        &preview
+    };
     eprintln!("[ios-exec] exit={code} output_len={output_len} preview={preview}");
 
     (code as i32, output)

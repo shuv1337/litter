@@ -37,7 +37,7 @@
 ## Build, Test, and Development Commands
 - `./apps/ios/scripts/download-ios-system.sh`: download required `ios_system` XCFrameworks.
 - `./apps/ios/scripts/build-rust.sh`: cross-compile Rust bridge from `shared/rust-bridge/codex-bridge` for device/simulator and rebuild `apps/ios/Frameworks/codex_bridge.xcframework`.
-- `xcodegen generate --spec apps/ios/project.yml --project apps/ios/Shitter.xcodeproj`: regenerate iOS project after spec/path changes.
+- `./apps/ios/scripts/regenerate-project.sh`: regenerate the iOS project after spec/path changes; this also cleans up any accidentally nested `.xcodeproj` bundle from a bad `xcodegen` invocation.
 - `open apps/ios/Shitter.xcodeproj`: open and run from Xcode.
 - `xcodebuild -project apps/ios/Shitter.xcodeproj -scheme Shitter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`: CI-friendly local build.
 - `./apps/ios/scripts/testflight-setup.sh`: create/check TestFlight internal group and optionally update beta review contact details.

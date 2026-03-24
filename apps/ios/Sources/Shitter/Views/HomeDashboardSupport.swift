@@ -19,7 +19,9 @@ enum HomeDashboardSupport {
         from connections: [ServerConnection],
         activeServerId: String?
     ) -> [ServerConnection] {
-        connections
+        var seenServerKeys: Set<String> = []
+
+        return connections
             .filter(\.isConnected)
             .sorted { lhs, rhs in
                 let lhsIsActive = lhs.id == activeServerId
@@ -34,6 +36,9 @@ enum HomeDashboardSupport {
                 }
 
                 return lhs.id < rhs.id
+            }
+            .filter { connection in
+                seenServerKeys.insert(connection.server.deduplicationKey).inserted
             }
     }
 

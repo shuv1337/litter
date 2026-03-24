@@ -287,12 +287,13 @@ class SshSessionManager {
     }
 
     private fun candidatePorts(): List<Int> {
-        val ports = ArrayList<Int>(21)
+        val ports = LinkedHashSet<Int>(22)
         ports += defaultRemotePort
+        ports += 9234
         for (offset in 1..20) {
             ports += defaultRemotePort + offset
         }
-        return ports
+        return ports.toList()
     }
 
     private fun shellQuote(value: String): String {

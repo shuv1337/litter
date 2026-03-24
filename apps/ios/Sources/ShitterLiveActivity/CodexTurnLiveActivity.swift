@@ -2,12 +2,14 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-// MARK: - Colors
-
-private let amberColor   = ShitterPalette.amber
-private let dangerColor  = ShitterPalette.dangerFixed
-
 struct CodexTurnLiveActivity: Widget {
+    // Dynamic Island is always dark — resolve palette colors once for .dark scheme
+    private var warningColor: Color { ShitterPalette.warning.color(for: .dark) }
+    private var dangerColor: Color { ShitterPalette.danger.color(for: .dark) }
+    private var primaryText: Color { ShitterPalette.textPrimary.color(for: .dark) }
+    private var secondaryText: Color { ShitterPalette.textSecondary.color(for: .dark) }
+    private var mutedText: Color { ShitterPalette.textMuted.color(for: .dark) }
+
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: CodexTurnAttributes.self) { context in
             lockScreenView(context: context)
@@ -19,20 +21,20 @@ struct CodexTurnLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(context.attributes.prompt)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 11, weight: .medium, design: ShitterPalette.fontDesign))
+                            .foregroundStyle(primaryText)
                             .lineLimit(1)
                         HStack(spacing: 6) {
                             phaseBadge(context.state)
                             if context.state.toolCallCount > 0 {
                                 Label("\(context.state.toolCallCount)", systemImage: "chevron.left.forwardslash.chevron.right")
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.3))
+                                    .font(.system(size: 9, design: ShitterPalette.fontDesign))
+                                    .foregroundStyle(mutedText)
                             }
                             if context.state.fileChangeCount > 0 {
                                 Label("\(context.state.fileChangeCount)", systemImage: "doc.text")
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.3))
+                                    .font(.system(size: 9, design: ShitterPalette.fontDesign))
+                                    .foregroundStyle(mutedText)
                             }
                             if context.state.contextPercent > 0 {
                                 ctxBadge(context.state.contextPercent)
@@ -42,13 +44,14 @@ struct CodexTurnLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     liveTimer(context: context, size: 11)
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(secondaryText)
                 }
             } compactLeading: {
                 shitterLogo(size: 16)
+                    .frame(maxWidth: 16, alignment: .leading)
             } compactTrailing: {
-                liveTimer(context: context, size: 12)
-                    .foregroundStyle(.white.opacity(0.5))
+                compactTimer(context: context)
+                    .frame(width: 42)
             } minimal: {
                 shitterLogo(size: 16)
             }
@@ -64,9 +67,7 @@ struct CodexTurnLiveActivity: Widget {
             cwd: context.attributes.cwd,
             state: context.state,
             timerContent: AnyView(
-                liveTimer(context: context, size: 15)
-                    .fontWeight(.regular)
-                    .foregroundStyle(isActive(context.state) ? .white.opacity(0.7) : .white.opacity(0.45))
+                AdaptiveLiveTimer(context: context)
             )
         )
     }
@@ -90,18 +91,18 @@ struct CodexTurnLiveActivity: Widget {
 
     private func snippetColor(_ state: CodexTurnAttributes.ContentState) -> Color {
         if state.outputSnippet != nil {
-            return .white.opacity(0.35)
+            return secondaryText
         }
         switch state.phase {
-        case .thinking, .toolCall: return amberColor.opacity(0.6)
-        case .completed: return .white.opacity(0.35)
+        case .thinking, .toolCall: return warningColor.opacity(0.6)
+        case .completed: return secondaryText
         case .failed: return dangerColor.opacity(0.6)
         }
     }
 
     private func phaseBadge(_ state: CodexTurnAttributes.ContentState) -> some View {
         Text(phaseBadgeText(state))
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(size: 10, weight: .medium, design: ShitterPalette.fontDesign))
             .foregroundStyle(phaseColor(state))
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
@@ -115,10 +116,10 @@ struct CodexTurnLiveActivity: Widget {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
                 .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.25))
+                .foregroundStyle(mutedText.opacity(0.7))
             Text(text)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.3))
+                .font(.system(size: 10, design: ShitterPalette.fontDesign))
+                .foregroundStyle(mutedText)
                 .lineLimit(1)
         }
         .padding(.trailing, 10)
@@ -126,7 +127,7 @@ struct CodexTurnLiveActivity: Widget {
 
     private func ctxBadge(_ percent: Int) -> some View {
         Text("\(percent)%")
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(.system(size: 9, weight: .semibold, design: ShitterPalette.fontDesign))
             .foregroundStyle(ctxColor(percent))
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
@@ -140,15 +141,25 @@ struct CodexTurnLiveActivity: Widget {
     private func liveTimer(context: ActivityViewContext<CodexTurnAttributes>, size: CGFloat) -> some View {
         if isActive(context.state) {
             Text(timerInterval: context.attributes.startDate...Date.distantFuture, countsDown: false)
-                .font(.system(size: size, design: .monospaced))
+                .font(.system(size: size, design: ShitterPalette.fontDesign))
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
         } else {
             Text(formatElapsed(context.state.elapsedSeconds))
-                .font(.system(size: size, design: .monospaced))
+                .font(.system(size: size, design: ShitterPalette.fontDesign))
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
         }
+    }
+
+    private func compactTimer(context: ActivityViewContext<CodexTurnAttributes>) -> some View {
+        Text(compactElapsedText(context: context))
+            .font(.system(size: 10, weight: .medium, design: ShitterPalette.fontDesign))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .foregroundStyle(secondaryText)
+            .frame(width: 20, alignment: .trailing)
     }
 
     // MARK: - Helpers
@@ -177,30 +188,30 @@ struct CodexTurnLiveActivity: Widget {
 
     private func phaseColor(_ state: CodexTurnAttributes.ContentState) -> Color {
         switch state.phase {
-        case .thinking, .toolCall: return amberColor
-        case .completed: return .white.opacity(0.5)
+        case .thinking, .toolCall: return warningColor
+        case .completed: return secondaryText
         case .failed: return dangerColor
         }
     }
 
     private func phaseBgColor(_ state: CodexTurnAttributes.ContentState) -> Color {
         switch state.phase {
-        case .thinking, .toolCall: return amberColor.opacity(0.12)
-        case .completed: return .white.opacity(0.06)
+        case .thinking, .toolCall: return warningColor.opacity(0.12)
+        case .completed: return primaryText.opacity(0.06)
         case .failed: return dangerColor.opacity(0.12)
         }
     }
 
     private func ctxColor(_ percent: Int) -> Color {
         if percent >= 80 { return dangerColor }
-        if percent >= 60 { return amberColor }
-        return .white.opacity(0.35)
+        if percent >= 60 { return warningColor }
+        return mutedText
     }
 
     private func ctxBgColor(_ percent: Int) -> Color {
         if percent >= 80 { return dangerColor.opacity(0.1) }
-        if percent >= 60 { return amberColor.opacity(0.1) }
-        return .white.opacity(0.05)
+        if percent >= 60 { return warningColor.opacity(0.1) }
+        return primaryText.opacity(0.05)
     }
 
     private func formatElapsed(_ seconds: Int) -> String {
@@ -209,4 +220,58 @@ struct CodexTurnLiveActivity: Widget {
         return String(format: "%d:%02d", m, s)
     }
 
+    private func compactElapsedText(context: ActivityViewContext<CodexTurnAttributes>) -> String {
+        if isActive(context.state) {
+            let elapsed = max(0, Int(Date().timeIntervalSince(context.attributes.startDate)))
+            return compactDurationText(elapsed)
+        }
+        return compactDurationText(context.state.elapsedSeconds)
+    }
+
+    private func compactDurationText(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
+
+        return "\(minutes / 60)h"
+    }
+
+}
+
+// MARK: - Adaptive timer for lock screen (respects color scheme)
+
+private struct AdaptiveLiveTimer: View {
+    let context: ActivityViewContext<CodexTurnAttributes>
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isActive: Bool {
+        context.state.phase == .thinking || context.state.phase == .toolCall
+    }
+
+    private var timerColor: Color {
+        let text = ShitterPalette.textSecondary.color(for: colorScheme)
+        return isActive ? text : text.opacity(0.65)
+    }
+
+    var body: some View {
+        Group {
+            if isActive {
+                Text(timerInterval: context.attributes.startDate...Date.distantFuture, countsDown: false)
+            } else {
+                let m = context.state.elapsedSeconds / 60
+                let s = context.state.elapsedSeconds % 60
+                Text(String(format: "%d:%02d", m, s))
+            }
+        }
+        .font(.system(size: 15, design: ShitterPalette.fontDesign))
+        .monospacedDigit()
+        .fontWeight(.regular)
+        .foregroundStyle(timerColor)
+        .multilineTextAlignment(.trailing)
+    }
 }

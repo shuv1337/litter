@@ -133,6 +133,24 @@ actor CodexChannel {
         }
     }
 
+    func sendError(id: String, code: Int = -32000, message: String) {
+        guard let handle else { return }
+        let idValue: Any = Int(id).map { $0 as Any } ?? id
+        let response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": idValue,
+            "error": [
+                "code": code,
+                "message": message
+            ]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: response) else { return }
+        data.withUnsafeBytes { buf in
+            guard let ptr = buf.baseAddress else { return }
+            _ = codex_channel_send(handle, ptr.assumingMemoryBound(to: CChar.self), buf.count)
+        }
+    }
+
     // MARK: - Receiving (called from callback)
 
     nonisolated func receiveMessage(_ data: Data) {

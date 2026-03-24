@@ -30,6 +30,11 @@ struct TailscaleAvailability: Equatable, Sendable {
     }
 }
 
+enum TailscalePeerParseError: Error {
+    case unsupportedSurface
+    case invalidPayload
+}
+
 private struct CandidateReachability: Sendable {
     let candidate: DiscoveryCandidate
     let codexPort: UInt16?
@@ -603,14 +608,9 @@ final class NetworkDiscovery {
         data: Data,
         response: URLResponse
     ) throws -> [TailscalePeerIdentity] {
-        enum ParseError: Error {
-            case unsupportedSurface
-            case invalidPayload
-        }
-
         guard let http = response as? HTTPURLResponse,
               (200...299).contains(http.statusCode) else {
-            throw ParseError.invalidPayload
+            throw TailscalePeerParseError.invalidPayload
         }
 
         let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased()
@@ -620,12 +620,12 @@ final class NetworkDiscovery {
         if contentType?.contains("text/html") == true ||
             preview.hasPrefix("<!doctype html") ||
             preview.hasPrefix("<html") {
-            throw ParseError.unsupportedSurface
+            throw TailscalePeerParseError.unsupportedSurface
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let peers = json["Peer"] as? [String: Any] else {
-            throw ParseError.invalidPayload
+            throw TailscalePeerParseError.invalidPayload
         }
 
         var out: [TailscalePeerIdentity] = []
@@ -643,6 +643,25 @@ final class NetworkDiscovery {
         }
 
         return out
+    }
+
+    nonisolated static func tailscaleDiscoveryNotice(
+        for error: Error,
+        availability: TailscaleAvailability
+    ) -> String? {
+        guard availability.shouldSurfaceDiscoveryNotice else {
+            return nil
+        }
+
+        if let urlError = error as? URLError, urlError.code == .timedOut {
+            return "Tailscale peer discovery timed out. Add a server manually with its MagicDNS name or Tailscale IP. Saved servers will still appear here."
+        }
+
+        if let parseError = error as? TailscalePeerParseError, parseError == .unsupportedSurface {
+            return "Tailscale returned its web UI instead of a peer list, so peer discovery is unavailable here. Add a server manually with its MagicDNS name or Tailscale IP. Saved servers will still appear here."
+        }
+
+        return "Tailscale peer discovery is unavailable right now. Add a server manually with its MagicDNS name or Tailscale IP. Saved servers will still appear here."
     }
 
     nonisolated private static func discoverTailscaleSSHCandidates(
@@ -692,14 +711,8 @@ final class NetworkDiscovery {
             NSLog("[tailscale] returning %d candidates", candidates.count)
             return candidates
         } catch {
-            let notice: String
             let responsePreview = (error as NSError).localizedDescription
-            if let urlError = error as? URLError, urlError.code == .timedOut {
-                notice = "Tailscale peer discovery timed out. Add a server manually with its MagicDNS name or Tailscale IP."
-            } else {
-                notice = "Tailscale peer discovery is unavailable right now. Add a server manually with its MagicDNS name or Tailscale IP."
-            }
-            if availability.shouldSurfaceDiscoveryNotice {
+            if let notice = tailscaleDiscoveryNotice(for: error, availability: availability) {
                 await diagnostics.record(notice)
             } else {
                 NSLog("[tailscale] suppressing notice because Tailscale does not look installed or active")

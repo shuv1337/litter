@@ -61,9 +61,19 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
 
     var body: some View {
         content
-            .confirmationDialog("Attach", isPresented: $showAttachMenu) {
-                Button("Photo Library") { showPhotoPicker = true }
-                Button("Take Photo") { showCamera = true }
+            .sheet(isPresented: $showAttachMenu) {
+                ConversationComposerAttachSheet(
+                    onPickPhotoLibrary: {
+                        showAttachMenu = false
+                        showPhotoPicker = true
+                    },
+                    onTakePhoto: {
+                        showAttachMenu = false
+                        showCamera = true
+                    }
+                )
+                .presentationDetents([.height(210)])
+                .presentationDragIndicator(.visible)
             }
             .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhoto, matching: .images)
             .onChange(of: selectedPhoto) { _, item in

@@ -50,3 +50,63 @@ struct OAuthWebView: UIViewRepresentable {
         }
     }
 }
+
+struct OAuthLoginSheetView: View {
+    let connection: ServerConnection
+    var onCancel: (() -> Void)? = nil
+
+    var body: some View {
+        if let url = connection.oauthURL {
+            NavigationStack {
+                OAuthWebView(url: url, onCallbackIntercepted: { callbackURL in
+                    connection.forwardOAuthCallback(callbackURL)
+                }) {
+                    Task { await connection.cancelLogin() }
+                }
+                .ignoresSafeArea()
+                .navigationTitle("Login with ChatGPT")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") {
+                            Task { await connection.cancelLogin() }
+                            onCancel?()
+                        }
+                        .foregroundColor(ShitterTheme.danger)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct OAuthLoginPresenter: ViewModifier {
+    let connection: ServerConnection?
+
+    private var oauthConnection: ServerConnection? {
+        guard let connection, connection.oauthURL != nil else { return nil }
+        return connection
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: connection?.id) {
+                await connection?.checkAuth()
+            }
+            .sheet(item: Binding(
+                get: { oauthConnection },
+                set: { nextValue in
+                    guard nextValue == nil, let connection else { return }
+                    Task { await connection.cancelLogin() }
+                }
+            )) { oauthConnection in
+                OAuthLoginSheetView(connection: oauthConnection)
+            }
+    }
+}
+
+extension View {
+    func oauthLoginPresenter(connection: ServerConnection?) -> some View {
+        modifier(OAuthLoginPresenter(connection: connection))
+    }
+}

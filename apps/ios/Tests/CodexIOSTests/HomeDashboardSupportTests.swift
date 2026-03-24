@@ -123,6 +123,64 @@ final class HomeDashboardSupportTests: XCTestCase {
         XCTAssertEqual(model.connectedServers.map(\.id), [server.id])
     }
 
+    func testSortedConnectedServersDeduplicatesEquivalentHostsAndPrefersActiveConnection() {
+        let primary = makeConnection(
+            id: "server-a",
+            name: "Mac Studio",
+            hostname: "192.168.1.167",
+            port: 8390
+        )
+        let duplicate = makeConnection(
+            id: "server-b",
+            name: "Mac Studio",
+            hostname: "192.168.1.167",
+            port: 9494
+        )
+
+        let result = HomeDashboardSupport.sortedConnectedServers(
+            from: [duplicate, primary],
+            activeServerId: duplicate.id
+        )
+
+        XCTAssertEqual(result.map(\.id), [duplicate.id])
+    }
+
+    func testAddServerReusesEquivalentConnectedServerWithDifferentId() async {
+        let manager = ServerManager()
+        let existingServer = DiscoveredServer(
+            id: "bonjour-mac",
+            name: "Mac Studio",
+            hostname: "192.168.1.167",
+            port: 8390,
+            source: .bonjour,
+            hasCodexServer: true
+        )
+        let duplicateServer = DiscoveredServer(
+            id: "manual-mac",
+            name: "Mac Studio",
+            hostname: "192.168.1.167",
+            port: 9494,
+            source: .manual,
+            hasCodexServer: true
+        )
+        let existingConnection = ServerConnection(
+            server: existingServer,
+            target: .remote(host: existingServer.hostname, port: 8390)
+        )
+        existingConnection.connectionHealth = .connected
+        manager.connections = [existingServer.id: existingConnection]
+
+        let reusedId = await manager.addServer(
+            duplicateServer,
+            target: .remote(host: duplicateServer.hostname, port: 9494)
+        )
+
+        XCTAssertEqual(reusedId, existingServer.id)
+        XCTAssertEqual(manager.connections.count, 1)
+        XCTAssertNotNil(manager.connections[existingServer.id])
+        XCTAssertNil(manager.connections[duplicateServer.id])
+    }
+
     func testHomeDashboardModelRefreshesRecentSessionsWhenObservedThreadChanges() async {
         let server = DiscoveredServer(
             id: "server-a",
@@ -220,6 +278,20 @@ final class HomeDashboardSupportTests: XCTestCase {
         thread.preview = threadId
         thread.updatedAt = Date(timeIntervalSince1970: updatedAt)
         return thread
+    }
+
+    private func makeConnection(id: String, name: String, hostname: String, port: UInt16) -> ServerConnection {
+        let server = DiscoveredServer(
+            id: id,
+            name: name,
+            hostname: hostname,
+            port: port,
+            source: .manual,
+            hasCodexServer: true
+        )
+        let connection = ServerConnection(server: server, target: .remote(host: hostname, port: port))
+        connection.connectionHealth = .connected
+        return connection
     }
 
     private func flushMainQueue() async {

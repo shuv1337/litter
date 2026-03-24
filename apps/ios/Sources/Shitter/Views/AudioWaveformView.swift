@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AudioWaveformView: View {
     let level: Float
+    var tint: Color = ShitterTheme.accentStrong
 
     private static let barCount = 24
 
@@ -25,7 +26,7 @@ struct AudioWaveformView: View {
                     let rect = CGRect(x: x, y: midY - barHeight / 2, width: barWidth, height: barHeight)
                     ctx.fill(
                         Path(roundedRect: rect, cornerRadius: 1),
-                        with: .color(ShitterTheme.accentStrong.opacity(0.4 + 0.6 * h))
+                        with: .color(tint.opacity(0.35 + 0.65 * h))
                     )
                 }
             }

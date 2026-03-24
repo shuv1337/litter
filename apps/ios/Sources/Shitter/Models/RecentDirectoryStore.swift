@@ -18,46 +18,52 @@ final class RecentDirectoryStore {
     private let userDefaults: UserDefaults
     private let storageKey = "recent_directories_v1"
     private let maxEntriesPerServer = 20
+    private let pickerDisplayLimit = 3
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
     }
 
-    func recentDirectories(for serverId: String, limit: Int = 8) -> [RecentDirectoryEntry] {
+    func recentDirectories(for serverId: String, limit: Int? = nil) -> [RecentDirectoryEntry] {
         let normalizedServerId = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedServerId.isEmpty else { return [] }
         return loadAll()
             .filter { $0.serverId == normalizedServerId }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }
-            .prefix(limit)
+            .prefix(limit ?? pickerDisplayLimit)
             .map { $0 }
     }
 
     @discardableResult
-    func record(path: String, for serverId: String, limit: Int = 8) -> [RecentDirectoryEntry] {
+    func record(
+        path: String,
+        for serverId: String,
+        at date: Date = Date(),
+        incrementUseCount: Bool = true,
+        limit: Int? = nil
+    ) -> [RecentDirectoryEntry] {
         let normalizedServerId = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedServerId.isEmpty else { return [] }
         let normalizedPath = normalizePath(path)
         guard !normalizedPath.isEmpty else { return recentDirectories(for: normalizedServerId, limit: limit) }
 
         var all = loadAll()
-        let now = Date()
 
         if let index = all.firstIndex(where: { $0.serverId == normalizedServerId && $0.path == normalizedPath }) {
             let existing = all[index]
             all[index] = RecentDirectoryEntry(
                 serverId: normalizedServerId,
                 path: normalizedPath,
-                lastUsedAt: now,
-                useCount: existing.useCount + 1
+                lastUsedAt: max(existing.lastUsedAt, date),
+                useCount: incrementUseCount ? (existing.useCount + 1) : existing.useCount
             )
         } else {
             all.append(
                 RecentDirectoryEntry(
                     serverId: normalizedServerId,
                     path: normalizedPath,
-                    lastUsedAt: now,
-                    useCount: 1
+                    lastUsedAt: date,
+                    useCount: incrementUseCount ? 1 : 0
                 )
             )
         }
@@ -68,7 +74,41 @@ final class RecentDirectoryStore {
     }
 
     @discardableResult
-    func remove(path: String, for serverId: String, limit: Int = 8) -> [RecentDirectoryEntry] {
+    func mergeSessionDirectories(_ entries: [RecentDirectoryEntry], for serverId: String) -> [RecentDirectoryEntry] {
+        let normalizedServerId = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedServerId.isEmpty else { return [] }
+
+        var merged = loadAll()
+        for entry in entries where entry.serverId == normalizedServerId {
+            let normalizedPath = normalizePath(entry.path)
+            guard !normalizedPath.isEmpty else { continue }
+            if let index = merged.firstIndex(where: { $0.serverId == normalizedServerId && $0.path == normalizedPath }) {
+                let existing = merged[index]
+                merged[index] = RecentDirectoryEntry(
+                    serverId: normalizedServerId,
+                    path: normalizedPath,
+                    lastUsedAt: max(existing.lastUsedAt, entry.lastUsedAt),
+                    useCount: max(existing.useCount, entry.useCount)
+                )
+            } else {
+                merged.append(
+                    RecentDirectoryEntry(
+                        serverId: normalizedServerId,
+                        path: normalizedPath,
+                        lastUsedAt: entry.lastUsedAt,
+                        useCount: entry.useCount
+                    )
+                )
+            }
+        }
+
+        merged = trimEntries(merged)
+        saveAll(merged)
+        return recentDirectories(for: normalizedServerId)
+    }
+
+    @discardableResult
+    func remove(path: String, for serverId: String, limit: Int? = nil) -> [RecentDirectoryEntry] {
         let normalizedServerId = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedServerId.isEmpty else { return [] }
         let normalizedPath = normalizePath(path)
@@ -79,7 +119,7 @@ final class RecentDirectoryStore {
     }
 
     @discardableResult
-    func clear(for serverId: String, limit _: Int = 8) -> [RecentDirectoryEntry] {
+    func clear(for serverId: String, limit _: Int? = nil) -> [RecentDirectoryEntry] {
         let normalizedServerId = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedServerId.isEmpty else { return [] }
         var all = loadAll()

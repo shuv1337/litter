@@ -560,8 +560,8 @@ struct ShitterStructuredStyle: StructuredText.Style {
             .code(
                 .monospaced,
                 .fontScale(codeSize / bodySize),
-                .foregroundColor(ShitterTheme.accent),
-                .backgroundColor(ShitterTheme.surface)
+                .foregroundColor(ShitterTheme.textPrimary),
+                .backgroundColor(ShitterTheme.surfaceLight)
             )
             .strong(.fontWeight(.semibold), .foregroundColor(ShitterTheme.textPrimary))
             .emphasis(.italic)
@@ -609,8 +609,8 @@ struct ShitterSystemStructuredStyle: StructuredText.Style {
             .code(
                 .monospaced,
                 .fontScale(codeSize / bodySize),
-                .foregroundColor(ShitterTheme.accent),
-                .backgroundColor(ShitterTheme.surface)
+                .foregroundColor(ShitterTheme.textPrimary),
+                .backgroundColor(ShitterTheme.surfaceLight)
             )
             .strong(.fontWeight(.semibold), .foregroundColor(ShitterTheme.textPrimary))
             .emphasis(.italic)

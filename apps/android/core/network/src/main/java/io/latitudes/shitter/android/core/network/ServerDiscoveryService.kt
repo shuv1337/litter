@@ -67,7 +67,7 @@ class ServerDiscoveryService(
                 id = "local",
                 name = "On Device",
                 host = "127.0.0.1",
-                port = 9234,
+                port = 8390,
                 source = DiscoverySource.LOCAL,
                 hasCodexServer = true,
             )
