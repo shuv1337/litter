@@ -172,7 +172,7 @@ fn test_bootstrap_result_clone() {
         pid: Some(42),
         codex_path: "/usr/local/bin/codex".into(),
         shell: RemoteShell::Posix,
-        transport: SshBootstrapTransport::AppServerProxy,
+        transport: SshBootstrapTransport::WebSocketTunnel,
     };
     let r2 = r.clone();
     assert_eq!(r2.server_port, 8390);
